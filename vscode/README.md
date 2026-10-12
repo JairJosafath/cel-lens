@@ -16,12 +16,9 @@ Shows CEL errors, hover, completion, quick fixes and colors inside Kubernetes YA
 
 ## Install
 
-- **VS Code Marketplace:** open the Extensions view, search for "cel-lens" and choose Install, or run
-  `code --install-extension cel-lens.cel-lens-vscode`.
-- **Open VSX** (VSCodium and other editors): search for "cel-lens" in the editor's extensions view.
-- **From a .vsix:** download the `.vsix` for your platform from
-  <https://github.com/JairJosafath/cel-lens/releases>, then run **Extensions: Install from VSIX...** in the
-  Command Palette, or `code --install-extension <file>.vsix`.
+Download the `.vsix` for your platform from <https://github.com/JairJosafath/cel-lens/releases>, then run
+**Extensions: Install from VSIX...** in the Command Palette, or `code --install-extension <file>.vsix`. The
+extension isn't on the VS Code Marketplace or Open VSX yet.
 
 The extension carries the cel-lens engine for your platform, so there is nothing else to install or set up.
 
