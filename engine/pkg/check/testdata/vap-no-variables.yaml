@@ -1,0 +1,20 @@
+# api-server: accepted. A policy without variables; the shapes most policies have.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: no-latest-tag
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  matchConditions:
+    - name: not-system
+      expression: "request.namespace != 'kube-system'"
+  validations:
+    - expression: object.spec.template.spec.containers.all(c, !c.image.endsWith(':latest'))
+      messageExpression: "'images must not use latest in ' + object.metadata.name"
+    - expression: object.spec.replicas <= 10

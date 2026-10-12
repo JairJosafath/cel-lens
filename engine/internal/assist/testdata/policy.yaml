@@ -1,0 +1,15 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: demo
+spec:
+  failurePolicy: Fail
+  variables:
+    - name: replicas
+      expression: object.spec.replicas
+  matchConditions:
+    - name: not-delete
+      expression: request.operation != 'DELETE'
+  validations:
+    - expression: variables.replicas <= 5 && request.userInfo.username != ''
+      message: too many

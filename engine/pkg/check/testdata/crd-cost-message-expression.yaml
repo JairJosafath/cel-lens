@@ -1,0 +1,25 @@
+# api-server: Forbidden: estimated rule cost exceeds budget by factor of ... (try simplifying the rule, or adding maxItems, maxProperties, and maxLength where arrays, maps, and strings are declared)
+# want: 25:39-25:83 estimated cost 1.8e+18 is over the per-expression budget of 10M for a messageExpression
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                minReplicas: {type: integer}
+              x-kubernetes-validations:
+                - rule: self.minReplicas > 0
+                  messageExpression: "'minReplicas is ' + string(self.minReplicas)"

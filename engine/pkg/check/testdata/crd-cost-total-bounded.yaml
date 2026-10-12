@@ -1,0 +1,39 @@
+# api-server: Forbidden: x-kubernetes-validations estimated rule cost total for entire OpenAPIv3 schema exceeds budget by factor of ...
+# want: 24:25-24:76 estimated cost 115.6M of all rules together is over the budget of 100M
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            tags:
+              type: array
+              maxItems: 3000
+              items: {type: string, maxLength: 3000}
+              x-kubernetes-validations:
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 0)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 1)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 2)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 3)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 4)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 5)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 6)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 7)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 8)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 9)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 10)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 11)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 12)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 13)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 14)
+                - rule: self.all(a, a.matches("^[a-z]+$") || a.size() == 15)

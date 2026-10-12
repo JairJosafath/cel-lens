@@ -1,0 +1,180 @@
+{
+  "name": "cel-lens-vscode",
+  "displayName": "cel-lens for VS Code",
+  "description": "CEL errors, hover and completion inside Kubernetes YAML.",
+  "version": "0.14.0",
+  "publisher": "cel-lens",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JairJosafath/cel-lens",
+    "directory": "vscode"
+  },
+  "private": true,
+  "license": "Apache-2.0",
+  "icon": "images/icon.png",
+  "keywords": [
+    "cel",
+    "kubernetes",
+    "crd",
+    "x-kubernetes-validations",
+    "validatingadmissionpolicy"
+  ],
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:yaml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cel-lens.restartServer",
+        "title": "Restart Engine",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.pickKubernetesVersion",
+        "title": "Pick Kubernetes Version",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.showActions",
+        "title": "Show Actions",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.showLogs",
+        "title": "Show Logs",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.chooseColorStyle",
+        "title": "Choose Color Style",
+        "category": "cel-lens"
+      }
+    ],
+    "configuration": {
+      "title": "cel-lens",
+      "properties": {
+        "cel-lens.colorStyle": {
+          "type": "string",
+          "enum": [
+            "cel",
+            "classic",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Plum and lavender, the hues of the cel-lens logo.",
+            "Warm browns and ambers, close to a plain YAML string.",
+            "No cel-lens colors; the theme alone colors the YAML."
+          ],
+          "default": "cel",
+          "scope": "resource",
+          "order": 0,
+          "markdownDescription": "The color style for the parts of a CEL expression in Kubernetes YAML. Pick it from the status bar menu or with **cel-lens: Choose Color Style**."
+        },
+        "cel-lens.kubernetesVersion": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "order": 1,
+          "markdownDescription": "Advanced: the Kubernetes version the results match, such as `1.36`. Leave empty to use the engine's default."
+        },
+        "cel-lens.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "scope": "window",
+          "order": 2,
+          "markdownDescription": "Traces the messages between VS Code and the engine in the cel-lens output channel.",
+          "enumDescriptions": [
+            "No tracing.",
+            "Trace the messages without their contents.",
+            "Trace the messages with their contents."
+          ]
+        },
+        "cel-lens.serverPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "order": 3,
+          "markdownDescription": "Advanced: path to a `cel-lens-core` binary to use instead of the engine bundled with the extension. Leave empty."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "cel-lens.restartServer",
+          "when": "editorLangId == yaml"
+        },
+        {
+          "command": "cel-lens.pickKubernetesVersion",
+          "when": "editorLangId == yaml"
+        },
+        {
+          "command": "cel-lens.showActions",
+          "when": "editorLangId == yaml"
+        },
+        {
+          "command": "cel-lens.showLogs",
+          "when": "true"
+        },
+        {
+          "command": "cel-lens.chooseColorStyle",
+          "when": "editorLangId == yaml"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint --max-warnings 0 .",
+    "format": "prettier --write .",
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "dist": "node src/dist.ts",
+    "bench": "esbuild src/*.bench.ts --bundle --platform=node --format=esm --alias:vscode=./test/vscode.ts --outdir=out/bench --out-extension:.js=.mjs --log-level=warning && for f in out/bench/*.mjs; do node --expose-gc $f || exit 1; done",
+    "profile": "esbuild src/cel_tokens.profile.ts --bundle --platform=node --format=esm --outdir=out/profile --out-extension:.js=.mjs --log-level=warning && node --expose-gc --cpu-prof --cpu-prof-dir=out/profile out/profile/cel_tokens.profile.mjs",
+    "engine": "node src/dist.ts install",
+    "e2e": "npm run engine && vitest run --config vitest.e2e.config.mts"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.1",
+    "@types/vscode": "1.100.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.11.0",
+    "prettier": "3.9.9",
+    "tinybench": "6.2.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.3",
+    "vscode-languageserver-protocol": "3.18.4",
+    "yaml": "2.9.1"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "@vscode/vsce-sign": false
+  },
+  "dependencies": {
+    "vscode-languageclient": "10.1.2"
+  },
+  "homepage": "https://github.com/JairJosafath/cel-lens/tree/main/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/JairJosafath/cel-lens/issues"
+  }
+}

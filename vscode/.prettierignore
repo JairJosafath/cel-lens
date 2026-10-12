@@ -1,0 +1,4 @@
+# Prettier also skips what .gitignore lists (node_modules/, out/, dist/).
+
+# Written by npm.
+package-lock.json

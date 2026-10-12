@@ -1,0 +1,10 @@
+# kyverno: the message is the one Kyverno v1.19.1 gives.
+# want: 10:25-10:30 output is expected to be either of type string or null_type
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  auditAnnotations:
+    - key: k
+      valueExpression: "1 + 1"

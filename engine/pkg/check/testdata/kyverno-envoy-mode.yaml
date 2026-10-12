@@ -1,0 +1,10 @@
+# kyverno: an Envoy policy is evaluated by another engine, which declares the envoy functions.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  evaluation:
+    mode: Envoy
+  validations:
+    - expression: envoy.Allowed().Response()

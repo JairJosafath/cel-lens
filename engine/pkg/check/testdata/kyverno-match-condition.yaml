@@ -1,0 +1,10 @@
+# kyverno: the message is the one Kyverno v1.19.1 gives.
+# want: 10:40-10:45 undeclared reference to 'bogus'
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  matchConditions:
+    - name: m
+      expression: object.metadata.name.bogus()

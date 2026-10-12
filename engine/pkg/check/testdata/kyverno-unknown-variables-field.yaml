@@ -1,0 +1,12 @@
+# kyverno: the message is the one Kyverno v1.19.1 gives.
+# want: 12:29-12:30 undefined field 'b'
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  variables:
+    - name: a
+      expression: "1"
+  validations:
+    - expression: variables.b == 1

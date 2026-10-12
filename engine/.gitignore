@@ -1,0 +1,11 @@
+# Build output: make build and make dist
+/bin/
+/dist/
+
+# Test binaries and profiles
+*.test
+*.prof
+/coverage.out
+
+# Go temporary build files in CI (GOTMPDIR)
+/.gotmp/

@@ -1,0 +1,2 @@
+# api-server: a YAML file that is a scalar is not a Kubernetes object; nothing to validate
+hello

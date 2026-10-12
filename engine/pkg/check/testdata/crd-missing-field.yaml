@@ -1,0 +1,24 @@
+# api-server: spec: Invalid value: undefined field 'foo' (the schema of spec has replicas only)
+# want: 24:30-24:33 undefined field 'foo'
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas: {type: integer}
+              x-kubernetes-validations:
+                - rule: self.foo > 1

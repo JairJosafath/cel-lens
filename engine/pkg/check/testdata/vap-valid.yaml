@@ -1,0 +1,34 @@
+# api-server: accepted. object, oldObject, request, params, namespaceObject,
+# authorizer and variables are declared; params because paramKind is set.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: replicas-limit
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: example.com/v1
+    kind: Limits
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  matchConditions:
+    - name: not-system
+      expression: "request.namespace != 'kube-system'"
+  variables:
+    - name: replicas
+      expression: object.spec.replicas
+    - name: limit
+      expression: params.maxReplicas
+  validations:
+    - expression: variables.replicas <= variables.limit
+      messageExpression: "'replicas must be at most ' + string(variables.limit)"
+    - expression: namespaceObject.metadata.name != 'default'
+    - expression: authorizer.group('apps').resource('deployments').check('create').allowed()
+    - expression: oldObject == null || object.spec.selector == oldObject.spec.selector
+  auditAnnotations:
+    - key: replicas
+      valueExpression: string(variables.replicas)

@@ -1,0 +1,21 @@
+# api-server: spec.validation.openAPIV3Schema.properties[a]b].type: Required value: must not be empty for specified object fields
+# want: 18:11-18:21 must not be empty
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            a]b: {}
+          x-kubernetes-validations:
+            - rule: self.size() > 0

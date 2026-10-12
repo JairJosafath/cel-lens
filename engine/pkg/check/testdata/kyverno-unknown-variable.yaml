@@ -1,0 +1,9 @@
+# kyverno: the message is the one Kyverno v1.19.1 gives.
+# want: 9:19-9:24 undeclared reference to 'other'
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  validations:
+    - expression: other.x == 1

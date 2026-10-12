@@ -1,0 +1,24 @@
+# api-server: undefined field 'b' on the second line of a block scalar rule
+# want: 24:24-24:25 undefined field 'b'
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            a: {type: integer}
+          x-kubernetes-validations:
+            - message: both fields are needed
+              rule: |
+                self.a > 0 &&
+                  self.b > 0

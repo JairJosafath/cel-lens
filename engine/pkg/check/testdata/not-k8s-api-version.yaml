@@ -1,0 +1,3 @@
+# api-server: apiVersion must be a string; this file is not a Kubernetes object cel-lens knows
+apiVersion: [1]
+kind: CustomResourceDefinition

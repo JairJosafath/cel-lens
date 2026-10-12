@@ -1,0 +1,27 @@
+# api-server: x-kubernetes-validations[0].rule: Invalid value: undefined field 'nope'; fieldPath, reason and message are valid, so only the rule is underlined
+# want: 24:31-24:35 undefined field 'nope'
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas: {type: integer}
+          x-kubernetes-validations:
+            - rule: self.spec.nope > 0
+              fieldPath: .spec.replicas
+              reason: FieldValueInvalid
+              message: replicas must be positive

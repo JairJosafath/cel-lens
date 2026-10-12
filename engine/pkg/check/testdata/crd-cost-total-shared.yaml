@@ -1,0 +1,37 @@
+# api-server: Forbidden: x-kubernetes-validations estimated rule cost total for entire OpenAPIv3 schema exceeds budget by factor of ...
+# want: 22:21-22:358 estimated cost 151M of all rules together is over the budget of 100M
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            name: {type: string}
+            other: {type: string}
+          x-kubernetes-validations:
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.other.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")
+            - rule: self.name.matches("^[a-z]0+$") || self.name.matches("^[a-z]1+$") || self.name.matches("^[a-z]2+$") || self.name.matches("^[a-z]3+$") || self.name.matches("^[a-z]4+$") || self.name.matches("^[a-z]5+$") || self.name.matches("^[a-z]6+$") || self.name.matches("^[a-z]7+$") || self.name.matches("^[a-z]8+$") || self.name.matches("^[a-z]9+$")

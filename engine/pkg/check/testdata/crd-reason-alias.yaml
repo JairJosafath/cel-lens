@@ -1,0 +1,26 @@
+# api-server: x-kubernetes-validations[0].reason: Unsupported value: "Nope": supported values: "FieldValueDuplicate", "FieldValueForbidden", "FieldValueInvalid", "FieldValueRequired"
+# want: 26:23-26:25 supported values: "FieldValueDuplicate", "FieldValueForbidden", "FieldValueInvalid", "FieldValueRequired"
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas: {type: integer}
+          x-kubernetes-validations:
+            - rule: self.spec.replicas > 0
+              description: &r Nope
+              reason: *r

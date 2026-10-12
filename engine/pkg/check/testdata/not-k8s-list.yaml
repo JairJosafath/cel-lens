@@ -1,0 +1,3 @@
+# api-server: a YAML file that is a list is not a Kubernetes object; nothing to validate
+- a
+- b

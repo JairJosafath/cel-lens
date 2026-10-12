@@ -1,0 +1,27 @@
+# api-server: Forbidden: estimated rule cost exceeds budget by factor of ... (try simplifying the rule, or adding maxItems, maxProperties, and maxLength where arrays, maps, and strings are declared)
+# want: 23:25-23:67 estimated cost 6.9e+17 is over the per-expression budget of 10M for a rule
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema: &schema
+        openAPIV3Schema:
+          type: object
+          properties:
+            items:
+              type: array
+              items: {type: string}
+              x-kubernetes-validations:
+                - rule: self.all(a, self.all(b, a == b || a != b))
+    - name: v2
+      served: true
+      storage: false
+      schema: *schema

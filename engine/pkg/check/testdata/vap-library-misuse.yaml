@@ -1,0 +1,16 @@
+# api-server: each expression is rejected with "compilation failed: ERROR: <input>:1:N: found no matching overload
+# for 'f' applied to '(int)'": the Kubernetes library functions take text, not numbers.
+# want: 13:19-13:27 found no matching overload for 'quantity'
+# want: 14:19-14:21 found no matching overload for 'ip'
+# want: 15:19-15:22 found no matching overload for 'url'
+# want: 16:19-16:25 found no matching overload for 'semver'
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: library-misuse
+spec:
+  validations:
+    - expression: quantity(1).isGreaterThan(quantity('1'))
+    - expression: ip(1).isLoopback()
+    - expression: url(1).getHost() == 'a'
+    - expression: semver(1).major() == 1

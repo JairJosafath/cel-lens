@@ -1,0 +1,16 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        resources: [deployments]
+  variables:
+    - name: replicas
+      expression: object.spec.replicas
+  validations:
+    - expression: >-
+        isImage('a') && variables.replicas > 0 && object.spec.replicas > 0 && has(resource.Get('v1', 'namespaces', '', 'x').metadata)

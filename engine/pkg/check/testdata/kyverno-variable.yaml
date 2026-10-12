@@ -1,0 +1,10 @@
+# kyverno: the message is the one Kyverno v1.19.1 gives.
+# want: 10:23-10:24 Syntax error: mismatched input '<EOF>'
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  variables:
+    - name: v
+      expression: "1 +"

@@ -1,0 +1,11 @@
+# kyverno: the message is the one Kyverno v1.19.1 gives.
+# want: 10:25-10:39 found no matching overload for 'containsDigest'
+# want: 11:24-11:29 found no matching overload for 'math.round'
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  validations:
+    - expression: image.containsDigest(1)
+    - expression: math.round("x") > 1

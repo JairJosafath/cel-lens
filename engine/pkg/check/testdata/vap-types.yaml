@@ -1,0 +1,21 @@
+# api-server: validations[0].expression: must evaluate to bool but got int
+#   validations[0].messageExpression: must evaluate to string but got int
+#   validations[1].expression: Syntax error: token recognition error at: '@', then extraneous input '1'
+#   auditAnnotations[0].valueExpression: must evaluate to one of [string null_type] but got int
+# want: 16:19-16:43 must evaluate to bool but got int
+# want: 17:26-17:50 must evaluate to string but got int
+# want: 18:29-18:30 Syntax error: token recognition error
+# want: 18:31-18:32 Syntax error: extraneous input
+# want: 21:24-21:48 must evaluate to one of [string null_type] but got int
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: types
+spec:
+  validations:
+    - expression: object.spec.replicas + 1
+      messageExpression: object.spec.replicas + 1
+    - expression: "object.a @ 1"
+  auditAnnotations:
+    - key: k
+      valueExpression: object.spec.replicas + 1

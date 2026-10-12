@@ -1,0 +1,8 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  validations:
+    - expression: >-
+        object.spec.replicas > 0 && nope

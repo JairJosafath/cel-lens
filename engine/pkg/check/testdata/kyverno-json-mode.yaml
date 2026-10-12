@@ -1,0 +1,11 @@
+# kyverno: JSON mode has no audit annotations, so Kyverno compiles none.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  evaluation:
+    mode: JSON
+  auditAnnotations:
+    - key: k
+      valueExpression: "1 + 1"

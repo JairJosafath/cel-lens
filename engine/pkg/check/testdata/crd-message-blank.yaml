@@ -1,0 +1,25 @@
+# api-server: x-kubernetes-validations[0].message: Invalid value: "  ": must be non-empty if specified
+# want: 25:25-25:27 must be non-empty if specified
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas: {type: integer}
+          x-kubernetes-validations:
+            - rule: self.spec.replicas > 0
+              message: "  "

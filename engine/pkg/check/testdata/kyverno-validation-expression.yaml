@@ -1,0 +1,14 @@
+# kyverno: the message is the one Kyverno v1.19.1 gives.
+# want: 11:20-11:24 undefined field 'sevs'
+# want: 13:11-13:15 undeclared reference to 'nope'
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: p
+spec:
+  validations:
+    - expression: >-
+        !variables.sevs.exists(s,
+          s.exists(x, x in ["a"]) &&
+          nope
+        )

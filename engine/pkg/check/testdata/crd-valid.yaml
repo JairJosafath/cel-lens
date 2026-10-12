@@ -1,0 +1,35 @@
+# api-server: accepted. The Kubernetes library functions isSorted, quantity, url and format are available.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas: {type: integer}
+                size: {type: string, maxLength: 20}
+                endpoint: {type: string, maxLength: 200}
+                tags:
+                  type: array
+                  maxItems: 10
+                  items: {type: string, maxLength: 20}
+              x-kubernetes-validations:
+                - rule: self.tags.isSorted()
+                  message: tags must be sorted
+                - rule: quantity(self.size).isLessThan(quantity('10Gi'))
+                - rule: url(self.endpoint).getScheme() == 'https'
+                - rule: '"%d replicas of %s".format([self.replicas, self.size]).size() > 0'
+                - rule: self.replicas >= 0
+                  messageExpression: "'size is ' + self.size"
