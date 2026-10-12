@@ -141,6 +141,19 @@ func TestHoverMarksCallAfterRawString(t *testing.T) {
 	}
 }
 
+func TestHoverMarksCallAfterTripleQuotedString(t *testing.T) {
+	t.Parallel()
+	a, err := assist.New(kubeversion.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := load(t, "macros.yaml")
+	got, ok := a.Hover(assist.Parse(context.Background(), "macros.yaml", []byte(data)), posIn(t, data, `string(r"""\""").startsWith('a')`, 20))
+	if want := "string.startsWith(string) -> bool // this call"; !ok || !strings.Contains(got.Markdown, want) {
+		t.Errorf("Hover(string(r\"\"\"\\\"\"\").startsWith) = %q, %v, want it to contain %q", got.Markdown, ok, want)
+	}
+}
+
 func TestHoverMarksOverloadByTypes(t *testing.T) {
 	t.Parallel()
 	const crd = `apiVersion: apiextensions.k8s.io/v1

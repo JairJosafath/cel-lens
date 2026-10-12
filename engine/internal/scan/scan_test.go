@@ -289,3 +289,74 @@ spec:
 		t.Errorf("Run(policy) = %v, %v, %q, want false, nil, %q", found, err, out.String(), want)
 	}
 }
+
+const (
+	widgetsCRD = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                maxReplicas: {type: integer}
+`
+	widgetPolicy = `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: demo
+spec:
+  paramKind: {apiVersion: example.com/v1, kind: Widget}
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+  validations:
+    - expression: "object.spec.replicas <= params.spec.maxReplica"
+`
+)
+
+// TestRunTypesParamsFromCRDs checks that a policy's params is typed from a CRD
+// among the files checked, wherever it lies in them, and stays dyn without it.
+func TestRunTypesParamsFromCRDs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a", "policy.yaml"), widgetPolicy)
+	write(t, filepath.Join(dir, "z", "crd.yaml"), widgetsCRD)
+	tests := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"CRD in another folder of the run", []string{"a", "z"}, "a/policy.yaml:11:56: warning: apps/v1 Deployment: undefined field 'maxReplica'\n"},
+		{"CRD file named after the policy", []string{"a/policy.yaml", "z/crd.yaml"}, "a/policy.yaml:11:56: warning: apps/v1 Deployment: undefined field 'maxReplica'\n"},
+		{"CRD not among the files", []string{"a"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			paths := make([]string, len(tt.paths))
+			for i, p := range tt.paths {
+				paths[i] = filepath.Join(dir, p)
+			}
+			found, err := scan.Run(context.Background(), paths, scan.Text, &out)
+			if err != nil || found {
+				t.Fatalf("Run(%v) = %v, %v, want warnings only", tt.paths, found, err)
+			}
+			if got := strings.ReplaceAll(strings.ReplaceAll(out.String(), dir+string(filepath.Separator), ""), `\`, "/"); got != tt.want {
+				t.Errorf("Run(%v) wrote %q, want %q", tt.paths, got, tt.want)
+			}
+		})
+	}
+}

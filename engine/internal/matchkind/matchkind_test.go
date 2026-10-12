@@ -105,3 +105,29 @@ func TestSchema(t *testing.T) {
 		t.Error("spec.replicas has no description")
 	}
 }
+
+func TestLookup(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, apiVersion, kind string
+		want                   string // "" when the kind is not known
+	}{
+		{"core kind", "v1", "ConfigMap", "v1 ConfigMap"},
+		{"grouped kind", "apps/v1", "Deployment", "apps/v1 Deployment"},
+		{"unknown kind", "v1", "Widget", ""},
+		{"list kind", "v1", "ConfigMapList", ""},
+		{"unserved version", "apps/v9", "Deployment", ""},
+		{"custom group", "example.com/v1", "Widget", ""},
+		{"bad api version", "a/b/c", "ConfigMap", ""},
+		{"empty", "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			k, ok := matchkind.Lookup(tt.apiVersion, tt.kind)
+			if ok != (tt.want != "") || ok && k.String() != tt.want || ok && k.Schema == nil {
+				t.Errorf("Lookup(%q, %q) = %q, %v, want %q", tt.apiVersion, tt.kind, k.String(), ok, tt.want)
+			}
+		})
+	}
+}

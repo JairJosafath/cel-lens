@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
@@ -64,15 +65,34 @@ func run(ctx context.Context, dirFS func(dir string) fs.FS, paths []string, form
 		diags []check.Diagnostic
 		errs  []error
 	)
-	for _, p := range paths {
+	type walked struct {
+		files []string
+		err   error
+	}
+	collected := make([]walked, len(paths))
+	var crds check.CRDs
+	for i, p := range paths {
 		files, err := collect(ctx, dirFS, p)
-		if err != nil {
-			if ctx.Err() != nil {
-				return false, ctx.Err()
-			}
-			errs = append(errs, err)
+		if ctx.Err() != nil {
+			return false, ctx.Err()
 		}
+		collected[i] = walked{files, err}
 		for _, f := range files {
+			// An unreadable file is reported when it is checked.
+			if data, err := os.ReadFile(f); err == nil {
+				crds.Set(ctx, f, data)
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	opts = append(slices.Clone(opts), check.WithCRDs(&crds))
+	for _, c := range collected {
+		if c.err != nil {
+			errs = append(errs, c.err)
+		}
+		for _, f := range c.files {
 			d, err := checkFile(ctx, f, opts)
 			if ctx.Err() != nil {
 				return false, ctx.Err()

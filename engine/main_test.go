@@ -444,3 +444,54 @@ func TestBuildVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestRunCheckParamsFromCRD checks that the check command types params from a
+// CRD among the files it checks.
+func TestRunCheckParamsFromCRD(t *testing.T) {
+	t.Parallel()
+	const crd = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                maxReplicas: {type: integer}
+`
+	const policy = `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: demo
+spec:
+  paramKind: {apiVersion: example.com/v1, kind: Widget}
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+  validations:
+    - expression: "object.spec.replicas <= params.spec.maxReplica"
+`
+	dir := t.TempDir()
+	for name, text := range map[string]string{"crd.yaml": crd, "policy.yaml": policy} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if got := run(t.Context(), []string{"check", dir}, strings.NewReader(""), &stdout, &stderr); got != exitOK {
+		t.Errorf("run(check) = %d, want %d (warnings do not fail)", got, exitOK)
+	}
+	checkOutput(t, "stdout", stdout.String(), "warning: apps/v1 Deployment: undefined field 'maxReplica'")
+	checkOutput(t, "stderr", stderr.String(), "")
+}

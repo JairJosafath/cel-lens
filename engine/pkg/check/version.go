@@ -15,6 +15,7 @@ type Option func(*settings)
 
 type settings struct {
 	version kubeversion.Version
+	crds    *CRDs
 }
 
 // WithVersion makes Check match the API server of version v, with its CEL
@@ -43,4 +44,12 @@ func withCompatibility(v kubeversion.Version, fn func()) error {
 	defer eff.SetMinCompatibilityVersion(old)
 	fn()
 	return nil
+}
+
+// WithCRDs makes Check type params from the CustomResourceDefinitions in c,
+// when a ValidatingAdmissionPolicy's spec.paramKind names a custom resource
+// they define. Without it, or when the kind is in no CRD of c, params of such a
+// policy stays dyn. A built-in kind needs no CRDs.
+func WithCRDs(c *CRDs) Option {
+	return func(s *settings) { s.crds = c }
 }

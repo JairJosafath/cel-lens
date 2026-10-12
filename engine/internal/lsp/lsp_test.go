@@ -15,6 +15,7 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/internal/lsp"
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 )
 
 const uri = "file:///widget.yaml"
@@ -995,6 +996,114 @@ func TestKyvernoAssist(t *testing.T) {
 	}
 	if got := hover("object.spec.replicas >", 2); !strings.Contains(got, "(variable) object: apps/v1 Deployment") {
 		t.Errorf("hover(object) = %q, want the matched kind", got)
+	}
+	shutdown(t, c)
+}
+
+// TestPolicyVariables checks that the server reports the problems check.Check
+// reports for the variables of a policy, and completes the chain of authorizer
+// calls with the next method.
+func TestPolicyVariables(t *testing.T) {
+	const chain = "authorizer.group('apps').resource('deployments').namespace('ns')."
+	text := `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: demo
+spec:
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+  validations:
+    - expression: request.usrInfo.username == '' && self == 1
+    - expression: ` + chain + `check('update').allowed()
+`
+	want, err := check.Check(context.Background(), "widget.yaml", []byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := start(t)
+	initialize(t, c)
+	c.open(text)
+	_, diags := c.diagnostics()
+	if len(diags) != len(want) || len(want) != 2 {
+		t.Fatalf("diagnostics = %+v, want the %d problems of check.Check: %+v", diags, len(want), want)
+	}
+	for i, d := range diags {
+		w := want[i]
+		if d.Message != w.Message || d.Range.Start.Line != w.Start.Line-1 || d.Range.Start.Character != w.Start.Column-1 || d.Range.End.Character != w.End.Column-1 {
+			t.Errorf("diagnostic %d = %+v, want the problem of check.Check: %+v", i, d, w)
+		}
+	}
+
+	line, char := lineOf(t, text, chain)
+	res, rerr := c.call("textDocument/completion", map[string]any{"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": line, "character": char + len(chain)}})
+	if rerr != nil {
+		t.Fatalf("completion error = %+v", rerr)
+	}
+	var items []struct{ Label string }
+	if err := json.Unmarshal(res, &items); err != nil {
+		t.Fatalf("completion result %s: %v", res, err)
+	}
+	var labels []string
+	for _, it := range items {
+		labels = append(labels, it.Label)
+	}
+	for _, w := range []string{"check", "name", "subresource"} {
+		if !slices.Contains(labels, w) {
+			t.Errorf("completion after %q = %v, want it to offer %q", chain, labels, w)
+		}
+	}
+	if slices.Contains(labels, "allowed") {
+		t.Errorf("completion after %q = %v, want it not to offer allowed", chain, labels)
+	}
+	shutdown(t, c)
+}
+
+// TestOldObjectCompletion checks that the server offers after "oldObject."
+// exactly what it offers after "object.", at the top and down the tree.
+func TestOldObjectCompletion(t *testing.T) {
+	text := `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: demo
+spec:
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+  validations:
+    - expression: object.spec.replicas > 0
+    - expression: oldObject.spec.replicas > 0
+`
+	c := start(t)
+	initialize(t, c)
+	c.open(text)
+	complete := func(after string) []string {
+		t.Helper()
+		line, char := lineOf(t, text, after)
+		res, rerr := c.call("textDocument/completion", map[string]any{"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": line, "character": char + len(after)}})
+		if rerr != nil {
+			t.Fatalf("completion after %q error = %+v", after, rerr)
+		}
+		var items []struct{ Label string }
+		if err := json.Unmarshal(res, &items); err != nil {
+			t.Fatalf("completion result %s: %v", res, err)
+		}
+		labels := make([]string, len(items))
+		for i, it := range items {
+			labels[i] = it.Label
+		}
+		slices.Sort(labels)
+		return labels
+	}
+	for _, tt := range []struct{ path, field string }{{"", "metadata"}, {"spec.", "replicas"}} {
+		path := tt.path
+		obj, old := complete("expression: object."+path), complete("expression: oldObject."+path)
+		if !slices.Contains(obj, tt.field) {
+			t.Errorf("completion after object.%s = %v, want it to offer %q", path, obj, tt.field)
+		}
+		if !slices.Equal(obj, old) {
+			t.Errorf("completion after oldObject.%s = %v, want that after object.%s: %v", path, old, path, obj)
+		}
 	}
 	shutdown(t, c)
 }

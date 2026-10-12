@@ -44,6 +44,11 @@ type session struct {
 	version string
 	kube    kubeversion.Version // the Kubernetes version results match
 	docs    map[string]*document
+	// crds are the custom resources of the workspace files and the open
+	// documents, which type the params of policies.
+	crds check.CRDs
+	// watchFiles is true when the client lets the server ask for file changes.
+	watchFiles bool
 	// checker finds the problems of a document; nil means check.Check.
 	checker  func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Diagnostic, error)
 	init     bool
@@ -55,6 +60,8 @@ type session struct {
 type document struct {
 	version int
 	text    []byte
+	// crds are the session's custom resources, which type params.
+	crds *check.CRDs
 	// lines and parsed are made by the first request that needs them and
 	// kept until the next didChange replaces the document.
 	lines  [][]rune
@@ -78,7 +85,7 @@ func (ss *session) diagnostics(ctx context.Context, uri string, doc *document) (
 	}
 	// Check's error is for YAML that does not parse, which it also returns as
 	// diagnostics, or for ctx.
-	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube))
+	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithCRDs(&ss.crds))
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -100,7 +107,7 @@ func (d *document) parse(ctx context.Context, uri string) *assist.Document {
 	if d.parsed != nil {
 		return d.parsed
 	}
-	p := assist.Parse(ctx, uri, d.text)
+	p := assist.Parse(ctx, uri, d.text, assist.WithCRDs(d.crds))
 	if ctx.Err() == nil {
 		d.parsed = p
 	}
@@ -208,10 +215,12 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		return nil // a response from the client; nothing to answer
 	case msg.Method == "initialize":
 		ss.init = true
-		return ss.initialize(msg.Params, reply)
+		return ss.initialize(ctx, msg.Params, reply)
 	case msg.Method == "workspace/didChangeConfiguration":
 		return ss.didChangeConfiguration(ctx, msg.Params)
-	case msg.Method == "initialized" || msg.Method == "$/cancelRequest" || msg.Method == "$/setTrace":
+	case msg.Method == "initialized":
+		return ss.registerWatchers()
+	case msg.Method == "$/cancelRequest" || msg.Method == "$/setTrace":
 		return nil
 	case !ss.init:
 		return reply(nil, &rpcError{jsonrpc.CodeNotInitialized, "the server is not initialized"})
@@ -227,7 +236,9 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	case "textDocument/didChange":
 		return ss.didChange(ctx, msg.Params)
 	case "textDocument/didClose":
-		return ss.didClose(msg.Params)
+		return ss.didClose(ctx, msg.Params)
+	case "workspace/didChangeWatchedFiles":
+		return ss.didChangeWatchedFiles(ctx, msg.Params)
 	case "textDocument/hover":
 		res, err := ss.hover(ctx, msg.Params)
 		return reply(res, err)
@@ -258,8 +269,9 @@ func badParams(method string, err error) error {
 
 // initialize answers the initialize request, after reading the Kubernetes
 // version from initializationOptions.
-func (ss *session) initialize(params json.RawMessage, reply func(any, error) error) error {
+func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply func(any, error) error) error {
 	var p struct {
+		initializeParams
 		InitializationOptions *kubeOptions `json:"initializationOptions"`
 	}
 	var problem string
@@ -269,6 +281,8 @@ func (ss *session) initialize(params json.RawMessage, reply func(any, error) err
 	if err := reply(ss.initializeResult(), nil); err != nil {
 		return err
 	}
+	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
+	ss.scanWorkspace(ctx, p.folders())
 	return ss.warn(problem)
 }
 
@@ -328,17 +342,7 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	if err := ss.warn(problem); err != nil || !changed {
 		return err
 	}
-	uris := make([]string, 0, len(ss.docs))
-	for uri := range ss.docs {
-		uris = append(uris, uri)
-	}
-	slices.Sort(uris)
-	for _, uri := range uris {
-		if err := ss.publish(ctx, uri); err != nil {
-			return err
-		}
-	}
-	return nil
+	return ss.publishAll(ctx, "")
 }
 
 func (ss *session) initializeResult() any {
@@ -400,8 +404,8 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 		return nil // a notification has nobody to tell
 	}
 	d := p.TextDocument
-	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text)}
-	return ss.publish(ctx, d.URI)
+	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text), crds: &ss.crds}
+	return ss.publishWithCRDs(ctx, d.URI, ss.crds.Set(ctx, crdKey(d.URI), []byte(d.Text)))
 }
 
 func (ss *session) didChange(ctx context.Context, params json.RawMessage) error {
@@ -418,11 +422,12 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 		return nil
 	}
 	uri := p.TextDocument.URI
-	ss.docs[uri] = &document{version: p.TextDocument.Version, text: []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)}
-	return ss.publish(ctx, uri)
+	text := []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
+	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds}
+	return ss.publishWithCRDs(ctx, uri, ss.crds.Set(ctx, crdKey(uri), text))
 }
 
-func (ss *session) didClose(params json.RawMessage) error {
+func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		TextDocument struct {
 			URI string `json:"uri"`
@@ -431,8 +436,24 @@ func (ss *session) didClose(params json.RawMessage) error {
 	if !decode(params, &p) {
 		return nil
 	}
-	delete(ss.docs, p.TextDocument.URI)
-	return ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": p.TextDocument.URI, "diagnostics": []any{}})
+	uri := p.TextDocument.URI
+	delete(ss.docs, uri)
+	// The editor's text is gone: the file on disk is what the workspace has.
+	changed := ss.readFromDisk(ctx, uri)
+	if err := ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []any{}}); err != nil || !changed {
+		return err
+	}
+	return ss.publishAll(ctx, "")
+}
+
+// publishWithCRDs sends the diagnostics of the document at uri and, when the
+// custom resources changed, those of the other open documents, whose params
+// may be typed from them.
+func (ss *session) publishWithCRDs(ctx context.Context, uri string, crdsChanged bool) error {
+	if err := ss.publish(ctx, uri); err != nil || !crdsChanged {
+		return err
+	}
+	return ss.publishAll(ctx, uri)
 }
 
 // publish checks the document at uri and sends its diagnostics.

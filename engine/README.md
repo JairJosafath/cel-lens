@@ -156,6 +156,69 @@ Deployment, StatefulSet`); hover on `object` lists the kinds and hover on a
 field says which have it; a field only some kinds have gets one warning for each
 kind that lacks it, such as `apps/v1 Deployment: undefined field 'serviceName'`.
 
+## Typed policy variables
+
+Every CEL field of a ValidatingAdmissionPolicy and of a MutatingAdmissionPolicy
+(match conditions, variables, and the expression of each mutation) knows the
+variables the API server's admission compiler declares, with completion, hover
+and checking:
+
+| Variable | Type | Notes |
+| --- | --- | --- |
+| `object` | the matched kind, as above | null on DELETE |
+| `oldObject` | the same type as `object` | null on CREATE; `oldObject == null` checks clean |
+| `request` | `kubernetes.AdmissionRequest`: `kind`, `resource`, `subResource`, `requestKind`, `requestResource`, `requestSubResource`, `name`, `namespace`, `operation`, `userInfo`, `dryRun`, `options` | |
+| `namespaceObject` | `kubernetes.Namespace`: `metadata`, `spec`, `status` | null for cluster-scoped resources |
+| `authorizer` | `kubernetes.authorization.Authorizer` | `group`, `path`, `serviceAccount`, then `resource`, `subresource`, `namespace`, `name`, `fieldSelector`, `labelSelector`, `check` and the decision's `allowed`, `reason`, `errored`, `error`; `authorizer.requestResource` (a `kubernetes.authorization.ResourceCheck` field, with hover and completion) is a ready-made resource check |
+
+Completion follows an `authorizer` chain such as
+`authorizer.group('apps').resource('deployments').namespace('ns').check('update').allowed()`
+and offers the next method at each step. A wrong field such as `request.usrInfo`
+gets the API server's `undefined field 'usrInfo'`, and `self`, which only
+`x-kubernetes-validations` rules declare, gets `undeclared reference to 'self'`.
+`params` is typed from `spec.paramKind` (next section). `variables.<name>` has
+the type of the expression of `spec.variables[]` that defines it, as the API
+server types it: a scalar, list or map keeps its type (`object.spec.replicas`
+is `int`, `request.userInfo.groups` is `list(string)`) and anything else,
+such as an object, or an expression that does not compile, is `dyn`. Completion
+after `variables.` offers the variables defined before that point, each with its
+type, and hover gives the type and the defining expression. A name the policy
+has no variable for, or defines later, gets `undefined field '<name>'`. For a
+MutatingAdmissionPolicy, a
+mutation must return `Object` (`applyConfiguration`) or a list of `JSONPatch`
+(`jsonPatch`), and `object` and `oldObject` are typed for completion and hover
+but not checked against the matched kinds, as the API server does not.
+
+## Typed `params`
+
+`params` gets its type from `spec.paramKind` of the policy, as the API server's
+type checker does:
+
+- A built-in kind (`{apiVersion: v1, kind: ConfigMap}`): the schema of that kind
+  at the Kubernetes version the results match.
+- A custom resource (`{apiVersion: example.com/v1, kind: Widget}`): the schema
+  of the named version in a CustomResourceDefinition. The language server reads
+  the CRDs in the workspace folders (YAML files, skipping hidden folders and
+  `node_modules`, up to 20,000 files of up to 1 MiB) and in the open documents;
+  `cel-lens-core check` reads the CRDs among the files and folders it checks, so
+  name the CRD's file or folder too. When a CRD is added, edited, closed or
+  deleted, the open policies are checked again without restarting the server;
+  for files that change on disk, the editor must send
+  `workspace/didChangeWatchedFiles`, which the server asks for when the client
+  allows it.
+- Anything else stays `dyn`, as before, with no field warnings: a kind that is
+  neither built in nor defined by a CRD found as above, an unknown version, or
+  a `paramKind` that is not a mapping with `apiVersion` and `kind`. Hover on
+  `params` then says it is `dyn` because the kind was not found.
+
+Hover on `params` names the kind. A wrong field gets a warning that names the
+kind the policy matches, like `status.typeChecking`: `apps/v1 Deployment:
+undefined field 'maxReplica'`. Like `object`, `params` is checked against its
+type only for a policy that matches built-in kinds. A policy without
+`spec.paramKind` has no `params`: using it is the error `undeclared reference to
+'params' (in container '')`, as the API server's admission compiler declares
+`params` only when the policy has a `paramKind`.
+
 ## Kyverno policies
 
 The engine checks the CEL of a Kyverno `ValidatingPolicy`

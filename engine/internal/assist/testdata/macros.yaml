@@ -45,3 +45,5 @@ spec:
                 - rule: self.labels['\']'].size() > 0
                 - rule: self.ports.all(p, r'\' != '' && p.size() > 0)
                 - rule: string(r'\').startsWith('a')
+                - rule: self.ports.all(p, '''a ) ' b''' != '' && p.size() > 0)
+                - rule: string(r"""\""").startsWith('a')

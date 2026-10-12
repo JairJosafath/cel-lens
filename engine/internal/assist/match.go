@@ -41,15 +41,23 @@ func (a *Assistant) argTypes(line []rune, c int, vars []variable) []string {
 }
 
 // stringLiteral reports whether text is one single-line string literal, raw
-// (r'...') or not, with no quote of its own kind inside.
+// (r'...') or not, triple-quoted or not, with no closing quote inside.
 func stringLiteral(text string) bool {
 	if text != "" && (text[0] == 'r' || text[0] == 'R') {
 		text = text[1:]
 	}
-	if len(text) < 2 || (text[0] != '\'' && text[0] != '"') || text[len(text)-1] != text[0] {
+	if text == "" || (text[0] != '\'' && text[0] != '"') {
 		return false
 	}
-	return !strings.ContainsRune(text[1:len(text)-1], rune(text[0]))
+	q := string(text[0])
+	delim := q
+	if strings.HasPrefix(text, q+q+q) && len(text) >= 6 {
+		delim = q + q + q
+	}
+	if len(text) < 2*len(delim) || !strings.HasPrefix(text, delim) || !strings.HasSuffix(text, delim) {
+		return false
+	}
+	return !strings.Contains(text[len(delim):len(text)-len(delim)], delim)
 }
 
 // argType returns the CEL type name of the argument written text.
@@ -189,11 +197,13 @@ func substitute(t string, bound map[string]string) string {
 // quotedRunes reports, for each rune of line[:n], whether it is inside a string
 // literal or is one of its quotes, and whether line[:n] ends inside a string.
 // A raw string (r'...') has no escapes, so a backslash does not hide its closing
-// quote.
+// quote. A triple-quoted string (”'...”') ends only at three quotes in a row,
+// so single quotes of the same kind inside it do not close it.
 func quotedRunes(line []rune, n int) (in []bool, open bool) {
 	in = make([]bool, n)
 	var quote rune
 	raw := false
+	width := 0 // quotes that open and close the string: 1 or 3
 	for i := 0; i < n && i < len(line); i++ {
 		r := line[i]
 		switch {
@@ -203,18 +213,42 @@ func quotedRunes(line []rune, n int) (in []bool, open bool) {
 				in[i+1] = true
 			}
 			i++
+		case quote != 0 && r == quote && closesAt(line, i, width):
+			for j := i; j < i+width && j < n; j++ {
+				in[j] = true
+			}
+			i += width - 1
+			quote = 0
 		case quote != 0:
 			in[i] = true
-			if r == quote {
-				quote = 0
-			}
 		case r == '"' || r == '\'':
-			in[i] = true
 			quote = r
 			raw = rawPrefix(line, i)
+			width = 1
+			if i+2 < len(line) && line[i+1] == r && line[i+2] == r {
+				width = 3
+			}
+			for j := i; j < i+width && j < n; j++ {
+				in[j] = true
+			}
+			i += width - 1
 		}
 	}
 	return in, quote != 0
+}
+
+// closesAt reports whether the quote at line[i] starts the width quotes that
+// end a string.
+func closesAt(line []rune, i, width int) bool {
+	if i+width > len(line) {
+		return false
+	}
+	for _, r := range line[i : i+width] {
+		if r != line[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // rawPrefix reports whether the quote at line[q] opens a raw string: it follows

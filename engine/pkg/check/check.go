@@ -100,11 +100,14 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 	for _, o := range opts {
 		o(&set)
 	}
-	docs, broken, err := extract.Documents(ctx, file, data)
+	// A well-formed UTF-16 file is decoded here, once, and the rest reads the
+	// UTF-8 text; the data kept in the reporter is the file as read.
+	text := extract.UTF8(data)
+	docs, broken, err := extract.Documents(ctx, file, text)
 	if err != nil {
 		return nil, err
 	}
-	exprs, findErr := extract.FindIn(ctx, file, data, docs, broken)
+	exprs, findErr := extract.FindIn(ctx, file, text, docs, broken)
 	if errors.Is(findErr, context.Canceled) || errors.Is(findErr, context.DeadlineExceeded) {
 		return nil, findErr
 	}
@@ -119,8 +122,8 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 	if err != nil {
 		return nil, fmt.Errorf("build syntax environment for %s: %w", file, err)
 	}
-	r := reporter{version: set.version, file: file, lines: splitLines(data), data: data, eol: "\n", spans: spans{env: parser}}
-	if bytes.Contains(extract.UTF8(data), []byte("\r\n")) {
+	r := reporter{version: set.version, crds: set.crds, file: file, lines: splitLines(text), data: data, eol: "\n", spans: spans{env: parser}}
+	if bytes.Contains(text, []byte("\r\n")) {
 		r.eol = "\r\n"
 	}
 	for _, se := range broken {
@@ -144,6 +147,7 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 // reporter collects the diagnostics of one file.
 type reporter struct {
 	version kubeversion.Version
+	crds    *CRDs // the custom resources params may be typed from; may be nil
 	file    string
 	lines   [][]rune
 	data    []byte // the file as read, for bytes that lines cannot show
@@ -178,6 +182,8 @@ func (r *reporter) document(ctx context.Context, node *yaml.Node, exprs map[stri
 		return r.crd(ctx, node, exprs)
 	case group == "admissionregistration.k8s.io" && head.Kind == "ValidatingAdmissionPolicy" && len(exprs) > 0:
 		return r.policy(ctx, node, exprs)
+	case group == "admissionregistration.k8s.io" && head.Kind == "MutatingAdmissionPolicy" && len(exprs) > 0:
+		return r.mutatingPolicy(ctx, node, exprs)
 	case group == "policies.kyverno.io" && version == "v1" && head.Kind == "ValidatingPolicy" && len(exprs) > 0:
 		return r.kyvernoPolicy(ctx, node, exprs)
 	}

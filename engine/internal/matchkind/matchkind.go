@@ -102,3 +102,19 @@ func resourceName(gvk schema.GroupVersionKind) string {
 	plural, _ := meta.UnsafeGuessKindToResource(gvk)
 	return plural.Resource
 }
+
+// Lookup returns the built-in kind with the given API version, such as "v1" or
+// "apps/v1", and kind name. It reports false for a kind the engine has no
+// schema for, such as a custom resource.
+func Lookup(apiVersion, kind string) (Kind, bool) {
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil {
+		return Kind{}, false
+	}
+	gvk := gv.WithKind(kind)
+	t, ok := scheme.Scheme.AllKnownTypes()[gvk]
+	if !ok || !isResource(gvk, t) {
+		return Kind{}, false
+	}
+	return Kind{GVK: gvk, Schema: schemaOf(t)}, true
+}

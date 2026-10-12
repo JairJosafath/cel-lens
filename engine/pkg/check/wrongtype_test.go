@@ -286,6 +286,18 @@ func BenchmarkCheckLargeCRD(b *testing.B) {
 	}
 }
 
+// BenchmarkCheckLargeCRDUTF16 measures checking largeCRD as UTF-16, which is
+// decoded to UTF-8 before it is read.
+func BenchmarkCheckLargeCRDUTF16(b *testing.B) {
+	data := []byte(utf16le(units(largeCRD(false))...))
+	b.SetBytes(int64(len(data)))
+	for b.Loop() {
+		if _, err := check.Check(context.Background(), "b.yaml", data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestCheckWrongTypeKeepsRulesOfSameVersion(t *testing.T) {
 	t.Parallel()
 	src := crdHead + crdVersion("v1", `            f0:

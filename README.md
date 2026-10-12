@@ -30,7 +30,7 @@ or **Extensions: Install from VSIX...** in the Command Palette.
 With Go 1.26 or newer:
 
 ```sh
-go install github.com/JairJosafath/cel-lens/engine@v0.14.0
+go install github.com/JairJosafath/cel-lens/engine@v0.15.0
 ```
 
 `go install` names the binary after the last part of the path, so this gives `engine`
@@ -43,18 +43,23 @@ it (`sha256sum -c checksums.txt`).
 ## What works today
 
 - CEL in CustomResourceDefinition `x-kubernetes-validations` rules, in
-  ValidatingAdmissionPolicy, and in Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`).
+  ValidatingAdmissionPolicy and MutatingAdmissionPolicy, and in Kyverno `ValidatingPolicy`
+  (`policies.kyverno.io/v1`).
 - Diagnostics built on cel-go and the Kubernetes CEL libraries, with the API server's
   messages, for Kubernetes 1.33 to 1.37 (1.37 by default).
 - Hover on a variable, field or function (its type and a short description), and
   completion of `self`, `object`, `request` and the rest, the fields of the type before a
   dot, and the Kubernetes CEL functions.
+- In admission policies, `object`, `request`, `namespaceObject`, `authorizer` and
+  `variables.<name>` are typed as the API server types them, and so is `params` (from
+  `spec.paramKind`) in a ValidatingAdmissionPolicy.
 - Quick fixes for a misspelled name, and for a rule over its cost budget (add a
   `maxLength`, `maxItems` or `maxProperties`).
 - In VS Code, colors for the parts of each CEL expression, also in MutatingAdmissionPolicy.
 
-Details and limits are in [engine/README.md](engine/README.md) and
-[vscode/README.md](vscode/README.md).
+The extension v0.14.0 carries engine v0.14.0. MutatingAdmissionPolicy checks and the typed
+policy variables come with engine v0.15.0. Details and limits are in
+[engine/README.md](engine/README.md) and [vscode/README.md](vscode/README.md).
 
 ## Bugs and ideas
 

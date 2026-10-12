@@ -28,6 +28,8 @@ type Assistant struct {
 	vars []variable
 	// kyverno answers for the expressions of a Kyverno ValidatingPolicy.
 	kyverno *Assistant
+	// version is the Kubernetes version the types follow.
+	version kubeversion.Version
 }
 
 // New builds an Assistant from the Kubernetes CEL environment of version v.
@@ -36,7 +38,7 @@ func New(v kubeversion.Version) (*Assistant, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Assistant{funcs: funcs, macros: macros, byName: make(map[string]function, len(funcs))}
+	a := &Assistant{funcs: funcs, macros: macros, byName: make(map[string]function, len(funcs)), version: v}
 	for _, f := range funcs {
 		a.byName[f.name] = f
 	}
@@ -59,7 +61,7 @@ func (a *Assistant) scope(doc *Document, e extract.Expression) []variable {
 	if a.vars != nil {
 		return a.kyvernoScope(doc.roots[e.Document], e)
 	}
-	return scope(doc, e)
+	return scope(doc, e, a.version)
 }
 
 // Hover describes what is under the cursor.
@@ -224,6 +226,9 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 			}
 			return a.hoverFunction(word, true, actual, hover)
 		}
+		if isChain && !called && word == requestResourceVar && recv.celType == authorizerType {
+			return hover(declaration("field", word, resourceCheckType, requestResourceDesc))
+		}
 		if f := recv.known.field(word); isChain && recv.found && f != nil {
 			return hover(declaration("field", word, f.name(), withKinds(f.str("description"), f.kinds())))
 		}
@@ -341,6 +346,13 @@ func (a *Assistant) Complete(doc *Document, pos extract.Position) ([]Item, bool)
 	if start == 0 || s.line[start-1] != '.' {
 		return a.topLevel(vars), true
 	}
+	if t, ok := a.opaqueBefore(s.line, start-1, vars); ok {
+		items := a.members(nil, false, t)
+		if t == authorizerType {
+			items = append(items, Item{Label: requestResourceVar, Kind: KindField, Detail: resourceCheckType, Documentation: requestResourceDesc})
+		}
+		return items, true
+	}
 	chain, ok := chainBefore(s.line, start-1)
 	if !ok {
 		return a.members(schema(nil), optionalCallBefore(s.line, start-1), ""), true
@@ -423,7 +435,7 @@ func (a *Assistant) members(s schema, optional bool, celType string) []Item {
 	kind := s.kind()
 	var items []Item
 	for _, f := range a.funcs {
-		if internal(f.name) {
+		if operator(f.name) {
 			continue
 		}
 		for _, m := range f.members {
@@ -469,7 +481,14 @@ func reserved(name string) bool {
 // operator overloads `_+_` and `!_` or the `@in` operator, or a CEL reserved
 // word such as `in`: developers cannot type these.
 func internal(name string) bool {
-	return strings.HasPrefix(name, "_") || strings.HasSuffix(name, "_") || strings.HasPrefix(name, "@") || reserved(name)
+	return operator(name) || reserved(name)
+}
+
+// operator reports whether name is one cel-go uses for itself, such as `_+_`.
+// Unlike a reserved word, a method may have such a name: authorizer's
+// namespace('ns') is called after a dot.
+func operator(name string) bool {
+	return strings.HasPrefix(name, "_") || strings.HasSuffix(name, "_") || strings.HasPrefix(name, "@")
 }
 
 func sortItems(items []Item) {

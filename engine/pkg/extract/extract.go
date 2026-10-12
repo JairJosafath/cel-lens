@@ -175,6 +175,8 @@ func (f *finder) parse(ctx context.Context, doc *yaml.Node) error {
 		return f.crd(ctx, spec)
 	case group == "admissionregistration.k8s.io" && str(kind) == "ValidatingAdmissionPolicy":
 		return f.policy(ctx, spec)
+	case group == "admissionregistration.k8s.io" && str(kind) == "MutatingAdmissionPolicy":
+		return f.mutatingPolicy(ctx, spec)
 	case group == "policies.kyverno.io" && version == "v1" && str(kind) == "ValidatingPolicy":
 		return f.policy(ctx, spec)
 	}
@@ -258,16 +260,35 @@ func (f *finder) schema(ctx context.Context, n *yaml.Node, path, field string) e
 // policy visits the spec of a ValidatingAdmissionPolicy or a Kyverno
 // ValidatingPolicy, which keep their CEL in the same fields.
 func (f *finder) policy(ctx context.Context, spec *yaml.Node) error {
-	fields := []struct {
-		list, field string
-		kind        Kind
-	}{
-		{"validations", "expression", KindExpression},
-		{"validations", "messageExpression", KindMessageExpression},
-		{"matchConditions", "expression", KindExpression},
-		{"variables", "expression", KindExpression},
-		{"auditAnnotations", "valueExpression", KindValueExpression},
-	}
+	return f.policyFields(ctx, spec, []policyField{
+		{"validations", "", "expression", KindExpression},
+		{"validations", "", "messageExpression", KindMessageExpression},
+		{"matchConditions", "", "expression", KindExpression},
+		{"variables", "", "expression", KindExpression},
+		{"auditAnnotations", "", "valueExpression", KindValueExpression},
+	})
+}
+
+// mutatingPolicy visits the spec of a MutatingAdmissionPolicy: its match
+// conditions, variables and the expression of each mutation.
+func (f *finder) mutatingPolicy(ctx context.Context, spec *yaml.Node) error {
+	return f.policyFields(ctx, spec, []policyField{
+		{"matchConditions", "", "expression", KindExpression},
+		{"variables", "", "expression", KindExpression},
+		{"mutations", "applyConfiguration", "expression", KindExpression},
+		{"mutations", "jsonPatch", "expression", KindExpression},
+	})
+}
+
+// policyField is where a policy spec keeps CEL: the field of each item of the
+// list, inside the mapping sub of the item when there is one.
+type policyField struct {
+	list, sub, field string
+	kind             Kind
+}
+
+// policyFields visits the CEL of spec in the given fields.
+func (f *finder) policyFields(ctx context.Context, spec *yaml.Node, fields []policyField) error {
 	for _, fl := range fields {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -280,7 +301,15 @@ func (f *finder) policy(ctx context.Context, spec *yaml.Node) error {
 			continue
 		}
 		for i, item := range items.Content {
-			if err := f.add(ctx, item, fl.field, fl.kind, "", fmt.Sprintf("spec.%s[%d].%s", fl.list, i, fl.field)); err != nil {
+			path := fmt.Sprintf("spec.%s[%d].", fl.list, i)
+			if fl.sub != "" {
+				sub, err := f.get(ctx, item, fl.sub)
+				if err != nil {
+					return err
+				}
+				item, path = sub, path+fl.sub+"."
+			}
+			if err := f.add(ctx, item, fl.field, fl.kind, "", path+fl.field); err != nil {
 				return err
 			}
 		}

@@ -1,12 +1,19 @@
 package assist
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
+	"k8s.io/kube-openapi/pkg/validation/spec"
+
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // variable is a name an expression can use.
@@ -37,7 +44,7 @@ func unknownType() map[string]any {
 // scope returns the variables the expression e of doc can use, with the
 // types the API server gives them. It returns nil for a file it cannot read
 // the document from.
-func scope(doc *Document, e extract.Expression) []variable {
+func scope(doc *Document, e extract.Expression, v kubeversion.Version) []variable {
 	if e.Document >= len(doc.roots) {
 		return nil
 	}
@@ -45,8 +52,8 @@ func scope(doc *Document, e extract.Expression) []variable {
 	switch root["kind"] {
 	case "CustomResourceDefinition":
 		return crdScope(root, e)
-	case "ValidatingAdmissionPolicy":
-		return policyScope(root, e)
+	case "ValidatingAdmissionPolicy", "MutatingAdmissionPolicy":
+		return policyScope(root, e, v, doc.crds)
 	}
 	return nil
 }
@@ -70,36 +77,83 @@ func crdScope(root map[string]any, e extract.Expression) []variable {
 // policyScope declares the variables of the admission CEL environment:
 // params only when the policy has a paramKind, variables only for the
 // expressions that may use them.
-func policyScope(root map[string]any, e extract.Expression) []variable {
-	spec, _ := root["spec"].(map[string]any)
+func policyScope(root map[string]any, e extract.Expression, v kubeversion.Version, crds *check.CRDs) []variable {
+	policySpec, _ := root["spec"].(map[string]any)
 	object := variable{name: "object", desc: "The object being admitted; null on DELETE.", schema: unknownType()}
 	oldObject := variable{name: "oldObject", desc: "The existing object; null on CREATE.", schema: unknownType()}
-	if kinds, ok := matchedKinds(spec); ok {
+	if kinds, ok := matchedKinds(policySpec); ok {
 		object.typeName, object.schema = kinds.name, kinds.schema
 		oldObject.typeName, oldObject.schema = kinds.name, kinds.schema
 	}
 	vars := []variable{
 		object, oldObject,
-		{name: "request", desc: "The attributes of the admission request.", schema: requestType()},
-		{name: "namespaceObject", desc: "The namespace the object belongs to; null for cluster-scoped objects.", schema: unknownType()},
-		{name: "authorizer", desc: "Checks what the requesting user may do; start with authorizer.group(...) or authorizer.serviceAccount(...).", typeName: "authorizer"},
+		{name: "request", desc: "The attributes of the admission request.", typeName: "kubernetes.AdmissionRequest", schema: requestType(false)},
+		{name: "namespaceObject", desc: "The namespace the object belongs to; null for cluster-scoped objects.", typeName: "kubernetes.Namespace", schema: namespaceType()},
+		{name: "authorizer", desc: "Checks what the requesting user may do; start with authorizer.group(...), authorizer.path(...) or authorizer.serviceAccount(...). authorizer.requestResource checks the resource of the request.", typeName: authorizerType, celType: authorizerType},
 	}
-	if spec["paramKind"] != nil {
-		vars = append(vars, variable{name: "params", desc: "The parameter resource the binding refers to; null when there is none.", schema: unknownType()})
+	if policySpec["paramKind"] != nil {
+		vars = append(vars, paramsVariable(policySpec["paramKind"], crds))
 	}
 	if strings.HasPrefix(e.FieldPath, "spec.matchConditions[") {
 		return vars
 	}
 	return append(vars, variable{
-		name: "variables", desc: "The policy variables of spec.variables, by name.",
-		schema: variablesType(spec, e),
+		name: "variables", desc: "The policy variables of spec.variables, by name.", typeName: "kubernetes.variables",
+		schema: policyVariables(root, e, v, crds),
 	})
 }
 
+// policyVariables returns the schema of variables for e: a property for each
+// variable of spec.variables that e may use, each typed by its expression as
+// the API server types it (see check.VariableTypes). When the policy cannot be
+// compiled to types, the properties are dyn.
+func policyVariables(root map[string]any, e extract.Expression, v kubeversion.Version, crds *check.CRDs) schema {
+	policySpec, _ := root["spec"].(map[string]any)
+	typed, err := check.VariableTypes(context.Background(), root, check.WithVersion(v), check.WithCRDs(crds))
+	if err != nil {
+		return variablesType(policySpec, e)
+	}
+	props := map[string]any{}
+	for i, tv := range typed {
+		if limit := variableLimit(e); limit >= 0 && i >= limit {
+			break
+		}
+		s := maps.Clone(tv.Schema)
+		s["description"] = fmt.Sprintf("Policy variable %s, defined in spec.variables by %#q.", tv.Name, tv.Expression)
+		props[tv.Name] = s
+	}
+	return schema{"type": "object", "properties": props}
+}
+
+// paramsVariable declares params for the paramKind of a policy, typed from the
+// built-in kind it names or from the CustomResourceDefinition in crds that
+// defines it, as the API server's type checker resolves it. When the kind is
+// found in neither, params is dyn and the description says why.
+func paramsVariable(paramKind any, crds *check.CRDs) variable {
+	const desc = "The parameter resource the binding refers to; null when there is none."
+	pk, _ := paramKind.(map[string]any)
+	apiVersion, _ := pk["apiVersion"].(string)
+	kind, _ := pk["kind"].(string)
+	if k, ok := matchkind.Lookup(apiVersion, kind); ok {
+		if s, ok := toSchema(k.Schema); ok {
+			return variable{name: "params", desc: desc, typeName: k.String(), schema: s}
+		}
+	}
+	if s, ok := crds.Schema(apiVersion, kind); ok {
+		return variable{name: "params", desc: desc, typeName: apiVersion + " " + kind, schema: s}
+	}
+	return variable{
+		name: "params", schema: unknownType(),
+		desc: desc + " It is dyn, not typed, because spec.paramKind " + apiVersion + " " + kind +
+			" was not found: it is no built-in kind and no CustomResourceDefinition among the workspace files defines it.",
+	}
+}
+
 // requestType returns the schema of the admission request, as the API server
-// declares it for CEL.
-func requestType() map[string]any {
-	return obj(map[string]any{
+// declares it for CEL. Kyverno's request also has the unique ID of the request,
+// which withUID adds.
+func requestType(withUID bool) map[string]any {
+	props := map[string]any{
 		"kind":               gvk("The fully-qualified type of the object being admitted."),
 		"resource":           gvr("The resource being requested."),
 		"subResource":        str("The subresource being requested, if any."),
@@ -117,8 +171,46 @@ func requestType() map[string]any {
 		}, "The user making the request."),
 		"dryRun":  map[string]any{"type": "boolean", "description": "True when the request does not persist anything."},
 		"options": unknownType(),
-		"uid":     str("The unique ID of the request."),
-	}, "The attributes of the admission request.")
+	}
+	if withUID {
+		props["uid"] = str("The unique ID of the request.")
+	}
+	return obj(props, "The attributes of the admission request.")
+}
+
+// namespaceType returns the schema of namespaceObject, as the API server
+// declares it for CEL: a Namespace with only some of its metadata, and the
+// UID field named as the API server names it.
+func namespaceType() map[string]any {
+	list := map[string]any{"type": "array", "items": str("")}
+	strMap := map[string]any{"type": "object", "additionalProperties": str("")}
+	return obj(map[string]any{
+		"metadata": obj(map[string]any{
+			"name":                       str("The name of the namespace."),
+			"generateName":               str(""),
+			"namespace":                  str(""),
+			"labels":                     strMap,
+			"annotations":                strMap,
+			"UID":                        str("The unique ID of the namespace."),
+			"creationTimestamp":          map[string]any{"type": "string", "format": "date-time"},
+			"deletionGracePeriodSeconds": map[string]any{"type": "integer"},
+			"deletionTimestamp":          map[string]any{"type": "string", "format": "date-time"},
+			"generation":                 map[string]any{"type": "integer"},
+			"resourceVersion":            str(""),
+			"finalizers":                 list,
+		}, "The metadata of the namespace."),
+		"spec": obj(map[string]any{"finalizers": list}, "The spec of the namespace."),
+		"status": obj(map[string]any{
+			"conditions": map[string]any{"type": "array", "items": obj(map[string]any{
+				"status":             str(""),
+				"type":               str(""),
+				"lastTransitionTime": map[string]any{"type": "string", "format": "date-time"},
+				"message":            str(""),
+				"reason":             str(""),
+			}, "")},
+			"phase": str("The phase of the namespace: Active or Terminating."),
+		}, "The status of the namespace."),
+	}, "The namespace the object belongs to.")
 }
 
 func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
@@ -193,8 +285,8 @@ type kindsSchema struct {
 // matchedKinds returns the built-in kinds the policy spec matches, as the API
 // server's type checker finds them. It reports false unless every matched kind
 // is known. With several kinds, schema is their merge (see merge).
-func matchedKinds(spec map[string]any) (kindsSchema, bool) {
-	constraints, _ := spec["matchConstraints"].(map[string]any)
+func matchedKinds(policySpec map[string]any) (kindsSchema, bool) {
+	constraints, _ := policySpec["matchConstraints"].(map[string]any)
 	list, _ := constraints["resourceRules"].([]any)
 	var rules []matchkind.Rule
 	for _, item := range list {
@@ -211,12 +303,8 @@ func matchedKinds(spec map[string]any) (kindsSchema, bool) {
 	}
 	parts := make([]part, len(kinds))
 	for i, k := range kinds {
-		raw, err := json.Marshal(k.Schema)
-		if err != nil {
-			return kindsSchema{}, false
-		}
-		var s schema
-		if err := json.Unmarshal(raw, &s); err != nil {
+		s, ok := toSchema(k.Schema)
+		if !ok {
 			return kindsSchema{}, false
 		}
 		parts[i] = part{name: shortName(kinds, i), schema: s}
@@ -225,6 +313,20 @@ func matchedKinds(spec map[string]any) (kindsSchema, bool) {
 		return kindsSchema{name: names[0], schema: parts[0].schema}, true
 	}
 	return kindsSchema{name: strings.Join(names, ", "), schema: merge(parts)}, true
+}
+
+// toSchema converts the OpenAPI schema of a built-in kind to the form a CRD's
+// schema has when YAML decodes it.
+func toSchema(s *spec.Schema) (schema, bool) {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return nil, false
+	}
+	var out schema
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // shortName is the name of kinds[i] a reader tells the kinds apart by: its

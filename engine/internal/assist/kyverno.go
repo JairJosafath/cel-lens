@@ -54,7 +54,7 @@ func kyvernoVariable(name, typ string) variable {
 	case "namespaceObject":
 		v.desc, v.schema, v.celType = "The namespace the object belongs to; null for cluster-scoped objects.", unknownType(), ""
 	case "request":
-		v.desc, v.schema, v.celType = "The attributes of the admission request.", requestType(), ""
+		v.desc, v.schema, v.celType = "The attributes of the admission request.", requestType(true), ""
 	case "variables":
 		v.desc, v.celType = "The policy variables of spec.variables, by name.", ""
 	case "exceptions":
@@ -102,13 +102,20 @@ func (a *Assistant) kyvernoScope(root map[string]any, e extract.Expression) []va
 	return vars
 }
 
-// variablesType returns the schema of the variables variable for e: a property
-// for each variable of spec.variables, only those before e when e is one of them.
-func variablesType(spec map[string]any, e extract.Expression) schema {
-	limit := -1 // every variable
+// variableLimit is the number of variables of spec.variables that e may use:
+// the ones before e when e is one of them, and -1, every variable, otherwise.
+func variableLimit(e extract.Expression) int {
+	limit := -1
 	if rest, ok := strings.CutPrefix(e.FieldPath, "spec.variables["); ok {
 		limit, _ = strconv.Atoi(strings.SplitN(rest, "]", 2)[0])
 	}
+	return limit
+}
+
+// variablesType returns the schema of the variables variable for e: a property
+// for each variable of spec.variables, only those before e when e is one of them.
+func variablesType(spec map[string]any, e extract.Expression) schema {
+	limit := variableLimit(e)
 	props := map[string]any{}
 	list, _ := spec["variables"].([]any)
 	for i, item := range list {

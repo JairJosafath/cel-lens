@@ -122,7 +122,8 @@ const checkHelp = `Usage: %s check [--format text|json] [--kube-version <1.x>] <
 
 Check the CEL in Kubernetes YAML files and folders, the way the API server
 does. By default the results match Kubernetes %s; --kube-version picks the
-version your cluster runs (supported: %s). Folders are searched for .yaml and .yml files. Each problem
+version your cluster runs (supported: %s). Folders are searched for .yaml and .yml files;
+the CustomResourceDefinitions among them type the params of policies. Each problem
 is printed as file:line:col: severity: message. Exit 0: no errors; 1: errors
 found; 2: usage or read error; 130: interrupted.
 

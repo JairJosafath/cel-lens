@@ -149,6 +149,18 @@ func (c *Conn) Notify(method string, params any) error {
 	}{"2.0", method, params})
 }
 
+// Request sends the request method with params and the given id, encoded as
+// JSON. The answer arrives through Read like any message; the caller picks ids
+// that tell it from the client's own requests.
+func (c *Conn) Request(id, method string, params any) error {
+	return c.write(struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      string `json:"id"`
+		Method  string `json:"method"`
+		Params  any    `json:"params"`
+	}{"2.0", id, method, params})
+}
+
 func (c *Conn) write(v any) error {
 	body, err := json.Marshal(v)
 	if err != nil {

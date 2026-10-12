@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -126,4 +127,10 @@ func docs(t reflect.Type) map[string]string {
 		return d.SwaggerDoc()
 	}
 	return nil
+}
+
+// ObjectMeta returns the schema of metav1.ObjectMeta as the API server
+// publishes it for every resource, including a custom resource.
+func ObjectMeta() *spec.Schema {
+	return schemaOf(reflect.TypeFor[metav1.ObjectMeta]())
 }
