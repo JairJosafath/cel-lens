@@ -1,69 +1,44 @@
 # cel-lens
 
-cel-lens checks the CEL expressions in Kubernetes YAML as the API server does, and shows
-the results in your editor or terminal. It is a Go engine (a language server and a
-command-line check) and a VS Code extension that runs it.
+cel-lens checks the CEL expressions in your Kubernetes YAML the way the API server does,
+so you find a broken rule in your editor before it reaches a cluster.
 
-## What's in this repository
+![A misspelled field in a CRD rule, with a quick fix](docs/images/crd-quick-fix.png)\
+*A misspelled field in a CRD validation rule, with a quick fix.*
 
-- [`engine/`](engine/README.md): the engine, `cel-lens-core`. It serves as a language
-  server (`cel-lens-core lsp`) for any editor, and as a command-line check
-  (`cel-lens-core check`) for terminals and CI.
-- [`vscode/`](vscode/README.md): the VS Code extension. It carries the engine for your
-  platform, so there is nothing else to install.
+![Two errors and a hover on a policy variable in a MutatingAdmissionPolicy](docs/images/policy-problems-hover.png)\
+*Errors and a typed hover in a MutatingAdmissionPolicy.*
 
-## Install the VS Code extension
+![Completion after request. in a ValidatingAdmissionPolicy](docs/images/policy-completion.png)\
+*Completion of `request` fields in a ValidatingAdmissionPolicy.*
 
-Download the `.vsix` for your platform from
-[Releases](https://github.com/JairJosafath/cel-lens/releases) (the `vscode-v...` release):
-`cel-lens-vscode-<platform>-<version>.vsix`, where `<platform>` is `linux-x64`,
-`linux-arm64`, `darwin-x64`, `darwin-arm64`, `win32-x64` or `win32-arm64`. Then run
+## Install in VS Code
 
-```sh
-code --install-extension cel-lens-vscode-linux-x64-0.14.0.vsix
-```
+1. Download the `.vsix` for your platform (`linux`, `darwin` or `win32`; `x64` or `arm64`)
+   from the latest `vscode-v…` release on [Releases](https://github.com/JairJosafath/cel-lens/releases).
+2. Run `code --install-extension cel-lens-vscode-<platform>-<version>.vsix`, or
+   **Extensions: Install from VSIX...** in the Command Palette.
 
-or **Extensions: Install from VSIX...** in the Command Palette.
+The engine is inside the `.vsix`, so there is nothing else to install.
 
-## Get the engine
+## Command line and other editors
 
-With Go 1.26 or newer:
+The engine, `cel-lens-core`, runs as `cel-lens-core check <paths>` in a terminal or CI, and as
+a language server (`cel-lens-core lsp`) for any editor. [engine/README.md](engine/README.md) shows how to install it.
 
-```sh
-go install github.com/JairJosafath/cel-lens/engine@v0.15.0
-```
+## What it checks
 
-`go install` names the binary after the last part of the path, so this gives `engine`
-(`engine.exe` on Windows) in `$(go env GOPATH)/bin`; rename it to `cel-lens-core`.
-Or download the binary for your platform from the `core-v...` release on
-[Releases](https://github.com/JairJosafath/cel-lens/releases):
-`cel-lens-core_<version>_<os>_<arch>` (`.exe` on Windows), with `checksums.txt` to check
-it (`sha256sum -c checksums.txt`).
+- CRD `x-kubernetes-validations` rules
+- ValidatingAdmissionPolicy and MutatingAdmissionPolicy expressions
+- Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`)
 
-## What works today
+Errors use the API server's own messages, from cel-go and the Kubernetes CEL libraries.
+In VS Code you also get hover, completion, quick fixes and colors for CEL.
 
-- CEL in CustomResourceDefinition `x-kubernetes-validations` rules, in
-  ValidatingAdmissionPolicy and MutatingAdmissionPolicy, and in Kyverno `ValidatingPolicy`
-  (`policies.kyverno.io/v1`).
-- Diagnostics built on cel-go and the Kubernetes CEL libraries, with the API server's
-  messages, for Kubernetes 1.33 to 1.37 (1.37 by default).
-- Hover on a variable, field or function (its type and a short description), and
-  completion of `self`, `object`, `request` and the rest, the fields of the type before a
-  dot, and the Kubernetes CEL functions.
-- In admission policies, `object`, `request`, `namespaceObject`, `authorizer` and
-  `variables.<name>` are typed as the API server types them, and so is `params` (from
-  `spec.paramKind`) in a ValidatingAdmissionPolicy.
-- Quick fixes for a misspelled name, and for a rule over its cost budget (add a
-  `maxLength`, `maxItems` or `maxProperties`).
-- In VS Code, colors for the parts of each CEL expression, also in MutatingAdmissionPolicy.
+## Issues
 
-The extension v0.14.0 carries engine v0.14.0. MutatingAdmissionPolicy checks and the typed
-policy variables come with engine v0.15.0. Details and limits are in
-[engine/README.md](engine/README.md) and [vscode/README.md](vscode/README.md).
-
-## Bugs and ideas
-
-Open an issue at <https://github.com/JairJosafath/cel-lens/issues>.
+Development is paused for now, but bug reports and ideas are welcome at
+<https://github.com/JairJosafath/cel-lens/issues>.
 
 ## License
 
