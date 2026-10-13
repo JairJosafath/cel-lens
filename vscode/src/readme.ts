@@ -47,3 +47,8 @@ export function readmeSettingDefaults(section: string): Map<string, string> {
   }
   return defaults;
 }
+
+/** The version in "The default is `1.37`." in the text, if it states one. */
+export function readmeDefaultKubernetesVersion(section: string): string | undefined {
+  return /\bdefault is `(1\.\d+)`/i.exec(section)?.[1];
+}

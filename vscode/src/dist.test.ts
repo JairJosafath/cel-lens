@@ -184,7 +184,7 @@ describe('core-version.json', () => {
     vi.unstubAllEnvs();
   });
 
-  it('pins v0.14.0, takes its download URL from the public releases, and has a SHA-256 for each of the six platforms', async () => {
+  it('pins v0.15.0, takes its download URL from the public releases, and has a SHA-256 for each of the six platforms', async () => {
     const pin = JSON.parse(await readFile('core-version.json', 'utf8')) as {
       version: string;
       baseUrl?: string;
@@ -192,10 +192,10 @@ describe('core-version.json', () => {
     };
 
     vi.stubEnv(CORE_RELEASES_ENV, '');
-    expect(pin.version).toBe('v0.14.0');
+    expect(pin.version).toBe('v0.15.0');
     expect(pin.baseUrl).toBeUndefined();
     expect(parsePin(pin).baseUrl).toBe(
-      'https://github.com/JairJosafath/cel-lens/releases/download/core-v0.14.0',
+      'https://github.com/JairJosafath/cel-lens/releases/download/core-v0.15.0',
     );
     expect(Object.keys(pin.assets).sort()).toEqual([
       'darwin-arm64',
@@ -255,17 +255,17 @@ describe('checkPinChecksums', () => {
 
 describe('releaseDownloadUrl', () => {
   it.each([
-    [undefined, 'https://github.com/JairJosafath/cel-lens/releases/download/core-v0.14.0'],
-    ['', 'https://github.com/JairJosafath/cel-lens/releases/download/core-v0.14.0'],
+    [undefined, 'https://github.com/JairJosafath/cel-lens/releases/download/core-v0.15.0'],
+    ['', 'https://github.com/JairJosafath/cel-lens/releases/download/core-v0.15.0'],
     [
       'https://ci.example/org/core/releases',
-      'https://ci.example/org/core/releases/download/v0.14.0',
+      'https://ci.example/org/core/releases/download/v0.15.0',
     ],
     [
       'https://ci.example/org/core/releases/',
-      'https://ci.example/org/core/releases/download/v0.14.0',
+      'https://ci.example/org/core/releases/download/v0.15.0',
     ],
   ])('with the override %j builds %s', (override, expected) => {
-    expect(releaseDownloadUrl('v0.14.0', { [CORE_RELEASES_ENV]: override })).toBe(expected);
+    expect(releaseDownloadUrl('v0.15.0', { [CORE_RELEASES_ENV]: override })).toBe(expected);
   });
 });

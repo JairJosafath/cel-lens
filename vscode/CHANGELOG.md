@@ -6,6 +6,13 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-12
+
+### Changed
+
+- The extension carries the `cel-lens-core` v0.15.0 engine (#380).
+- `package.json` states the Node version contributors need (`engines.node`), and a test keeps it equal to the one in CONTRIBUTING.md (#332).
+
 ## [0.14.0] - 2026-10-12
 
 ### Changed
@@ -316,7 +323,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/JairJosafath/cel-lens/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/JairJosafath/cel-lens/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/JairJosafath/cel-lens/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/JairJosafath/cel-lens/compare/v0.12.1...v0.13.0

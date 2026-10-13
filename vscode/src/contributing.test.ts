@@ -22,6 +22,15 @@ describe('CONTRIBUTING.md', () => {
     expect(CONTRIBUTING).toContain(text);
   });
 
+  it('names the same Node version as engines.node in package.json', () => {
+    const manifest: unknown = JSON.parse(readFileSync('package.json', 'utf8'));
+    const engines = (manifest as { engines?: { node?: string } }).engines;
+    const documented = /\bNode (\d+)\b/.exec(CONTRIBUTING)?.[1] ?? '';
+
+    expect(documented).not.toBe('');
+    expect(engines?.node).toBe(`>=${documented}`);
+  });
+
   it('names no factory image or devcontainer', () => {
     expect(CONTRIBUTING).not.toMatch(/devcontainer|factory|git[e]a|docker/i);
   });

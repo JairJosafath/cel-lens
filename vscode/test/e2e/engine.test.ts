@@ -28,7 +28,11 @@ import {
 } from 'vscode-languageserver-protocol/node';
 
 import { parseVersionInfo, serverOptions } from '../../src/kubernetes_version';
-import { readmeKubernetesVersions, readmeSection } from '../../src/readme';
+import {
+  readmeDefaultKubernetesVersion,
+  readmeKubernetesVersions,
+  readmeSection,
+} from '../../src/readme';
 import { requireEngineFile } from '../../src/engine_file';
 import { resolveServer } from '../../src/server_path';
 import { spawnEngine } from '../../src/spawn_engine';
@@ -48,6 +52,8 @@ interface Engine {
   readonly published: Map<string, Diagnostic[]>;
   /** The versions the engine says it supports, from its `initialize` result. */
   readonly supportedVersions: readonly string[];
+  /** The version the engine uses when none is asked for, from its `initialize` result. */
+  readonly defaultVersion: string | undefined;
   /** Resolves on the next publishDiagnostics. */
   nextPublish: () => Promise<void>;
 }
@@ -125,6 +131,7 @@ async function startEngine(extensionPath: string): Promise<Engine> {
     connection,
     exited,
     supportedVersions: parseVersionInfo(initialized, '')?.supported ?? [],
+    defaultVersion: parseVersionInfo(initialized, '')?.defaultVersion,
     published,
     nextPublish: () =>
       new Promise<void>((resolve) => {
@@ -188,6 +195,16 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
 
     expect(running().supportedVersions.length).toBeGreaterThan(0);
     expect([...listed].sort()).toEqual([...running().supportedVersions].sort());
+  });
+
+  it('states the engine’s default Kubernetes version in the README', async () => {
+    const readme = await readFile(`${EXTENSION_PATH}README.md`, 'utf8');
+    const stated = readmeDefaultKubernetesVersion(
+      readmeSection(readme, 'Supported Kubernetes versions') ?? '',
+    );
+
+    expect(running().defaultVersion).toBeDefined();
+    expect(stated).toBe(running().defaultVersion);
   });
 
   it('shows a cel-lens error on a broken x-kubernetes-validations rule', async () => {

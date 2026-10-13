@@ -1,29 +1,29 @@
 {
-  "version": "v0.14.0",
+  "version": "v0.15.0",
   "assets": {
     "linux-x64": {
-      "name": "cel-lens-core_v0.14.0_linux_amd64",
-      "sha256": "84b3785a5ce802d7d4b633619c04e14e01d8843a2c88b714d593598dbf1dd628"
+      "name": "cel-lens-core_v0.15.0_linux_amd64",
+      "sha256": "32f23a036bdc8f1c30620ca78ec61b41ea5ae1306cb4c9f497ac56efd83644df"
     },
     "linux-arm64": {
-      "name": "cel-lens-core_v0.14.0_linux_arm64",
-      "sha256": "42a00be4f32f6017842f72e8be6844f0c9bcecbe6c773666ac339bd758d1c107"
+      "name": "cel-lens-core_v0.15.0_linux_arm64",
+      "sha256": "abea19813d37de96d5adc7da5fa8ed7b591585f36f41c502549f2201fe4046fe"
     },
     "darwin-x64": {
-      "name": "cel-lens-core_v0.14.0_darwin_amd64",
-      "sha256": "c7b4489f895c365d007d2669e9d5407b45a85f5e6071b17b6b8050d4ad358474"
+      "name": "cel-lens-core_v0.15.0_darwin_amd64",
+      "sha256": "fb2b774a02c36e374f5a0bf8adc47603a2eb6f790854b24c4470f6c0b3d2715d"
     },
     "darwin-arm64": {
-      "name": "cel-lens-core_v0.14.0_darwin_arm64",
-      "sha256": "fcbeda75a411709c09894b0f9ac44705376c3ba07b9cde50fff6efc84fc9a2a0"
+      "name": "cel-lens-core_v0.15.0_darwin_arm64",
+      "sha256": "a3db31c2347f878b41d55f24916d5485f69c5a79a96f1bb81f8a85fbc2a7dbf9"
     },
     "win32-x64": {
-      "name": "cel-lens-core_v0.14.0_windows_amd64.exe",
-      "sha256": "e5772b1caafa85c028f26e3e39342600811f227722c5b093c8cfd640f4d96abf"
+      "name": "cel-lens-core_v0.15.0_windows_amd64.exe",
+      "sha256": "0c71e0df761a5eca3f348e7c18eae8d79ade5d210a3b6d3bbcfeb70b9ae2a3f1"
     },
     "win32-arm64": {
-      "name": "cel-lens-core_v0.14.0_windows_arm64.exe",
-      "sha256": "7b9e9818b522f19fa7a14598aae29b13fadad871272c51c97ca1c155c9f5c957"
+      "name": "cel-lens-core_v0.15.0_windows_arm64.exe",
+      "sha256": "cc362e0ab4adadcd6c391222962584b332ee4a402c7413b4178be9cdd3cadfe7"
     }
   }
 }

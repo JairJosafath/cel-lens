@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  readmeDefaultKubernetesVersion,
   readmeHeadings,
   readmeImages,
   readmeKubernetesVersions,
@@ -11,6 +12,16 @@ import {
 const README = readFileSync('README.md', 'utf8');
 const IMAGE_BASE = 'https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/';
 const PICTURES = ['problems.png', 'hover.png', 'completion.png', 'quick-fix.png', 'colors.png'];
+
+describe('readmeDefaultKubernetesVersion', () => {
+  it.each([
+    ['The default is `1.37`. See below.', '1.37'],
+    ['Lists `1.36` and `1.37`.', undefined],
+    ['', undefined],
+  ])('reads %j as %j', (text, expected) => {
+    expect(readmeDefaultKubernetesVersion(text)).toBe(expected);
+  });
+});
 
 describe('the helpers', () => {
   const text = '# T\n\n## A\none `1.3` and `1.4`\n\n## B\n![x](https://e/x.png)\n';

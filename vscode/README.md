@@ -47,7 +47,7 @@ The bundled engine matches the API server's CEL environment of these Kubernetes 
 ## How it works
 
 The extension activates on YAML files and starts the bundled cel-lens language
-server, `cel-lens-core` v0.14.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
+server, `cel-lens-core` v0.15.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
 Kubernetes YAML such as CRDs and admission policies. The status bar shows the
 Kubernetes version the server reports; the engine lists the versions it supports, so Pick
 Kubernetes Version offers them; or type a version in the
