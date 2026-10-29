@@ -2,7 +2,7 @@
   "name": "cel-lens-vscode",
   "displayName": "cel-lens for VS Code",
   "description": "CEL errors, hover and completion inside Kubernetes YAML.",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "publisher": "cel-lens",
   "repository": {
     "type": "git",
@@ -150,15 +150,20 @@
     "bench": "esbuild src/*.bench.ts --bundle --platform=node --format=esm --alias:vscode=./test/vscode.ts --outdir=out/bench --out-extension:.js=.mjs --log-level=warning && for f in out/bench/*.mjs; do node --expose-gc $f || exit 1; done",
     "profile": "esbuild src/cel_tokens.profile.ts --bundle --platform=node --format=esm --outdir=out/profile --out-extension:.js=.mjs --log-level=warning && node --expose-gc --cpu-prof --cpu-prof-dir=out/profile out/profile/cel_tokens.profile.mjs",
     "engine": "node src/dist.ts install",
+    "pictures": "node test/pictures/take.ts",
     "e2e": "npm run engine && vitest run --config vitest.e2e.config.mts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.19.1",
+    "@types/pngjs": "6.0.5",
     "@types/vscode": "1.100.0",
     "@vscode/vsce": "4.0.0",
     "esbuild": "0.28.2",
     "eslint": "10.11.0",
+    "gifenc": "1.0.3",
+    "playwright": "1.64.1",
+    "pngjs": "7.0.0",
     "prettier": "3.9.9",
     "tinybench": "6.2.0",
     "typescript": "6.0.3",
@@ -166,6 +171,9 @@
     "vitest": "5.0.3",
     "vscode-languageserver-protocol": "3.18.4",
     "yaml": "2.9.1"
+  },
+  "pictures": {
+    "openvscodeServer": "1.109.5"
   },
   "allowScripts": {
     "esbuild": true,

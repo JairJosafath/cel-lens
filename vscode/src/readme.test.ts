@@ -11,7 +11,15 @@ import {
 
 const README = readFileSync('README.md', 'utf8');
 const IMAGE_BASE = 'https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/';
-const PICTURES = ['problems.png', 'hover.png', 'completion.png', 'quick-fix.png', 'colors.png'];
+const PICTURES = [
+  'colors.gif',
+  'completion.gif',
+  'problems.png',
+  'hover.png',
+  'completion.png',
+  'quick-fix.png',
+  'colors.png',
+];
 
 describe('readmeDefaultKubernetesVersion', () => {
   it.each([
@@ -58,20 +66,45 @@ describe('README.md as the store page', () => {
     expect(sentence).toMatch(/^[^.]+\.$/);
   });
 
-  it('has the store sections first, in order', () => {
-    expect(readmeHeadings(README).slice(0, 5)).toEqual([
+  it('has the store sections, in order', () => {
+    expect(readmeHeadings(README)).toEqual([
       'What it looks like',
       'Install',
       'Settings',
       'Supported Kubernetes versions',
+      'Experimental features',
       'Not supported yet',
+      'License',
+      'Contributing',
     ]);
   });
 
-  it('links the five pictures, with alt text, as https URLs in the public repository', () => {
+  it('names no store, no factory and no badge', () => {
+    expect(README).not.toMatch(/marketplace|open vsx|factory|shields\.io|badge/i);
+  });
+
+  it('installs only from the .vsix of the GitHub releases', () => {
+    const section = readmeSection(README, 'Install') ?? '';
+    expect(section).toContain('https://github.com/JairJosafath/cel-lens/releases');
+    expect(section).toContain('vscode-vX.Y.Z');
+    expect(section).toContain('Install from VSIX...');
+    expect(section).toContain('code --install-extension');
+  });
+
+  it('says experimental features are off until named in cel-lens.experimental', () => {
+    const section = readmeSection(README, 'Experimental features') ?? '';
+    expect(section).toContain('off until');
+    expect(section).toContain('`cel-lens.experimental`');
+  });
+
+  it('links the two GIFs, then the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(PICTURES.map((name) => IMAGE_BASE + name));
     expect(images.every((image) => image.alt.length > 0)).toBe(true);
+    const lines = (readmeSection(README, 'What it looks like') ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '' && !line.startsWith('!['));
+    expect(lines).toHaveLength(PICTURES.length);
   });
 
   it('only links images over https from the public repository', () => {

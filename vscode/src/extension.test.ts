@@ -247,6 +247,7 @@ describe('activate', () => {
 
 describe('published text', () => {
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  const guide = readFileSync(new URL('../CONTRIBUTING.md', import.meta.url), 'utf8');
   const repository = 'github.com/JairJosafath/cel-lens';
 
   it.each([
@@ -263,7 +264,7 @@ describe('published text', () => {
   });
 
   it('names the cel-lens-core release the extension is built for', () => {
-    expect(readme).toContain('cel-lens-core` v0.15.0');
+    expect(guide).toContain('cel-lens-core` v0.15.0');
   });
 
   it('shows no message the engine does not give', () => {
@@ -272,19 +273,19 @@ describe('published text', () => {
 
   it('names the color styles by their picker labels in the Choose Color Style entry and by values in the setting row', () => {
     const entry =
-      readme.slice(readme.indexOf('- **cel-lens: Choose Color Style**')).split('\n- ')[0] ?? '';
+      guide.slice(guide.indexOf('- **cel-lens: Choose Color Style**')).split('\n- ')[0] ?? '';
     expect(entry).toContain('CEL, Classic or Off');
     expect(entry).not.toContain('`classic`');
     expect(readme).toMatch(/\| `cel-lens\.colorStyle`[^\n]*`cel`, `classic` or `off`/);
   });
 
-  it('lists the version setting and command in the README', () => {
+  it('lists the version setting in the README and the command in the guide', () => {
     expect(readme).toContain('cel-lens.kubernetesVersion');
-    expect(readme).toContain('cel-lens.pickKubernetesVersion');
+    expect(guide).toContain('cel-lens.pickKubernetesVersion');
   });
 
   it('has a Color styles section with the setting, the command and every style', () => {
-    const section = readme.slice(readme.indexOf('### Color styles'));
+    const section = guide.slice(guide.indexOf('### Color styles'));
 
     for (const text of [
       'cel-lens.colorStyle',
@@ -306,7 +307,7 @@ describe('published text', () => {
     "folder setting of the open file's workspace folder",
     '`.code-workspace` file',
   ])('says in the Color styles section which scope a pick writes: %s', (text) => {
-    const section = readme.slice(readme.indexOf('### Color styles'));
+    const section = guide.slice(guide.indexOf('### Color styles'));
     expect(section.replace(/\s+/g, ' ')).toContain(text);
   });
 

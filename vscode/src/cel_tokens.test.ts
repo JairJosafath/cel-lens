@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { forEachCelToken, tokenizeCel } from './cel_tokens';
+import { forEachCelToken, tokenizeCel, type CelToken } from './cel_tokens';
 
 const HEAD = 'x-kubernetes-validations:\n';
 
@@ -162,3 +162,31 @@ describe.each([
     expect([...lines]).toEqual([4]);
   });
 });
+
+describe.each([
+  { kind: 'block', open: '|\n        self.first &&\n', close: '' },
+  { kind: 'plain', open: 'self.first &&\n', close: '' },
+  { kind: 'double-quoted', open: '"self.first &&\n', close: '"' },
+  { kind: 'single-quoted', open: "'self.first &&\n", close: "'" },
+])(
+  'forEachCelToken with a multi-line $kind rule that starts above the window',
+  ({ open, close }) => {
+    const body = Array.from({ length: 100 }, (_, i) => `        self.f${String(i)} < 3 &&\n`);
+    const text = `${HEAD}  - rule: ${open}${body.join('')}        true${close}\n  - rule: self.after\n`;
+    const ruleLine = HEAD.split('\n').length - 1;
+
+    it.each([
+      { name: 'inside the rule', fromLine: ruleLine + 60, toLine: ruleLine + 70 },
+      { name: 'from its second line to its end', fromLine: ruleLine + 1, toLine: ruleLine + 102 },
+      { name: 'across its end', fromLine: ruleLine + 99, toLine: ruleLine + 104 },
+    ])('gives the whole-document tokens on the lines of a window $name', (window) => {
+      const onWindowLines = (token: CelToken): boolean =>
+        token.start.line >= window.fromLine && token.start.line <= window.toLine;
+      const windowed: CelToken[] = [];
+      forEachCelToken(text, (kind, start, end) => windowed.push({ kind, start, end }), window);
+      const expected = tokenizeCel(text).filter(onWindowLines);
+      expect(expected.length).toBeGreaterThan(0);
+      expect(windowed.filter(onWindowLines)).toEqual(expected);
+    });
+  },
+);

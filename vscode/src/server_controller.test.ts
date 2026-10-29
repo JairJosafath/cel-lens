@@ -22,6 +22,21 @@ import { END_WAIT_MS, ServerController } from './server_controller';
 
 const EXTENSION_PATH = '/nowhere/ext';
 
+const MODULE_NOT_FOUND_STDERR =
+  "Error: Cannot find module 'lsp'\n    at Module._resolveFilename\n  code: 'MODULE_NOT_FOUND'\n";
+
+/** A stand-in engine that has written `stderr` and exits, with no real process to race. */
+function exitingEngine(stderr: string): ChildProcess {
+  const child = new ChildProcess();
+  const stream = new PassThrough();
+  child.stderr = stream;
+  stream.once('end', () => {
+    child.emit('close', 1);
+  });
+  stream.end(stderr);
+  return child;
+}
+
 const client = vi.hoisted(() => ({
   created: [] as { id: string; server: unknown; options: unknown }[],
   started: 0,
@@ -299,7 +314,10 @@ describe('ServerController', () => {
   });
 
   it('shows one message with the stderr of a server from the setting that exits at start and an Open Engine Setting button, disposes the client, and does not throw', async () => {
+    // The start waits for the engine to close; a fake timer keeps its time limit from firing on a slow runner.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     settings.set('cel-lens.serverPath', execPath);
+    engine.hung = exitingEngine(MODULE_NOT_FOUND_STDERR);
     client.startError = new Error('Server process exited with code 1');
     const seen: unknown[] = [];
 
@@ -326,6 +344,7 @@ describe('ServerController', () => {
   });
 
   it('shows the whole message, exactly, for an engine that prints an error and exits at once', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const dir = await makeTempDir();
     const engine = join(dir, 'engine');
     await writeFile(engine, '#!/bin/sh\necho "engine: bad configuration" >&2\nexit 3\n', {
@@ -370,7 +389,9 @@ describe('ServerController', () => {
   });
 
   it('logs each line the server writes to stderr once', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     settings.set('cel-lens.serverPath', execPath);
+    engine.hung = exitingEngine(MODULE_NOT_FOUND_STDERR);
     client.startError = new Error('Server process exited with code 1');
 
     await newController().start();
@@ -382,6 +403,7 @@ describe('ServerController', () => {
   });
 
   it('leads with the last line a stand-in engine printed, without stream errors', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const dir = await makeTempDir();
     const engine = join(dir, 'engine');
     await writeFile(engine, '#!/bin/sh\necho "engine: bad configuration" >&2\nexit 3\n', {

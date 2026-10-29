@@ -14,7 +14,8 @@ const FACTORY_FILES = new Set([
   'package-lock.json',
 ]);
 // Tests that check the factory's workflows must name them.
-const CHECKS_WORKFLOWS = /_workflow\.test\.ts$|compile_cache\.test\.ts$|public_links\.test\.ts$/;
+const CHECKS_WORKFLOWS =
+  /_workflow\.test\.ts$|compile_cache\.test\.ts$|factory_files\.ts$|public_layout\.test\.ts$|public_repo\.test\.ts$|public_links\.test\.ts$/;
 
 describe('public links', () => {
   const tracked = execFileSync('git', ['ls-files'], { encoding: 'utf8' })

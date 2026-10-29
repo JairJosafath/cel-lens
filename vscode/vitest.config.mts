@@ -11,6 +11,11 @@ export default defineConfig({
     },
   },
   test: {
+    // Several files spawn processes (vsce, make, git); fewer workers keep them
+    // from starving each other on a busy runner, and the longer timeout is for
+    // that load, not for slow code.
+    maxWorkers: 4,
+    testTimeout: 60_000,
     include: ['src/**/*.test.ts'],
     // Fails the run when any test leaves a folder behind in TMPDIR.
     globalSetup: ['src/tmpdir_guard.global.ts'],

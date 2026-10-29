@@ -1,7 +1,7 @@
 /** The public page where people download cel-lens; engine releases are tagged `core-vX.Y.Z`, the extension's `vscode-vX.Y.Z`. */
 export const RELEASES_PAGE_URL = 'https://github.com/JairJosafath/cel-lens/releases';
 
-/** The environment variable that makes the build fetch the engine from another releases page. */
+/** The environment variable that makes the build fetch the engine from another releases page, such as the factory CI's own. */
 export const CORE_RELEASES_ENV = 'CEL_LENS_CORE_RELEASES_URL';
 
 /**

@@ -1,7 +1,8 @@
 // Lint config for the extension's TypeScript: typescript-eslint's strictest
 // type-checked presets, plus the rules below. `make lint` runs ESLint with
 // --max-warnings 0, so any finding fails `make check`. Every rule turned off
-// or changed here says why.
+// or changed here says why. Changing this file is the Standard's job, not a
+// task's.
 import js from '@eslint/js';
 import { defineConfig, globalIgnores } from 'eslint/config';
 import tseslint from 'typescript-eslint';

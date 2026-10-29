@@ -6,6 +6,24 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-29
+
+### Added
+
+- `public-repo/`: the front page of JairJosafath/cel-lens (README, CONTRIBUTING, SECURITY, Code of Conduct, LICENSE, issue forms, and the CI and Scorecard workflows), kept out of the published source by `.gitattributes` and tested by `src/public_repo.test.ts` (#6).
+- The pictures of the README, taken from the extension running in a browser-served VS Code: `problems.png`, `hover.png`, `completion.png`, `quick-fix.png` and `colors.png`, and two GIFs, `colors.gif` and `completion.gif` (#4).
+- `npm run pictures` retakes them with openvscode-server and Playwright's Chromium, on the fixtures in `test/pictures/`; `CONTRIBUTING.md` says how (#4).
+- `SECURITY.md`: report a vulnerability privately through GitHub's private vulnerability reporting; we acknowledge within 7 days and answer within 14 days (#3).
+
+### Changed
+
+- The README is a short store page that leads with what a user sees; the only install route it names is the `.vsix` from the GitHub releases, and it has an Experimental features section (#3).
+- How it works, Develop, Releases and Layout moved from the README to `CONTRIBUTING.md`, which says `make check` fails on any warning (#3).
+
+### Fixed
+
+- `npm test` passes in a clone of the published source: the tests that read the maintainers' CI workflow files skip when those files are absent, and a test runs the suite in a copy without them (#2).
+
 ## [0.15.0] - 2026-10-12
 
 ### Changed
@@ -323,7 +341,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/JairJosafath/cel-lens/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/JairJosafath/cel-lens/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/JairJosafath/cel-lens/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/JairJosafath/cel-lens/compare/v0.13.0...v0.13.1
