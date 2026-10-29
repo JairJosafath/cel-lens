@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -1123,6 +1124,40 @@ func BenchmarkDocuments(b *testing.B) {
 				if _, _, err := extract.Documents(ctx, "p.yaml", tt.data); err != nil {
 					b.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+func TestDocumentsBrokenBeforeSeparator(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name    string
+		text    string
+		indexes []int
+		lines   []int
+	}{
+		{"after end marker", "a: 1\n...\nb: [1,\n---\nc: 3\n", []int{0, 2}, []int{3}},
+		{"after end marker, later", "a: 1\n---\nb: 2\n...\nc: d: e\n---\nf: 3\n", []int{0, 1, 3}, []int{5}},
+		{"after end marker, indented", "---\nb: 2\n...\nkind: x\n  bad: 1\n---\nc: 3\n", []int{0, 2}, []int{4}},
+		{"directive", "a: 1\n...\n%YAML 1.2\n%YAML 1.2\n---\nb: 2\n", []int{0, 2}, []int{3}},
+		{"bad document skipped past", "a: 1\n---\nb: [1,\n---\nc: 3\n---\nd: 4\n", []int{0, 2, 3}, []int{3}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			docs, errs, err := extract.Documents(context.Background(), "s.yaml", []byte(tt.text))
+			if err != nil {
+				t.Fatalf("Documents(%q) error = %v", tt.text, err)
+			}
+			var indexes, lines []int
+			for _, d := range docs {
+				indexes = append(indexes, d.Index)
+			}
+			for _, e := range errs {
+				lines = append(lines, e.Line)
+			}
+			if !slices.Equal(indexes, tt.indexes) || !slices.Equal(lines, tt.lines) {
+				t.Errorf("Documents(%q) = documents %v, error lines %v, want %v, %v", tt.text, indexes, lines, tt.indexes, tt.lines)
 			}
 		})
 	}

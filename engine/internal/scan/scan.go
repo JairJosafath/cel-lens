@@ -136,6 +136,9 @@ func collect(ctx context.Context, dirFS func(dir string) fs.FS, path string) ([]
 			if cerr := ctx.Err(); cerr != nil {
 				return cerr
 			}
+			if pe, ok := errors.AsType[*fs.PathError](err); ok {
+				err = pe.Err
+			}
 			errs = append(errs, fmt.Errorf("walk %s: %w", p, err))
 			return nil
 		}

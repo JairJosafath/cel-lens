@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -149,4 +150,14 @@ func TestInitializeResultVersions(t *testing.T) {
 	if celLens.KubernetesVersion != kubeversion.Default().String() {
 		t.Errorf("celLens.kubernetesVersion = %q, want the default %s", celLens.KubernetesVersion, kubeversion.Default())
 	}
+}
+
+// allExperimental returns initializationOptions that switch on every
+// experimental feature, for the tests of what they do.
+func allExperimental() map[string]any {
+	names := []string{}
+	for _, f := range feature.Known() {
+		names = append(names, string(f))
+	}
+	return map[string]any{"experimental": names}
 }

@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/scan"
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 const (
@@ -146,6 +148,28 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunSymlinkToFolder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	write(t, filepath.Join(target, "m.yaml"), "a: [\n")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	var out bytes.Buffer
+	found, err := scan.Run(t.Context(), []string{link}, scan.Text, &out)
+	if !found {
+		t.Error("Run(symlink to folder) found = false, want true")
+	}
+	if err == nil {
+		t.Error("Run(symlink to folder) error = nil, want the YAML read error")
+	}
+	if want := filepath.Join(link, "m.yaml") + ":1:1: error: YAML is broken here: "; !strings.HasPrefix(out.String(), want) {
+		t.Errorf("Run(symlink to folder) wrote %q, want prefix %q", out.String(), want)
+	}
+}
+
 func TestRunMissingPathIsNotExist(t *testing.T) {
 	t.Parallel()
 	_, err := scan.Run(t.Context(), []string{filepath.Join(t.TempDir(), "nope")}, scan.Text, &bytes.Buffer{})
@@ -256,6 +280,9 @@ func TestRunUnreadableSubfolder(t *testing.T) {
 	if !errors.Is(err, fs.ErrPermission) || !strings.Contains(err.Error(), locked) {
 		t.Errorf("Run(%q) error = %v, want a permission error naming %s", dir, err, locked)
 	}
+	if want := "walk " + locked + ": permission denied"; err == nil || err.Error() != want {
+		t.Errorf("Run(%q) error = %v, want %q", dir, err, want)
+	}
 	for _, want := range []string{filepath.Join(dir, "a", "bad.yaml"), filepath.Join(dir, "z", "bad.yaml")} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("Run(%q) output = %q, want a diagnostic for %s", dir, out.String(), want)
@@ -350,7 +377,7 @@ func TestRunTypesParamsFromCRDs(t *testing.T) {
 			for i, p := range tt.paths {
 				paths[i] = filepath.Join(dir, p)
 			}
-			found, err := scan.Run(context.Background(), paths, scan.Text, &out)
+			found, err := scan.Run(context.Background(), paths, scan.Text, &out, check.WithFeatures(feature.Of(feature.CRDTypedPolicies)))
 			if err != nil || found {
 				t.Fatalf("Run(%v) = %v, %v, want warnings only", tt.paths, found, err)
 			}

@@ -51,7 +51,7 @@ const (
 // initializeIn initializes the server with the folder as the workspace.
 func initializeIn(t *testing.T, c *client, folder string, caps map[string]any) {
 	t.Helper()
-	params := map[string]any{"processId": nil, "capabilities": caps, "rootUri": nil}
+	params := map[string]any{"processId": nil, "capabilities": caps, "rootUri": nil, "initializationOptions": allExperimental()}
 	if folder != "" {
 		params["workspaceFolders"] = []map[string]any{{"uri": "file://" + filepath.ToSlash(folder), "name": "ws"}}
 	}

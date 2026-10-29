@@ -37,7 +37,7 @@ func load(t *testing.T, name string) string {
 
 func TestHover(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestHover(t *testing.T) {
 
 func TestHoverRange(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestHoverRange(t *testing.T) {
 
 func TestComplete(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func isInternal(name string) bool {
 
 func TestCompleteNoInternalNames(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestCompleteNoInternalNames(t *testing.T) {
 
 func TestCompleteNamespaced(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestCompleteNamespaced(t *testing.T) {
 
 func TestCancelled(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func FuzzAssist(f *testing.F) {
 		}
 		f.Add(string(b), 30, 20)
 	}
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func FuzzAssist(f *testing.F) {
 
 func TestSuggest(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestSuggest(t *testing.T) {
 
 func TestCompleteMacros(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestCompleteMacros(t *testing.T) {
 // control character gets the same answers as the CRD alone.
 func TestBeforeBadDocument(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestBeforeBadDocument(t *testing.T) {
 // thousands of parentheses answers without recursing through every level.
 func TestCompleteDeeplyNested(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}

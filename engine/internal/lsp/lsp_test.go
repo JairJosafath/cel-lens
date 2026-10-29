@@ -157,7 +157,7 @@ func lineOf(t *testing.T, text, s string) (line, char int) {
 
 func initialize(t *testing.T, c *client) {
 	t.Helper()
-	res, rerr := c.call("initialize", map[string]any{"processId": nil, "capabilities": map[string]any{}, "rootUri": nil})
+	res, rerr := c.call("initialize", map[string]any{"processId": nil, "capabilities": map[string]any{}, "rootUri": nil, "initializationOptions": allExperimental()})
 	if rerr != nil {
 		t.Fatalf("initialize error = %+v", rerr)
 	}
@@ -1104,6 +1104,51 @@ spec:
 		if !slices.Equal(obj, old) {
 			t.Errorf("completion after oldObject.%s = %v, want that after object.%s: %v", path, old, path, obj)
 		}
+	}
+	shutdown(t, c)
+}
+
+// TestPolicyNoCost checks that the language server reports no cost problem on a
+// policy whose expressions are expensive, as check.Check and the API server do:
+// policy validation in pkg/apis/admissionregistration/validation/validation.go
+// (Kubernetes 1.33 and 1.37) only compiles expressions and estimates no cost.
+func TestPolicyNoCost(t *testing.T) {
+	const all = "object.spec.template.spec.containers.all(a, object.spec.template.spec.containers.all(b, object.spec.template.spec.containers.all(c, object.spec.template.spec.containers.all(d, a.name != b.name || c.name != d.name))))"
+	const msg = "object.spec.template.spec.containers.map(c, c.name + string(c.ports.size())).join(',')"
+	text := `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: costly
+spec:
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+  matchConditions:
+    - name: costly
+      expression: "` + all + `"
+  variables:
+    - name: costly
+      expression: "` + all + `"
+  validations:
+    - expression: "` + all + `"
+      messageExpression: "` + msg + `"
+  auditAnnotations:
+    - key: costly
+      valueExpression: "` + msg + `"
+`
+	want, err := check.Check(context.Background(), "widget.yaml", []byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) != 0 {
+		t.Fatalf("check.Check = %+v, want no problem", want)
+	}
+	c := start(t)
+	initialize(t, c)
+	c.open(text)
+	_, diags := c.diagnostics()
+	if len(diags) != 0 {
+		t.Errorf("diagnostics = %+v, want none, as check.Check", diags)
 	}
 	shutdown(t, c)
 }

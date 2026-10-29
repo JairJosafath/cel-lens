@@ -31,7 +31,7 @@ func celGoLink(name string) string {
 // is expr, with the CEL environment of Kubernetes version v.
 func hoverIn(t *testing.T, v kubeversion.Version, expr, word string) (string, bool) {
 	t.Helper()
-	a, err := assist.New(v)
+	a, err := assist.New(v, allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestHoverFunctionByVersion(t *testing.T) {
 
 func TestHoverMarksCalledOverload(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestHoverMarksCalledOverload(t *testing.T) {
 
 func TestHoverMarksCallAfterRawString(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestHoverMarksCallAfterRawString(t *testing.T) {
 
 func TestHoverMarksCallAfterTripleQuotedString(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ spec:
 		{"startsWith in a macro", "k.startsWith('a')", 2, []string{"string.startsWith(string) -> bool // this call"}, nil},
 		{"matches", "matches('^a", 0, []string{"string.matches(string) -> bool // this call"}, nil},
 	}
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ spec:
 		{"sets.equivalent", "sets.equivalent", 6, "sets.equivalent(list(<T>), list(<T>)) -> bool // this call"},
 		{"strings.quote", "strings.quote", 8, "strings.quote(string) -> string // this call"},
 	}
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ spec:
 		{"value after or", "value().startsWith", 0, "optional_type(<V>).value() -> <V> // this call"},
 		{"startsWith after value", "startsWith('p", 0, "string.startsWith(string) -> bool // this call"},
 	}
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}

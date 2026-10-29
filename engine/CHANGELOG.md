@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CONTRIBUTING.md` says how to build, test and send a change, that `make check` fails on any warning, and which tests skip in the published source and why (#5).
+- `SECURITY.md` asks for private reports through GitHub's private vulnerability reporting, with an answer within 7 days and a verdict within 14 (#5).
+- `docs/engine.md` holds what the README no longer carries: the language server, typed variables and `params`, Kyverno policies and the command line in detail (#5).
+
+### Changed
+
+- The README is short and direct, for the command line and other editors: what it does, what `check` prints, install with `go install github.com/JairJosafath/cel-lens/engine@latest`, flags, versions, features, other editors and what is not supported yet (#5).
+
+## [0.17.2] - 2026-10-29
+
+### Added
+
+- Hover says why a value is `dyn`, such as a field the schema leaves open or a kind that can't be known (#415).
+- A report counts how many expressions in real policies from Kyverno's policy library and the Kubernetes docs still get `dyn`, and why (#416, #453).
+- A test proves that `cel-lens-core check` works on a folder given as a symlink (#300).
+- Every feature is stable or experimental. An experimental feature is off until it is listed: `cel-lens-core check --experimental name,name`, and `experimental: ["name", ...]` in the language server's `initializationOptions` and in the `settings` of `workspace/didChangeConfiguration` (a change re-checks the open documents). The `initialize` result lists the names under `capabilities.experimental.celLens.experimentalFeatures`. An unknown name is ignored with one warning that names the known ones. (#4)
+- The experimental features are `kyverno`, `crd-typed-policies` and `fitting-completion`; the README has a table of stable and experimental features (#4).
+
+### Changed
+
+- Checks, hover and completion for Kyverno `ValidatingPolicy` need `kyverno`. Off, those documents get nothing.
+- Typing `params` of a custom resource from a CRD needs `crd-typed-policies`. Off, `params` is `dyn` and hover says the feature is off.
+- Completion that fits the receiver or the document, and hover that says why a value is `dyn` (#415, #419, #420), need `fitting-completion`. Off, they behave as in v0.17.1.
+
+### Fixed
+
+- A type comes from the YAML document the expression sits in, never from another document of the same file (#417).
+- Completion after a dot offers only what the receiver has (#419).
+- Completion before a dot offers only the names this kind of document can use (#420).
+- Checking continues after a list item of the wrong type in a policy, so later expressions are still checked (#362).
+- An unreadable subfolder is named once in the walk error (#301).
+- `go test ./...` passes in the published source, where the tests that read the factory's `.gitea/` skip (#3).
+- The full `make check` passes on `main`; the `test` target allows `go test` 30 minutes, through a Standard change to the Makefile (#2, #6).
+
+## [0.17.1] - 2026-10-13
+
+### Added
+
+- `docs/type-sources.md` lists every place a YAML document tells a CEL expression its types (#414).
+- A `make check-light` target runs lint, vet and the build without the tests, and the Makefile is updated by the Standard change for it (#413, #428).
+
+### Fixed
+
+- Hover over a method call marks the overload the type checker picked with "// this call" wherever the receiver's type is known, such as `check` in `authorizer.group('apps').resource('deployments').check('update')`, and lists only the overloads that fit that type; with a `dyn` receiver it lists every overload as before (#398).
+- Hover and completion work on every line of a CEL rule written as a plain, "double-quoted" or 'single-quoted' YAML scalar over several lines, or with escapes or a doubled `''`, as on one line. The cursor and the hover range are mapped between the file and the folded rule with the character map of #391. A completion now carries an edit range over the name already typed, and a quote in the inserted text is escaped for the scalar (`\"` in double quotes, `''` in single quotes), so the YAML stays valid; rules in a CRD, a ValidatingAdmissionPolicy and a Kyverno ValidatingPolicy alike (#392).
+
+## [0.15.1] - 2026-10-12
+
+### Added
+
+- In a ValidatingAdmissionPolicy and a MutatingAdmissionPolicy, a `messageExpression` that does not give a string, a `matchConditions` or `validations` expression that does not give a bool, and an `auditAnnotations` `valueExpression` that gives neither a string nor null are reported on that expression in the API server's words (`must evaluate to bool but got int`), at every supported Kubernetes version. Like the API server, an expression of type `dyn`, such as `object.spec.replicas`, is not accepted either (#352).
+
+### Fixed
+
+- A quick fix in a broken UTF-16 file uses the file's own line ending (#346).
+- `Documents` stays under 300 ms when a bad character is near the end of the file (#356).
+- A problem in a CEL rule written as a plain, "double-quoted" or 'single-quoted' YAML scalar over several lines, or with escapes (`\"`, `\\`, `\t`, `\u00e9`, a `\` at the line end) or a doubled `''`, is underlined where the API server points, such as `maxSiz` on the second line, not from the first character of the rule over all its lines. Each character of the folded rule is mapped back to its own line and column in the file, in `cel-lens-core check` and the language server alike; single-line rules and `|` and `>` block scalars keep their positions (#391).
+- A file with a next line (U+0085), line separator (U+2028) or paragraph separator (U+2029) line end gets its problems underlined in the right place below it, as with a line feed, and a `---` between such line ends no longer costs a document one of its problems. Documents are cut where they were (#359).
+
+### Changed
+
+- The test that no package holds mutable state also catches a package variable set by a call (#310).
+- `TestChangelogHeadings` also checks the link definitions at the end of this file (#360).
+- A test pins that no cost problem is reported on any expression of a ValidatingAdmissionPolicy or MutatingAdmissionPolicy at Kubernetes 1.33 to 1.37, in `cel-lens-core check` and the language server alike, as the API server makes no static cost check on policies; CRD rule cost checks are unchanged. No policy expression got a cost problem before, so nothing needed fixing (#382).
+
 ## [0.15.0] - 2026-10-12
 
 ### Added
@@ -328,7 +395,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean (#52).
 
-[Unreleased]: ../../compare/v0.15.0...HEAD
+[Unreleased]: ../../compare/v0.17.2...HEAD
+[0.17.2]: ../../compare/v0.17.1...v0.17.2
+[0.17.1]: ../../compare/v0.15.1...v0.17.1
+[0.15.1]: ../../compare/v0.15.0...v0.15.1
 [0.15.0]: ../../compare/v0.14.0...v0.15.0
 [0.14.0]: ../../compare/v0.13.1...v0.14.0
 [0.13.1]: ../../compare/v0.13.0...v0.13.1

@@ -34,7 +34,7 @@ spec:
 
 func completeItems(t *testing.T, doc, needle string, offset int) []assist.Item {
 	t.Helper()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestVariablesComplete(t *testing.T) {
 	t.Run("not in matchConditions", func(t *testing.T) {
 		t.Parallel()
 		doc := strings.Replace(varsPolicy("true"), "  validations:", "  matchConditions:\n    - name: m\n      expression: variables.replicas > 0\n  validations:", 1)
-		a, err := assist.New(kubeversion.Default())
+		a, err := assist.New(kubeversion.Default(), allOn())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,7 +104,7 @@ func TestVariablesComplete(t *testing.T) {
 
 func TestVariablesHover(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,4 +133,57 @@ func TestVariablesHover(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mutatingVarsPolicy is a MutatingAdmissionPolicy that matches deployments,
+// with one variable and one JSON patch, the expression under test.
+func mutatingVarsPolicy(expression string) string {
+	return `apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+spec:
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+  variables:
+    - name: replicas
+      expression: object.spec.replicas
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: ` + expression + "\n"
+}
+
+func TestMutatingVariables(t *testing.T) {
+	t.Parallel()
+	const expr = `"variables.replicas > 1 ? [] : []"`
+	t.Run("complete", func(t *testing.T) {
+		t.Parallel()
+		var got string
+		for _, it := range completeItems(t, mutatingVarsPolicy(expr), "variables.replicas", len("variables.")) {
+			if it.Kind == assist.KindField && it.Label == "replicas" {
+				got = it.Detail
+			}
+		}
+		if got != "int" {
+			t.Errorf("variables. in a MutatingAdmissionPolicy offers replicas as %q, want %q", got, "int")
+		}
+	})
+	t.Run("hover", func(t *testing.T) {
+		t.Parallel()
+		a, err := assist.New(kubeversion.Default(), allOn())
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc := mutatingVarsPolicy(expr)
+		pos := posIn(t, doc, "variables.replicas", len("variables.")+2)
+		got, ok := a.Hover(assist.Parse(context.Background(), "policy.yaml", []byte(doc)), pos)
+		if !ok {
+			t.Fatalf("Hover(%v) = none", pos)
+		}
+		for _, w := range []string{"(field) replicas: int", "object.spec.replicas"} {
+			if !strings.Contains(got.Markdown, w) {
+				t.Errorf("Hover(%v) = %q, want it to contain %q", pos, got.Markdown, w)
+			}
+		}
+	})
 }

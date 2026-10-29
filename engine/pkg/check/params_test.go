@@ -121,7 +121,7 @@ func TestParamsType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			diags, err := check.Check(context.Background(), "policy.yaml", []byte(tt.doc), check.WithCRDs(tt.crds))
+			diags, err := check.Check(context.Background(), "policy.yaml", []byte(tt.doc), check.WithCRDs(tt.crds), allOn())
 			if err != nil {
 				t.Fatalf("Check(%s) error: %v", tt.name, err)
 			}

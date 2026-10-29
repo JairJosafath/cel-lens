@@ -78,7 +78,7 @@ func (a *Assistant) argType(text string, vars []variable) string {
 		if !ok {
 			return "dyn"
 		}
-		if r := resolve(vars, chain); r.found && r.known != nil {
+		if r := a.resolve(vars, chain); r.found && r.known != nil {
 			if r.optional {
 				return "optional_type(" + r.known.name() + ")"
 			}
@@ -310,7 +310,7 @@ func receiverBefore(line []rune, dot int) string {
 // withLoopVars returns vars and the loop variables of the macros whose
 // arguments contain column col of line, outermost first, typed from the range
 // each loops over.
-func withLoopVars(line []rune, col int, vars []variable) []variable {
+func (a *Assistant) withLoopVars(line []rune, col int, vars []variable) []variable {
 	var open []int
 	quoted, _ := quotedRunes(line, col)
 	for i := 0; i < col && i < len(line); i++ {
@@ -323,7 +323,7 @@ func withLoopVars(line []rune, col int, vars []variable) []variable {
 		}
 	}
 	for _, i := range open {
-		vars = append(vars, loopVars(line, i, col, vars)...)
+		vars = append(vars, a.loopVars(line, i, col, vars)...)
 	}
 	return vars
 }
@@ -354,7 +354,7 @@ var loopHead = regexp.MustCompile(`^\(\s*([A-Za-z_][A-Za-z_0-9]*)\s*,(?:\s*([A-Z
 // line[open], or none when the parenthesis is not a macro's. Their types come
 // from the range the macro is called on when that is a chain of fields. col is
 // the cursor's column; before the variables are declared there are none.
-func loopVars(line []rune, open, col int, vars []variable) []variable {
+func (a *Assistant) loopVars(line []rune, open, col int, vars []variable) []variable {
 	name := open
 	for name > 0 && identRune(line[name-1]) {
 		name--
@@ -373,7 +373,7 @@ func loopVars(line []rune, open, col int, vars []variable) []variable {
 	if text := receiverBefore(line, name-1); chainText.MatchString(text) {
 		r := []rune(text + ".")
 		if chain, ok := chainBefore(r, len(r)-1); ok {
-			if res := resolve(vars, chain); res.found {
+			if res := a.resolve(vars, chain); res.found {
 				rng = res.known
 			}
 		}

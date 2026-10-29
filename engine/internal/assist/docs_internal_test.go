@@ -18,7 +18,6 @@ func (a accessor) ReturnTypes() []*celgo.Type { return []*celgo.Type{celgo.AnyTy
 
 func TestExamplesCompile(t *testing.T) {
 	t.Parallel()
-	declared := map[string]bool{}
 	for _, v := range kubeversion.Supported() {
 		compiler := plugincel.NewCompiler(v.EnvSet())
 		fs, ms, err := buildCatalog(v)
@@ -33,8 +32,7 @@ func TestExamplesCompile(t *testing.T) {
 			names = append(names, m.name)
 		}
 		for _, name := range slices.Compact(slices.Sorted(slices.Values(names))) {
-			declared[name] = true
-			ex, ok := examples()[name]
+			ex, ok := example(name)
 			if !ok {
 				continue
 			}
@@ -47,11 +45,15 @@ func TestExamplesCompile(t *testing.T) {
 			})
 		}
 	}
-	// Each table entry must be declared by at least one version.
-	for name, ex := range examples() {
-		if !declared[name] {
-			t.Errorf("examples[%q] = %q, but no version declares %q", name, ex.expr, name)
-		}
+}
+
+// TestExampleDoesNotAllocate fails if example goes back to building a table on
+// every hover. It must not run in parallel: AllocsPerRun counts every
+// allocation in the process.
+func TestExampleDoesNotAllocate(t *testing.T) {
+	var ok bool
+	if got := testing.AllocsPerRun(100, func() { _, ok = example("has") }); got != 0 || !ok {
+		t.Errorf("example(%q) allocates %v times (found %v), want 0 and found", "has", got, ok)
 	}
 }
 
@@ -81,9 +83,9 @@ func TestEveryFunctionHasExampleAndDocs(t *testing.T) {
 			names = append(names, m.Function())
 		}
 		for _, name := range names {
-			ex, ok := examples()[name]
+			ex, ok := example(name)
 			if !ok || ex.expr == "" || ex.result == "" {
-				t.Errorf("Kubernetes %s declares %q, which has no example in examples", v, name)
+				t.Errorf("Kubernetes %s declares %q, which has no example", v, name)
 			}
 			wantTitle, wantURL := k8sCELTitle, k8sCELURL
 			if standard(name) {

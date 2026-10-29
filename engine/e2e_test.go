@@ -45,13 +45,18 @@ const sessionDeadline = 5 * time.Minute
 // in which case no test runs.
 var binPath string
 
+// buildDeadline only ends a build that hangs. A cold build cache under -race on
+// a loaded machine takes longer than ten minutes, and the deadline stays below
+// the 30 minutes of make test.
+const buildDeadline = 20 * time.Minute
+
 // build compiles the real program into dir, under its own deadline, so the
 // build never counts against a test's session deadline.
 func build(dir string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), buildDeadline)
 	defer cancel()
 	bin := filepath.Join(dir, name)
-	if out, err := exec.CommandContext(ctx, "go", "build", "-o", bin, ".").CombinedOutput(); err != nil { //nolint:gosec // fixed arguments
+	if out, err := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", bin, ".").CombinedOutput(); err != nil { //nolint:gosec // fixed arguments
 		return "", fmt.Errorf("go build: %w\n%s", err, out)
 	}
 	return bin, nil

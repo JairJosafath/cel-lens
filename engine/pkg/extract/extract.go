@@ -70,6 +70,12 @@ type Expression struct {
 	// as "spec.validations[0].expression" or
 	// "spec.versions[0].schema.openAPIV3Schema.properties[spec].x-kubernetes-validations[1].rule".
 	FieldPath string
+	// Chars maps each character (rune) of Text to the part of the file it comes
+	// from, for a plain, double-quoted or single-quoted scalar that is not just
+	// its source on one line: one folded over several lines, or with escapes or
+	// a doubled single quote. It is nil for every other expression, whose Text
+	// is its source from Start, and for a block scalar.
+	Chars []Range
 }
 
 // Find returns every CEL expression in data, a YAML file with any number of
@@ -95,7 +101,7 @@ func Find(ctx context.Context, file string, data []byte) ([]Expression, error) {
 // FindIn is Find for documents already parsed by Documents from data. broken
 // is returned, joined, as the error.
 func FindIn(ctx context.Context, file string, data []byte, docs []Document, broken []*SyntaxError) ([]Expression, error) {
-	f := finder{file: file, lines: splitLines(data)}
+	f := finder{file: file, lines: SplitLines(data), breaks: lineBreaks(data)}
 	errs := make([]error, len(broken))
 	for i, b := range broken {
 		errs[i] = b
@@ -115,7 +121,10 @@ func FindIn(ctx context.Context, file string, data []byte, docs []Document, brok
 type finder struct {
 	file  string
 	lines [][]rune
-	found []Expression
+	// breaks[i] is the line break that ends lines[i]: U+2028 or U+2029 as is,
+	// any other as a line feed. It is nil when only lines are known.
+	breaks []rune
+	found  []Expression
 	// document is the index of the document being read.
 	document int
 	// seenSchema holds the schema nodes already visited and seen the
@@ -340,6 +349,7 @@ func (f *finder) add(ctx context.Context, m *yaml.Node, key string, kind Kind, p
 		Text: n.Value, Kind: kind, File: f.file,
 		Start: start, End: end, SchemaPath: path,
 		Document: f.document, FieldPath: field,
+		Chars: f.chars(n, start.Line-1, start.Column-1),
 	})
 	return nil
 }

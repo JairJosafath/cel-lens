@@ -49,7 +49,7 @@ func TestKyvernoTypedWarnings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			diags, err := check.Check(context.Background(), "policy.yaml", []byte(tt.doc))
+			diags, err := check.Check(context.Background(), "policy.yaml", []byte(tt.doc), allOn())
 			if err != nil {
 				t.Fatalf("Check(%s) error: %v", tt.name, err)
 			}

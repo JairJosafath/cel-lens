@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -140,7 +141,7 @@ func TestRunCheckExitCodes(t *testing.T) {
 		wantOut  string
 	}{
 		{"clean file", []string{"check", good}, exitOK, ""},
-		{"Kyverno policy with errors", []string{"check", badKyverno}, exitFail, badKyverno + ":5:19: error: undeclared reference to 'nope'"},
+		{"Kyverno policy with errors", []string{"check", "--experimental", "kyverno", badKyverno}, exitFail, badKyverno + ":5:19: error: undeclared reference to 'nope'"},
 		{"file with errors", []string{"check", bad}, exitFail, bad + ":13:"},
 		{"folder with mixed files", []string{"check", dir}, exitFail, "bad.yaml:13:"},
 		{"json", []string{"check", "--format", "json", bad}, exitFail, `"severity": "error"`},
@@ -154,6 +155,43 @@ func TestRunCheckExitCodes(t *testing.T) {
 			}
 			checkOutput(t, "stdout", stdout.String(), tt.wantOut)
 			checkOutput(t, "stderr", stderr.String(), "")
+		})
+	}
+}
+
+func TestRunCheckExperimental(t *testing.T) {
+	t.Parallel()
+	const kyverno = "apiVersion: policies.kyverno.io/v1\nkind: ValidatingPolicy\nspec:\n  validations:\n    - expression: nope\n"
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(kyverno), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		args       []string
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{"flag absent", []string{"check", path}, exitOK, "", ""},
+		{"kyverno on", []string{"check", "--experimental", "kyverno", path}, exitFail, "undeclared reference to 'nope'", ""},
+		{"other feature on", []string{"check", "--experimental", "fitting-completion", path}, exitOK, "", ""},
+		{"kyverno among several", []string{"check", "--experimental=fitting-completion,kyverno", path}, exitFail, "undeclared reference to 'nope'", ""},
+		{"unknown name", []string{"check", "--experimental", "nope", path}, exitOK, "", `unknown experimental feature "nope", ignored; the known ones are crd-typed-policies, fitting-completion, kyverno`},
+		{"unknown name next to a known one", []string{"check", "--experimental", "kyverno,nope", path}, exitFail, "undeclared reference to 'nope'", `"nope"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			if got := run(t.Context(), tt.args, strings.NewReader(""), &stdout, &stderr); got != tt.wantCode {
+				t.Errorf("run(%q) = %d, want %d", tt.args, got, tt.wantCode)
+			}
+			checkOutput(t, "stdout", stdout.String(), tt.wantStdout)
+			checkOutput(t, "stderr", stderr.String(), tt.wantStderr)
+			if n := strings.Count(stderr.String(), "unknown experimental feature"); n > 1 {
+				t.Errorf("stderr has %d warnings, want at most one: %q", n, stderr.String())
+			}
 		})
 	}
 }
@@ -489,9 +527,67 @@ spec:
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	if got := run(t.Context(), []string{"check", dir}, strings.NewReader(""), &stdout, &stderr); got != exitOK {
+	if got := run(t.Context(), []string{"check", "--experimental", "crd-typed-policies", dir}, strings.NewReader(""), &stdout, &stderr); got != exitOK {
 		t.Errorf("run(check) = %d, want %d (warnings do not fail)", got, exitOK)
 	}
 	checkOutput(t, "stdout", stdout.String(), "warning: apps/v1 Deployment: undefined field 'maxReplica'")
 	checkOutput(t, "stderr", stderr.String(), "")
+}
+
+func TestRunCheckUnicodeLineEnds(t *testing.T) {
+	t.Parallel()
+	const crd = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            replicas: {type: integer}
+            ps: {type: array, items: {type: string}}
+          x-kubernetes-validations:
+                - rule: self.replicas > 0 && self.maxReplica > 1
+                  messageExpression: "'replicas is ' + string(self.replicas)"
+                - rule: self.replicas > 0
+                  messageExpression: "self.ps.all(a,self.ps.all(b,a<b)) ? 'x' :'y'"
+`
+	want := []string{"22:51-22:61 undefined field", "25:39-25:83 estimated cost"}
+	for _, br := range []struct{ name, end string }{{"line feed", "\n"}, {"NEL", "\u0085"}, {"LS", "\u2028"}, {"PS", "\u2029"}} {
+		t.Run(br.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "crd.yaml")
+			if err := os.WriteFile(path, []byte("# c"+br.end+"# d\n"+crd), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if got := run(t.Context(), []string{"check", "--format", "json", path}, strings.NewReader(""), &stdout, &stderr); got != exitFail {
+				t.Errorf("run(check) = %d, want %d", got, exitFail)
+			}
+			var diags []struct {
+				Start, End struct{ Line, Column int }
+				Message    string
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &diags); err != nil {
+				t.Fatalf("stdout = %q, not JSON: %v", stdout.String(), err)
+			}
+			if len(diags) != len(want) {
+				t.Fatalf("run(check) gave %d problems %+v, want %d", len(diags), diags, len(want))
+			}
+			for i, d := range diags {
+				got := fmt.Sprintf("%d:%d-%d:%d %s", d.Start.Line, d.Start.Column, d.End.Line, d.End.Column, d.Message)
+				if !strings.HasPrefix(got, want[i]) {
+					t.Errorf("problem %d = %.60q, want prefix %q", i, got, want[i])
+				}
+			}
+		})
+	}
 }

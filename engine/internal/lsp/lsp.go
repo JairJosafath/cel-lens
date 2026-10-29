@@ -21,6 +21,7 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -31,7 +32,9 @@ var ErrNoShutdown = errors.New("client ended the session without shutdown")
 
 // Server is a language server. The zero value is ready to use and matches
 // kubeversion.Default until the client chooses a Kubernetes version with
-// kubernetesVersion in initializationOptions or didChangeConfiguration.
+// kubernetesVersion in initializationOptions or didChangeConfiguration. Every
+// experimental feature is off until the client lists it in experimental, in
+// the same two places.
 type Server struct {
 	// Version is reported to the client in the initialize result.
 	Version string
@@ -43,7 +46,9 @@ type session struct {
 	assist  *assist.Assistant
 	version string
 	kube    kubeversion.Version // the Kubernetes version results match
-	docs    map[string]*document
+	// features are the experimental features the client switched on.
+	features feature.Set
+	docs     map[string]*document
 	// crds are the custom resources of the workspace files and the open
 	// documents, which type the params of policies.
 	crds check.CRDs
@@ -85,7 +90,7 @@ func (ss *session) diagnostics(ctx context.Context, uri string, doc *document) (
 	}
 	// Check's error is for YAML that does not parse, which it also returns as
 	// diagnostics, or for ctx.
-	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithCRDs(&ss.crds))
+	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds))
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -274,16 +279,16 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 		initializeParams
 		InitializationOptions *kubeOptions `json:"initializationOptions"`
 	}
-	var problem string
+	var problems []message
 	if decode(params, &p) && p.InitializationOptions != nil {
-		_, problem, _ = ss.chooseVersion(p.InitializationOptions)
+		_, problems, _ = ss.configure(p.InitializationOptions)
 	}
 	if err := reply(ss.initializeResult(), nil); err != nil {
 		return err
 	}
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
 	ss.scanWorkspace(ctx, p.folders())
-	return ss.warn(problem)
+	return ss.warn(problems)
 }
 
 // kubeOptions are the settings of the client that the server reads.
@@ -291,43 +296,68 @@ type kubeOptions struct {
 	// KubernetesVersion is the Kubernetes version to match, such as "1.34".
 	// Empty means the default; absent means no change.
 	KubernetesVersion *string `json:"kubernetesVersion"`
+	// Experimental lists the experimental features to switch on. Empty means
+	// none; absent means no change.
+	Experimental *[]string `json:"experimental"`
 }
 
-// chooseVersion applies the Kubernetes version in o. It reports whether the
-// version in use changed, and when the value is not supported, why it was
-// ignored.
-func (ss *session) chooseVersion(o *kubeOptions) (changed bool, problem string, err error) {
-	if o.KubernetesVersion == nil {
-		return false, "", nil
-	}
-	v := kubeversion.Default()
-	if *o.KubernetesVersion != "" {
-		var perr error
-		if v, perr = kubeversion.Parse(*o.KubernetesVersion); perr != nil {
-			return false, fmt.Sprintf("kubernetesVersion: %v; keeping %s", perr, ss.kube), nil
+// configure applies the Kubernetes version and the experimental features in o.
+// It reports whether either in use changed, and why each value that is not
+// supported was ignored.
+func (ss *session) configure(o *kubeOptions) (changed bool, problems []message, err error) {
+	v, on := ss.kube, ss.features
+	if o.KubernetesVersion != nil {
+		v = kubeversion.Default()
+		if *o.KubernetesVersion != "" {
+			var perr error
+			if v, perr = kubeversion.Parse(*o.KubernetesVersion); perr != nil {
+				problems = append(problems, message{messageError, fmt.Sprintf("kubernetesVersion: %v; keeping %s", perr, ss.kube)})
+				v = ss.kube
+			}
 		}
 	}
-	if v == ss.kube {
-		return false, "", nil
+	if o.Experimental != nil {
+		var unknown []string
+		on, unknown = feature.Parse(*o.Experimental)
+		if w := feature.Warning(unknown); w != "" {
+			problems = append(problems, message{messageWarning, "experimental: " + w})
+		}
 	}
-	a, err := assist.New(v)
+	if v == ss.kube && on == ss.features {
+		return false, problems, nil
+	}
+	a, err := assist.New(v, assist.WithFeatures(on))
 	if err != nil {
-		return false, "", err
+		return false, problems, err
 	}
-	ss.kube, ss.assist = v, a
-	return true, "", nil
+	ss.kube, ss.features, ss.assist = v, on, a
+	return true, problems, nil
 }
 
-// warn shows problem, when there is one, to the user.
-func (ss *session) warn(problem string) error {
-	if problem == "" {
-		return nil
-	}
-	return ss.conn.Notify("window/showMessage", map[string]any{"type": 1, "message": problem})
+// message is something to show the user, with the protocol's MessageType.
+type message struct {
+	typ  int
+	text string
 }
 
-// didChangeConfiguration applies a new kubernetesVersion and checks the open
-// documents again when it changed.
+// The protocol's MessageType values the server sends.
+const (
+	messageError   = 1
+	messageWarning = 2
+)
+
+// warn shows each of problems to the user.
+func (ss *session) warn(problems []message) error {
+	for _, p := range problems {
+		if err := ss.conn.Notify("window/showMessage", map[string]any{"type": p.typ, "message": p.text}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// didChangeConfiguration applies a new kubernetesVersion and experimental list
+// and checks the open documents again when either changed.
 func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		Settings *kubeOptions `json:"settings"`
@@ -335,11 +365,11 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	if !decode(params, &p) || p.Settings == nil {
 		return nil
 	}
-	changed, problem, err := ss.chooseVersion(p.Settings)
+	changed, problems, err := ss.configure(p.Settings)
 	if err != nil {
 		return err
 	}
-	if err := ss.warn(problem); err != nil || !changed {
+	if err := ss.warn(problems); err != nil || !changed {
 		return err
 	}
 	return ss.publishAll(ctx, "")
@@ -367,6 +397,7 @@ func (ss *session) initializeResult() any {
 			"experimental": map[string]any{"celLens": map[string]any{
 				"kubernetesVersion":           kubeversion.Default().String(),
 				"supportedKubernetesVersions": supported,
+				"experimentalFeatures":        feature.Known(),
 			}},
 		},
 		"serverInfo": info{"cel-lens-core", ss.version},
@@ -530,13 +561,17 @@ func (ss *session) completion(ctx context.Context, params json.RawMessage) (any,
 	if !ok {
 		return nil, nil
 	}
-	items, ok := ss.assist.Complete(doc.parse(ctx, p.TextDocument.URI), fromPosition(doc.runes(), p.Position))
+	lines := doc.runes()
+	items, ok := ss.assist.Complete(doc.parse(ctx, p.TextDocument.URI), fromPosition(lines, p.Position))
 	if !ok {
 		return nil, nil
 	}
 	out := make([]map[string]any, len(items))
 	for i, it := range items {
 		out[i] = map[string]any{"label": it.Label, "kind": completionKind(it.Kind), "detail": it.Detail}
+		if it.NewText != "" {
+			out[i]["textEdit"] = textEdit{toRange(lines, it.Start, it.End), it.NewText}
+		}
 		if it.SortKey != "" {
 			out[i]["sortText"] = it.SortKey
 		}

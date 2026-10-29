@@ -404,19 +404,22 @@ func typeList(ts []*types.Type) string {
 // accepts reports whether the overload can be called on a receiver of the
 // given kind, where types.UnspecifiedKind stands for an unknown receiver.
 func (m member) accepts(kind types.Kind) bool {
-	untyped := m.recv == types.DynKind || m.recv == types.AnyKind || m.recv == types.TypeParamKind
-	return untyped || kind == types.UnspecifiedKind || m.recv == kind
+	return m.anyType() || kind == types.UnspecifiedKind || m.recv == kind
+}
+
+// anyType reports whether the overload is declared on any type, not on one.
+func (m member) anyType() bool {
+	return m.recv == types.DynKind || m.recv == types.AnyKind || m.recv == types.TypeParamKind
 }
 
 // acceptsOptional reports whether the overload can be called on an optional
 // value: one declared on optionals, or on any type.
 func (m member) acceptsOptional() bool {
-	return m.optional || m.recv == types.DynKind || m.recv == types.AnyKind || m.recv == types.TypeParamKind
+	return m.optional || m.anyType()
 }
 
 // onType reports whether the overload is declared on the opaque type named
 // celType, or on any type, or celType is empty.
 func (m member) onType(celType string) bool {
-	untyped := m.recv == types.DynKind || m.recv == types.AnyKind || m.recv == types.TypeParamKind
-	return celType == "" || untyped || m.recvType == celType
+	return celType == "" || m.anyType() || m.recvType == celType
 }

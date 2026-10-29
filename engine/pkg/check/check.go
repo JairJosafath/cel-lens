@@ -32,6 +32,7 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -122,8 +123,8 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 	if err != nil {
 		return nil, fmt.Errorf("build syntax environment for %s: %w", file, err)
 	}
-	r := reporter{version: set.version, crds: set.crds, file: file, lines: splitLines(text), data: data, eol: "\n", spans: spans{env: parser}}
-	if bytes.Contains(text, []byte("\r\n")) {
+	r := reporter{version: set.version, crds: set.typingCRDs(), kyverno: set.on.Has(feature.Kyverno), file: file, lines: extract.SplitLines(text), data: data, eol: "\n", spans: spans{env: parser}}
+	if bytes.Contains(extract.Text(data), []byte("\r\n")) {
 		r.eol = "\r\n"
 	}
 	for _, se := range broken {
@@ -148,6 +149,7 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 type reporter struct {
 	version kubeversion.Version
 	crds    *CRDs // the custom resources params may be typed from; may be nil
+	kyverno bool  // whether Kyverno ValidatingPolicy documents are checked
 	file    string
 	lines   [][]rune
 	data    []byte // the file as read, for bytes that lines cannot show
@@ -184,7 +186,7 @@ func (r *reporter) document(ctx context.Context, node *yaml.Node, exprs map[stri
 		return r.policy(ctx, node, exprs)
 	case group == "admissionregistration.k8s.io" && head.Kind == "MutatingAdmissionPolicy" && len(exprs) > 0:
 		return r.mutatingPolicy(ctx, node, exprs)
-	case group == "policies.kyverno.io" && version == "v1" && head.Kind == "ValidatingPolicy" && len(exprs) > 0:
+	case group == "policies.kyverno.io" && version == "v1" && head.Kind == "ValidatingPolicy" && len(exprs) > 0 && r.kyverno:
 		return r.kyvernoPolicy(ctx, node, exprs)
 	}
 	return nil
@@ -304,7 +306,7 @@ func (r *reporter) badChar(se *extract.SyntaxError) (line, col int, ok bool) {
 	for i < len(r.data) {
 		c, n, bad := next(r.data[i:])
 		switch {
-		case !bad && isBreak(c):
+		case !bad && extract.IsBreak(c):
 			if c != '\r' || !r.crlfAt(i, order) {
 				line, col = line+1, 1
 			}

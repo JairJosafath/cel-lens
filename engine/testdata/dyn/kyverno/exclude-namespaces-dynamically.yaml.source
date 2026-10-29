@@ -1,0 +1,2 @@
+Source: https://github.com/kyverno/policies/blob/ec478cb5996376c0d2f09520675805a8e33297c9/other-vpol/exclude-namespaces-dynamically/exclude-namespaces-dynamically.yaml
+Licence: Apache-2.0 (https://github.com/kyverno/policies/blob/ec478cb5996376c0d2f09520675805a8e33297c9/LICENSE)

@@ -3,6 +3,7 @@ package check_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
@@ -45,8 +46,8 @@ func TestMutatingPolicy(t *testing.T) {
 		{name: "json patch", doc: mutating(patch + `"[JSONPatch{op: 'add', path: '/spec/replicas', value: 3}]"`)},
 		{name: "oldObject and namespaceObject", doc: mutating(patch + `"oldObject == null && namespaceObject == null ? [] : [JSONPatch{op: 'remove', path: '/spec'}]"`)},
 		{name: "authorizer", doc: mutating(patch + `"authorizer.group('apps').resource('deployments').check('update').allowed() ? [JSONPatch{op: 'remove', path: '/a'}] : [JSONPatch{op: 'remove', path: '/b'}]"`)},
-		{name: "wrong request field", doc: mutating(patch + `"request.usrInfo == null ? [] : []"`), want: []warning{{"undefined field 'usrInfo'", "usrInfo"}}},
-		{name: "self is not declared", doc: mutating(patch + `"self.spec == 1 ? [] : []"`), want: []warning{{"undeclared reference to 'self' (in container '')", "self"}}},
+		{name: "wrong request field", doc: mutating(patch + `"request.usrInfo == null ? [] : [JSONPatch{op: 'remove', path: '/a'}]"`), want: []warning{{"undefined field 'usrInfo'", "usrInfo"}}},
+		{name: "self is not declared", doc: mutating(patch + `"self.spec == 1 ? [] : [JSONPatch{op: 'remove', path: '/a'}]"`), want: []warning{{"undeclared reference to 'self' (in container '')", "self"}}},
 		{name: "wrong result type", doc: mutating(apply + `"1"`), want: []warning{{"must evaluate to Object but got int", "1"}}},
 		{name: "match condition", doc: `apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicy
@@ -120,5 +121,36 @@ spec:
 				t.Errorf("Check(%s) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestMutatingPolicyVariableTypes checks that variables.<name> has the type of
+// its variable's expression in a MutatingAdmissionPolicy, as in a validating one.
+// The variable is built from request, as object is dyn in a mutating policy.
+func TestMutatingPolicyVariableTypes(t *testing.T) {
+	t.Parallel()
+	const withVars = "variables:\n    - {name: replicas, expression: request.userInfo.username.size()}\n  mutations:"
+	const patch = "JSONPatch\n      jsonPatch:\n        expression: "
+	tests := []struct {
+		name, mutation string
+		want           []warning
+	}{
+		{name: "used as its type", mutation: `"variables.replicas > 1 ? [] : [JSONPatch{op: 'remove', path: '/a'}]"`},
+		{name: "method its type lacks", mutation: `"variables.replicas.size() > 1 ? [] : [JSONPatch{op: 'remove', path: '/a'}]"`, want: []warning{{"found no matching overload for 'size' applied to 'int.()'", "size"}}},
+	}
+	for _, v := range kubeversion.Supported() {
+		for _, tt := range tests {
+			t.Run(v.String()+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+				doc := strings.Replace(mutating(patch+tt.mutation), "mutations:", withVars, 1)
+				diags, err := check.Check(context.Background(), "policy.yaml", []byte(doc), check.WithVersion(v))
+				if err != nil {
+					t.Fatalf("Check(%s, %s) error: %v", tt.name, v, err)
+				}
+				if got := texts(doc, diags); !slices.Equal(got, tt.want) {
+					t.Errorf("Check(%s, %s) = %v, want %v", tt.name, v, got, tt.want)
+				}
+			})
+		}
 	}
 }

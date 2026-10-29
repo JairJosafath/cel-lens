@@ -14,7 +14,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/cel-go/common/types"
+
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -26,42 +29,69 @@ type Assistant struct {
 	byName map[string]function
 	// vars are the variables of a Kyverno policy: set only on kyverno.
 	vars []variable
-	// kyverno answers for the expressions of a Kyverno ValidatingPolicy.
+	// kyverno answers for the expressions of a Kyverno ValidatingPolicy; nil
+	// unless the experimental feature kyverno is on.
 	kyverno *Assistant
 	// version is the Kubernetes version the types follow.
 	version kubeversion.Version
+	// features are the experimental features that are on.
+	features feature.Set
+}
+
+// NewOption changes how New builds an Assistant.
+type NewOption func(*Assistant)
+
+// WithFeatures switches on the experimental features in f. Without it every
+// one is off: a Kyverno ValidatingPolicy gets no hover or completion
+// (feature.Kyverno), params of a custom resource stay dyn
+// (feature.CRDTypedPolicies), and completion and hover do not fit the spot
+// (feature.FittingCompletion).
+func WithFeatures(f feature.Set) NewOption {
+	return func(a *Assistant) { a.features = f }
 }
 
 // New builds an Assistant from the Kubernetes CEL environment of version v.
-func New(v kubeversion.Version) (*Assistant, error) {
+func New(v kubeversion.Version, opts ...NewOption) (*Assistant, error) {
 	funcs, macros, err := buildCatalog(v)
 	if err != nil {
 		return nil, err
 	}
 	a := &Assistant{funcs: funcs, macros: macros, byName: make(map[string]function, len(funcs)), version: v}
+	for _, o := range opts {
+		o(a)
+	}
 	for _, f := range funcs {
 		a.byName[f.name] = f
 	}
-	if a.kyverno, err = newKyverno(); err != nil {
-		return nil, err
+	if a.features.Has(feature.Kyverno) {
+		if a.kyverno, err = newKyverno(); err != nil {
+			return nil, err
+		}
+		a.kyverno.features = a.features
 	}
 	return a, nil
 }
 
-// forExpr returns the Assistant that knows the environment of the expression e of doc.
-func (a *Assistant) forExpr(doc *Document, e extract.Expression) *Assistant {
-	if a.kyverno != nil && isKyverno(doc, e) {
-		return a.kyverno
+// forExpr returns the Assistant that knows the environment of the expression e
+// of doc. It is false for the expression of a Kyverno ValidatingPolicy while the
+// experimental feature kyverno is off: nothing is answered there.
+func (a *Assistant) forExpr(doc *Document, e extract.Expression) (*Assistant, bool) {
+	if a.vars == nil && isKyverno(doc, e) {
+		return a.kyverno, a.kyverno != nil
 	}
-	return a
+	return a, true
 }
+
+// fitting reports whether completion and hover fit the spot, the experimental
+// feature fitting-completion.
+func (a *Assistant) fitting() bool { return a.features.Has(feature.FittingCompletion) }
 
 // scope returns the variables the expression e of doc can use.
 func (a *Assistant) scope(doc *Document, e extract.Expression) []variable {
 	if a.vars != nil {
 		return a.kyvernoScope(doc.roots[e.Document], e)
 	}
-	return scope(doc, e, a.version)
+	return scope(doc, e, a.version, a.features)
 }
 
 // Hover describes what is under the cursor.
@@ -99,6 +129,13 @@ type Item struct {
 	// when the label does. Fields of a policy that matches several kinds are
 	// ordered by it: those every kind has come first.
 	SortKey string
+	// Start and End are the range of the file that the item replaces: the
+	// part of the name already typed, empty when none is. NewText is what
+	// goes there: Label, written as the rule's YAML scalar needs, so a quote
+	// in it is escaped in a double-quoted or single-quoted rule. They are set
+	// by Complete.
+	Start, End extract.Position
+	NewText    string
 }
 
 // site is the cursor inside the text of a CEL expression.
@@ -110,10 +147,115 @@ type site struct {
 	line      []rune
 	col, base int
 	row       int // the file line, from 1
+	index     int // the position of line among the lines of the expression's text
+	// chars and first are set for an expression with a map to the file, see
+	// extract.Expression.Chars: line starts at text offset first, and base
+	// and row are not used. cursor is where the cursor is in the file.
+	chars  []extract.Range
+	first  int
+	cursor extract.Position
+}
+
+// flat returns the whole text of the expression on one line, and the column in
+// it where s.line starts, for a receiver that spans several lines.
+func (s site) flat() ([]rune, int) {
+	text := []rune(strings.ReplaceAll(s.expr.Text, "\n", " "))
+	if s.chars != nil {
+		return text, s.first
+	}
+	off := 0
+	for _, l := range strings.Split(s.expr.Text, "\n")[:s.index] {
+		off += len([]rune(l)) + 1
+	}
+	return text, off
 }
 
 func (s site) position(col int) extract.Position {
 	return extract.Position{Line: s.row, Column: s.base + col + 1}
+}
+
+// span maps the columns from to to (exclusive, from < to) of the line to the
+// file: from the start of the first character to the end of the last.
+func (s site) span(from, to int) (start, end extract.Position) {
+	if s.chars == nil {
+		return s.position(from), s.position(to)
+	}
+	return s.chars[s.first+from].Start, s.chars[s.first+to-1].End
+}
+
+// typedRange is the range of the file from column from of the line to the
+// cursor.
+func (s site) typedRange(from int) (start, end extract.Position) {
+	switch {
+	case s.chars == nil:
+		return s.position(from), s.position(s.col)
+	case from == s.col:
+		return s.cursor, s.cursor
+	}
+	return s.chars[s.first+from].Start, s.cursor
+}
+
+// column returns the column of the line that pos, a position of the file, is
+// at; it may lie outside the line.
+func (s site) column(pos extract.Position) int {
+	if s.chars == nil {
+		return pos.Column - 1 - s.base
+	}
+	return charOffset(s.chars, pos) - s.first
+}
+
+// charOffset returns how many characters of the text come before pos: those
+// that end at or before it, and those with an empty range, such as the space
+// that a line break folds into, that start before it.
+func charOffset(chars []extract.Range, pos extract.Position) int {
+	n := 0
+	for _, c := range chars {
+		if empty := c.Start == c.End; empty && before(c.Start, pos) || !empty && !before(pos, c.End) {
+			n++
+		}
+	}
+	return n
+}
+
+// atChars is at for an expression with a map from its text to the file.
+func atChars(e extract.Expression, pos extract.Position) (site, bool) {
+	text := []rune(e.Text)
+	if len(e.Chars) != len(text) {
+		return site{}, false
+	}
+	off := charOffset(e.Chars, pos)
+	first := 0
+	for i := off; i > 0; i-- {
+		if text[i-1] == '\n' {
+			first = i
+			break
+		}
+	}
+	last := off
+	for last < len(text) && text[last] != '\n' {
+		last++
+	}
+	return site{expr: e, line: text[first:last], col: off - first, chars: e.Chars, first: first, cursor: pos}, true
+}
+
+// scalarText writes s as it must be inside the YAML scalar of e: in
+// double quotes a backslash is written \\ and a quote \", in single quotes
+// a quote doubled. The quote is the character before the text in the file.
+func scalarText(doc *Document, e extract.Expression, s string) string {
+	if e.Start.Line < 1 || e.Start.Line > len(doc.lines) || e.Start.Column < 2 {
+		return s
+	}
+	line := []rune(doc.lines[e.Start.Line-1])
+	if e.Start.Column-2 >= len(line) {
+		return s
+	}
+	switch line[e.Start.Column-2] {
+	case '"':
+		return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
+	case '\'':
+		return strings.ReplaceAll(s, "'", "''")
+	}
+	return s
 }
 
 // at finds the CEL expression of doc that contains pos, if any. It reports
@@ -124,6 +266,9 @@ func at(doc *Document, pos extract.Position) (site, bool) {
 	for _, e := range doc.exprs {
 		if before(pos, e.Start) || before(e.End, pos) {
 			continue
+		}
+		if e.Chars != nil {
+			return atChars(e, pos)
 		}
 		text := strings.Split(e.Text, "\n")
 		lead := len(e.Text) - len(strings.TrimLeft(e.Text, "\n"))
@@ -138,7 +283,7 @@ func at(doc *Document, pos extract.Position) (site, bool) {
 		if col < 0 || col > len(line) || base+len(line) > len(file) || string(file[base:base+len(line)]) != string(line) {
 			return site{}, false
 		}
-		return site{expr: e, line: line, col: col, base: base, row: pos.Line}, true
+		return site{expr: e, line: line, col: col, base: base, row: pos.Line, index: i}, true
 	}
 	return site{}, false
 }
@@ -161,7 +306,7 @@ type resolved struct {
 }
 
 // resolve follows chain through the variables of s.
-func resolve(vars []variable, chain []step) resolved {
+func (a *Assistant) resolve(vars []variable, chain []step) resolved {
 	if len(chain) == 0 || chain[0].index {
 		return resolved{}
 	}
@@ -179,6 +324,9 @@ func resolve(vars []variable, chain []step) resolved {
 		if !st.index {
 			next = cur.known.field(st.name)
 		}
+		if next == nil && a.fitting() && !st.index && cur.known.kind() == types.UnspecifiedKind && len(cur.known.fieldNames()) == 0 {
+			next = cur.known // a field of a value of unknown type is of unknown type
+		}
 		if next == nil {
 			return resolved{}
 		}
@@ -195,24 +343,28 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 	if !ok || inString(s.line, s.col) {
 		return Hover{}, false
 	}
-	a = a.forExpr(doc, s.expr)
+	a, ok = a.forExpr(doc, s.expr)
+	if !ok {
+		return Hover{}, false
+	}
 	start, end := wordAt(s.line, s.col)
 	if start == end || s.line[start] >= '0' && s.line[start] <= '9' {
 		return Hover{}, false
 	}
 	word := string(s.line[start:end])
 	hover := func(md string) (Hover, bool) {
-		return Hover{Markdown: md, Start: s.position(start), End: s.position(end)}, true
+		from, to := s.span(start, end)
+		return Hover{Markdown: md, Start: from, End: to}, true
 	}
 	called := calledAt(s.line, end)
 	dotted := start > 0 && s.line[start-1] == '.'
-	vars := withLoopVars(s.line, start, a.scope(doc, s.expr))
+	vars := a.withLoopVars(s.line, start, a.scope(doc, s.expr))
 	switch {
 	case dotted:
 		chain, isChain := chainBefore(s.line, start-1)
 		var recv resolved
 		if isChain {
-			recv = resolve(vars, chain)
+			recv = a.resolve(vars, chain)
 		}
 		if called {
 			if ns := namespace(chain, vars); isChain && ns != "" {
@@ -221,7 +373,12 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 				}
 			}
 			var actual []string
-			if t := a.argType(receiverBefore(s.line, start-1), vars); t != "dyn" {
+			flat, off := s.flat()
+			t, opaque := a.opaqueBefore(flat, off+start-1, vars)
+			if !opaque {
+				t = a.argType(receiverBefore(s.line, start-1), vars)
+			}
+			if t != "dyn" {
 				actual = append([]string{t}, a.argTypes(s.line, end, vars)...)
 			}
 			return a.hoverFunction(word, true, actual, hover)
@@ -230,14 +387,18 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 			return hover(declaration("field", word, resourceCheckType, requestResourceDesc))
 		}
 		if f := recv.known.field(word); isChain && recv.found && f != nil {
-			return hover(declaration("field", word, f.name(), withKinds(f.str("description"), f.kinds())))
+			return hover(a.withDynReason(declaration("field", word, f.name(), withKinds(f.str("description"), f.kinds())), f))
 		}
 	case called:
 		return a.hoverFunction(word, false, a.argTypes(s.line, end, vars), hover)
 	default:
 		for _, v := range vars {
 			if v.name == word {
-				return hover(declaration("variable", word, v.typ(), v.desc))
+				md := declaration("variable", word, v.typ(), v.desc)
+				if v.typeName == "" {
+					md = a.withDynReason(md, v.schema)
+				}
+				return hover(md)
 			}
 		}
 	}
@@ -287,6 +448,9 @@ func (a *Assistant) hoverFunction(name string, isMember bool, actual []string, h
 		} else {
 			overloads = f.global
 		}
+		if isMember && len(actual) > 0 && !unknown(actual[0]) {
+			overloads = onReceiver(overloads, actual[0])
+		}
 		picked := pick(overloads, actual)
 		for i, o := range overloads {
 			sig := o.sig
@@ -327,6 +491,21 @@ func (a *Assistant) hoverFunction(name string, isMember bool, actual []string, h
 	return hover(md + docsMarkdown(name))
 }
 
+// onReceiver returns the member overloads that accept a receiver of the type
+// named recv, or all of them when none does.
+func onReceiver(overloads []overload, recv string) []overload {
+	var fit []overload
+	for _, o := range overloads {
+		if len(o.params) > 0 && fits(o.params[0], recv) {
+			fit = append(fit, o)
+		}
+	}
+	if len(fit) == 0 {
+		return overloads
+	}
+	return fit
+}
+
 // Complete lists what can be typed at pos, a position in the file of doc:
 // after a dot the fields of the type before it and the functions that apply
 // to it, otherwise the variables, the functions and the macros. It reports
@@ -337,37 +516,52 @@ func (a *Assistant) Complete(doc *Document, pos extract.Position) ([]Item, bool)
 	if !ok || inString(s.line, s.col) {
 		return nil, false
 	}
-	a = a.forExpr(doc, s.expr)
+	a, ok = a.forExpr(doc, s.expr)
+	if !ok {
+		return nil, false
+	}
 	start := s.col
 	for start > 0 && identRune(s.line[start-1]) {
 		start--
 	}
+	items := a.complete(doc, s, start)
+	for i := range items {
+		items[i].Start, items[i].End = s.typedRange(start)
+		items[i].NewText = scalarText(doc, s.expr, items[i].Label)
+	}
+	return items, true
+}
+
+// complete lists the items for the cursor at s, where the name typed so far
+// starts at column start of the line.
+func (a *Assistant) complete(doc *Document, s site, start int) []Item {
 	vars := a.scope(doc, s.expr)
 	if start == 0 || s.line[start-1] != '.' {
-		return a.topLevel(vars), true
+		return a.topLevel(vars)
 	}
-	if t, ok := a.opaqueBefore(s.line, start-1, vars); ok {
-		items := a.members(nil, false, t)
+	flat, off := s.flat()
+	if t, ok := a.opaqueBefore(flat, off+start-1, vars); ok {
+		items := a.members(nil, false, t, false)
 		if t == authorizerType {
 			items = append(items, Item{Label: requestResourceVar, Kind: KindField, Detail: resourceCheckType, Documentation: requestResourceDesc})
 		}
-		return items, true
+		return items
 	}
 	chain, ok := chainBefore(s.line, start-1)
 	if !ok {
-		return a.members(schema(nil), optionalCallBefore(s.line, start-1), ""), true
+		return a.members(schema(nil), optionalCallBefore(s.line, start-1), "", false)
 	}
 	if ns := namespace(chain, vars); ns != "" {
 		if items := a.namespaced(ns); len(items) > 0 {
-			return items, true
+			return items
 		}
 	}
-	recv := resolve(vars, chain)
+	recv := a.resolve(vars, chain)
 	var items []Item
 	if recv.found && recv.known != nil {
 		items = fieldItems(recv.known)
 	}
-	return append(items, a.members(recv.known, recv.optional, recv.celType)...), true
+	return append(items, a.members(recv.known, recv.optional, recv.celType, recv.found)...)
 }
 
 // fieldItems lists the properties of s. When s merges several kinds, each item
@@ -427,31 +621,51 @@ func (a *Assistant) topLevel(vars []variable) []Item {
 // members lists the functions and macros that can be called on a receiver of
 // type s, or of an optional of it; every one when s is nil, as its type is not
 // known. A celType, the name of an opaque type, limits them to those declared on it.
-func (a *Assistant) members(s schema, optional bool, celType string) []Item {
+// When found, the receiver was resolved, so a schema with no type is a truly
+// dyn value and only what fits any value is offered, with a note saying so;
+// otherwise the receiver is just not known and every member is offered.
+func (a *Assistant) members(s schema, optional bool, celType string, found bool) []Item {
 	n := s.name()
 	if n == "object" && !optional {
 		return nil
 	}
 	kind := s.kind()
+	dyn := found && a.fitting() && !optional && celType == "" && kind == types.UnspecifiedKind
 	var items []Item
 	for _, f := range a.funcs {
 		if operator(f.name) {
 			continue
 		}
 		for _, m := range f.members {
+			if dyn && !m.anyType() {
+				continue
+			}
 			if optional && m.acceptsOptional() || !optional && m.accepts(kind) && m.onType(celType) {
-				items = append(items, Item{Label: f.name, Kind: KindMethod, Detail: m.sig, Documentation: f.desc})
+				items = append(items, Item{Label: f.name, Kind: KindMethod, Detail: m.sig, Documentation: dynNote(dyn, f.desc)})
 				break
 			}
 		}
 	}
 	for i, m := range a.macros {
 		if m.member && celType == "" && (i == 0 || a.macros[i-1].name != m.name) && m.accepts(n, optional) {
-			items = append(items, Item{Label: m.name, Kind: KindMethod, Detail: m.sig, Documentation: m.desc})
+			items = append(items, Item{Label: m.name, Kind: KindMethod, Detail: m.sig, Documentation: dynNote(dyn, m.desc)})
 		}
 	}
 	sortItems(items)
 	return items
+}
+
+// dynNote adds to desc, when dyn, that the receiver's type is not known, so
+// only what fits any value is offered.
+func dynNote(dyn bool, desc string) string {
+	if !dyn {
+		return desc
+	}
+	const note = "The receiver is dyn: its type is not known, so only what fits any value is offered."
+	if desc == "" {
+		return note
+	}
+	return desc + "\n\n" + note
 }
 
 // namespaced lists the functions called as ns.name(...), such as sets.contains.

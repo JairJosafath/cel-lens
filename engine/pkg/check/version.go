@@ -7,6 +7,7 @@ import (
 	"k8s.io/apiserver/pkg/util/compatibility"
 	basecompatibility "k8s.io/component-base/compatibility"
 
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -16,6 +17,16 @@ type Option func(*settings)
 type settings struct {
 	version kubeversion.Version
 	crds    *CRDs
+	on      feature.Set
+}
+
+// typingCRDs returns the CRDs that type params, none unless the experimental
+// feature crd-typed-policies is on.
+func (s settings) typingCRDs() *CRDs {
+	if !s.on.Has(feature.CRDTypedPolicies) {
+		return nil
+	}
+	return s.crds
 }
 
 // WithVersion makes Check match the API server of version v, with its CEL
@@ -46,9 +57,18 @@ func withCompatibility(v kubeversion.Version, fn func()) error {
 	return nil
 }
 
+// WithFeatures switches on the experimental features in f: Check reports the
+// problems of Kyverno ValidatingPolicy documents with feature.Kyverno, and
+// types params from WithCRDs with feature.CRDTypedPolicies. Without it every
+// experimental feature is off.
+func WithFeatures(f feature.Set) Option {
+	return func(s *settings) { s.on = f }
+}
+
 // WithCRDs makes Check type params from the CustomResourceDefinitions in c,
 // when a ValidatingAdmissionPolicy's spec.paramKind names a custom resource
-// they define. Without it, or when the kind is in no CRD of c, params of such a
+// they define and the experimental feature crd-typed-policies is on (see
+// WithFeatures). Without it, or when the kind is in no CRD of c, params of such a
 // policy stays dyn. A built-in kind needs no CRDs.
 func WithCRDs(c *CRDs) Option {
 	return func(s *settings) { s.crds = c }

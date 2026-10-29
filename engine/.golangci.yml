@@ -1,9 +1,11 @@
-# Lint and format config for golangci-lint v2.14. `make lint` runs the
-# linters, `make fmt-check` the formatters; any finding fails `make check`.
+# Lint and format config for agent-written Go, for golangci-lint v2.14 (the
+# toolchain image's). `make lint` runs the linters, `make fmt-check` the
+# formatters; any finding fails `make check`.
 #
 # Strict but quiet: the standard linters plus the ones below, each catching a
-# class of real bugs or enforcing a style rule. Nothing is excluded by a
-# preset or a hidden default: every exclusion is in this file, with its reason.
+# class of real bugs or enforcing a rule from docs/style/go.md. Nothing is
+# excluded by a preset or a hidden default: every exclusion is in this file,
+# with its reason. Changing this file is the Standard's job, not a task's.
 version: "2"
 
 run:

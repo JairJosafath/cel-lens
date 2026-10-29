@@ -45,7 +45,7 @@ func labelsAt(t *testing.T, a *assist.Assistant, doc, needle string, offset int)
 
 func TestKyvernoComplete(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestKyvernoComplete(t *testing.T) {
 		},
 		{
 			name: "object stays dyn for a wildcard", doc: vpol("{apiGroups: ['*'], apiVersions: [v1], resources: [pods]}", "object.spec.nodeName == ''"), needle: "object.spec", offset: len("object."),
-			has: []string{"size", "all"}, lacks: []string{"apiVersion", "metadata"},
+			has: []string{"all", "exists"}, lacks: []string{"apiVersion", "metadata", "size", "startsWith"},
 		},
 	}
 	for _, tt := range tests {
@@ -116,7 +116,7 @@ func TestKyvernoComplete(t *testing.T) {
 // TestKyvernoCompleteSeveralKinds checks that shared fields come first and name the kinds.
 func TestKyvernoCompleteSeveralKinds(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestKyvernoCompleteSeveralKinds(t *testing.T) {
 
 func TestKyvernoHover(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestKyvernoHover(t *testing.T) {
 // variables before it, and match conditions see none.
 func TestKyvernoVariablesInOrder(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}

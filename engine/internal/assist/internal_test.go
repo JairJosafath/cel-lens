@@ -12,7 +12,7 @@ func fakeAssistant() *Assistant {
 		{name: "sets.ok", global: []overload{{sig: "sets.ok(list) -> bool"}}},
 		{name: "sets._x_", global: []overload{{sig: "sets._x_(list) -> bool"}}},
 		{name: "sets.in", global: []overload{{sig: "sets.in(list) -> bool"}}},
-		{name: "fine", members: []member{{recv: types.StringKind, overload: overload{sig: "string.fine() -> bool"}}}},
+		{name: "fine", members: []member{{recv: types.DynKind, overload: overload{sig: "dyn.fine() -> bool"}}}},
 		{name: "_y_", members: []member{{recv: types.StringKind, overload: overload{sig: "string._y_() -> bool"}}}},
 		{name: "@z", members: []member{{recv: types.StringKind, overload: overload{sig: "string.@z() -> bool"}}}},
 	}}
@@ -36,7 +36,7 @@ func TestNamespacedHidesInternalNames(t *testing.T) {
 
 func TestMembersHidesInternalNames(t *testing.T) {
 	t.Parallel()
-	got := labels(fakeAssistant().members(nil, false, ""))
+	got := labels(fakeAssistant().members(nil, false, "", false))
 	for _, l := range got {
 		if internal(l) {
 			t.Errorf("members(nil) offers internal name %q", l)

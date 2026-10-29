@@ -40,7 +40,7 @@ func TestFixtures(t *testing.T) {
 					want = append(want, strings.TrimSpace(w))
 				}
 			}
-			got, err := check.Check(context.Background(), file, data)
+			got, err := check.Check(context.Background(), file, data, allOn())
 			if err != nil {
 				t.Fatalf("Check(%s) error = %v", file, err)
 			}
@@ -153,10 +153,10 @@ func TestCheckMalformedYAML(t *testing.T) {
 			},
 		},
 		{
-			name: "U+0085 is not a line break",
+			name: "U+0085 is a line break",
 			src:  "a: 1\u0085b: \x01\n",
 			want: []diag{
-				{1, 9, 10, "YAML is broken here: control characters are not allowed"},
+				{2, 4, 5, "YAML is broken here: control characters are not allowed"},
 			},
 		},
 		{
@@ -296,6 +296,13 @@ func TestCheckMalformedYAML(t *testing.T) {
 			src:  "\n\nkey: v\n\x00",
 			want: []diag{
 				{4, 1, 2, "YAML is broken here: control characters are not allowed"},
+			},
+		},
+		{
+			name: "control character below NEL, LS and PS line ends",
+			src:  "a: 1\u0085b: 2\u2028c: 3\u2029d: x\x01y\n",
+			want: []diag{
+				{4, 5, 6, "YAML is broken here: control characters are not allowed"},
 			},
 		},
 		{
@@ -522,7 +529,7 @@ spec:
 		{"literal block", " |\n                self.replicas == 'a'", "22:31", "22:33"},
 		{"folded block", " >\n                self.name.startWith('a')", "22:27", "22:36"},
 		{"literal block second line", " |\n                self.replicas > 0 &&\n                  self.maxReplica > 1", "23:24", "23:34"},
-		{"escape in double quotes", ` "self.name.matches(\"[a-\")"`, "21:22", "21:48"},
+		{"escape in double quotes", ` "self.name.matches(\"[a-\")"`, "21:40", "21:47"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -539,6 +546,50 @@ spec:
 				t.Errorf("Check(%s) range = %s-%s, want %s-%s", tt.name, start, end, tt.start, tt.end)
 			}
 		})
+	}
+}
+
+// TestCheckTypoAfterUnicodeLineBreak pins that a rule of two lines, broken by a
+// next line, line separator or paragraph separator, still underlines the typo
+// on its second line: the YAML parser keeps U+2028 and U+2029 in the value and
+// folds U+0085 to a space, and the character map follows it.
+func TestCheckTypoAfterUnicodeLineBreak(t *testing.T) {
+	t.Parallel()
+	const head = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            name: {type: string}
+            replicas: {type: integer}
+          x-kubernetes-validations:
+            - rule:`
+	for _, br := range []struct{ name, end string }{{"LS", "\u2028"}, {"PS", "\u2029"}, {"NEL", "\u0085"}} {
+		for _, q := range []struct{ name, open, close string }{{"plain", " ", ""}, {"double quoted", ` "`, `"`}} {
+			t.Run(br.name+" "+q.name, func(t *testing.T) {
+				t.Parallel()
+				data := []byte(head + q.open + "self.name == 'a" + br.end + "                b' && self.maxReplica > 1" + q.close + "\n")
+				got, err := check.Check(context.Background(), "f.yaml", data)
+				if err != nil || len(got) != 1 {
+					t.Fatalf("Check(%s %s) = %v, %v, want one diagnostic", br.name, q.name, got, err)
+				}
+				d := got[0]
+				if d.Start.Line != 21 || d.End.Line != 21 || d.End.Column-d.Start.Column != len("maxReplica") {
+					t.Errorf("Check(%s %s) range = %v-%v, want maxReplica on line 21", br.name, q.name, d.Start, d.End)
+				}
+			})
+		}
 	}
 }
 
@@ -614,5 +665,71 @@ func TestCheckTypoBesideBrokenCharacter(t *testing.T) {
 				t.Errorf("Check(%s) = %d typo and %d broken diagnostics, want 1 and %d: %v", tt.name, typo, broken, wantBroken, got)
 			}
 		})
+	}
+}
+
+func TestCheckUnicodeLineEnds(t *testing.T) {
+	t.Parallel()
+	const crd = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas: {type: integer}
+                ports:
+                  type: array
+                  items: {type: string}
+                  x-kubernetes-validations:
+                    - rule: self.all(a, self.all(b, a == b || a != b))
+              x-kubernetes-validations:
+                - rule: self.replicas > 0 && self.maxReplica > 1
+                  messageExpression: "'replicas is ' + string(self.replicas)"
+                - rule: self.replicas > 0
+                  messageExpression: "self.ports.all(a, self.ports.all(b, a != b)) ? 'x' : 'y'"
+`
+	for _, tt := range []struct{ name, head string }{
+		{"one comment", "# a comment\n"},
+		{"separators", "# a comment\n---\n# two\n---\n"},
+	} {
+		want, err := check.Check(context.Background(), "t.yaml", []byte(tt.head+crd))
+		if err != nil || len(want) != 3 {
+			t.Fatalf("Check(%s, plain) = %v, %v, want 3 diagnostics", tt.name, want, err)
+		}
+		if last := want[2]; !strings.Contains(last.Message, "estimated cost") || last.End.Line != last.Start.Line {
+			t.Fatalf("Check(%s, plain)[2] = %v-%v %q, want a cost problem on one line", tt.name, last.Start, last.End, last.Message)
+		}
+		for _, br := range []struct{ name, text string }{{"NEL", "\u0085"}, {"LS", "\u2028"}, {"PS", "\u2029"}} {
+			t.Run(tt.name+" "+br.name, func(t *testing.T) {
+				t.Parallel()
+				head := strings.ReplaceAll(tt.head, "\n", br.text)
+				got, err := check.Check(context.Background(), "t.yaml", []byte(head+crd))
+				if err != nil {
+					t.Fatalf("Check(%s %s) error = %v", tt.name, br.name, err)
+				}
+				// Each line end of head counts as one line, as for plain line feeds.
+				if len(got) != len(want) {
+					t.Fatalf("Check(%s %s) = %d diagnostics %v, want %d", tt.name, br.name, len(got), got, len(want))
+				}
+				for i, d := range got {
+					if d.Start != want[i].Start || d.End != want[i].End || d.Message != want[i].Message {
+						t.Errorf("Check(%s %s)[%d] = %v-%v %q, want %v-%v %q", tt.name, br.name, i, d.Start, d.End, d.Message, want[i].Start, want[i].End, want[i].Message)
+					}
+				}
+			})
+		}
 	}
 }

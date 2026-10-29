@@ -21,8 +21,11 @@ func (a *Assistant) Suggest(doc *Document, start, end extract.Position) (string,
 	if !ok {
 		return "", false
 	}
-	a = a.forExpr(doc, s.expr)
-	to := end.Column - 1 - s.base
+	a, ok = a.forExpr(doc, s.expr)
+	if !ok {
+		return "", false
+	}
+	to := s.column(end)
 	if s.col >= to || to > len(s.line) || inString(s.line, s.col) {
 		return "", false
 	}
@@ -42,7 +45,7 @@ func (a *Assistant) Suggest(doc *Document, start, end extract.Position) (string,
 			return "", false
 		}
 		vars := a.scope(doc, s.expr)
-		recv := resolve(vars, chain)
+		recv := a.resolve(vars, chain)
 		var items []Item
 		switch {
 		case called:
@@ -50,7 +53,7 @@ func (a *Assistant) Suggest(doc *Document, start, end extract.Position) (string,
 				items = a.namespaced(ns)
 			}
 			if items == nil && recv.found {
-				items = a.members(recv.known, recv.optional, recv.celType)
+				items = a.members(recv.known, recv.optional, recv.celType, false)
 			}
 		case recv.found && recv.known != nil:
 			for _, n := range recv.known.fieldNames() {

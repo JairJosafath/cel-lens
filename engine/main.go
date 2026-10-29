@@ -14,10 +14,11 @@
 //		flags are those VS Code's language client passes; stdio is the
 //		only transport.
 //
-//	check [--format text|json] [--kube-version <1.x>] <paths...>
+//	check [--format text|json] [--kube-version <1.x>] [--experimental name,name] <paths...>
 //		Check the CEL in Kubernetes YAML files and folders (folders are
 //		searched for .yaml and .yml files) and print each problem, as the
-//		API server of the chosen Kubernetes version would.
+//		API server of the chosen Kubernetes version would. Experimental
+//		features are off unless --experimental names them.
 //
 // The flags are:
 //
@@ -47,6 +48,7 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/scan"
 	"github.com/JairJosafath/cel-lens/engine/internal/stdio"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -118,13 +120,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return exitOK
 }
 
-const checkHelp = `Usage: %s check [--format text|json] [--kube-version <1.x>] <paths...>
+const checkHelp = `Usage: %s check [--format text|json] [--kube-version <1.x>] [--experimental name,name] <paths...>
 
 Check the CEL in Kubernetes YAML files and folders, the way the API server
 does. By default the results match Kubernetes %s; --kube-version picks the
 version your cluster runs (supported: %s). Folders are searched for .yaml and .yml files;
 the CustomResourceDefinitions among them type the params of policies. Each problem
-is printed as file:line:col: severity: message. Exit 0: no errors; 1: errors
+is printed as file:line:col: severity: message. Experimental features are off
+until --experimental lists them (known: %s). Exit 0: no errors; 1: errors
 found; 2: usage or read error; 130: interrupted.
 
 Flags may come before, between or after the paths.
@@ -141,10 +144,11 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	flags.SetOutput(io.Discard)
 	format := flags.String("format", string(scan.Text), "output format: text or json")
 	kube := flags.String("kube-version", kubeversion.Default().String(), "Kubernetes version to match: "+kubeversion.Range())
+	experimental := flags.String("experimental", "", "experimental features to turn on, separated by commas: "+knownFeatures())
 	paths, err := parseInterspersed(flags, args)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
-		fmt.Fprintf(stdout, checkHelp, name, kubeversion.Default(), kubeversion.Range())
+		fmt.Fprintf(stdout, checkHelp, name, kubeversion.Default(), kubeversion.Range(), knownFeatures())
 		flags.SetOutput(stdout)
 		flags.PrintDefaults()
 		return exitOK
@@ -160,7 +164,11 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "%s check: --kube-version: %v\nRun '%s check --help' for usage.\n", name, err, name)
 		return exitUsage
 	}
-	found, err := scan.Run(ctx, paths, scan.Format(*format), stdout, check.WithVersion(kv))
+	on, unknown := feature.Parse(strings.Split(*experimental, ","))
+	if w := feature.Warning(unknown); w != "" {
+		fmt.Fprintf(stderr, "%s check: warning: --experimental: %s\n", name, w)
+	}
+	found, err := scan.Run(ctx, paths, scan.Format(*format), stdout, check.WithVersion(kv), check.WithFeatures(on))
 	switch {
 	case errors.Is(err, scan.ErrFormat):
 		fmt.Fprintf(stderr, "%s check: %v\nRun '%s check --help' for usage.\n", name, err, name)
@@ -177,6 +185,15 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return exitFail
 	}
 	return exitOK
+}
+
+// knownFeatures returns the names of the experimental features, separated by commas.
+func knownFeatures() string {
+	var names []string
+	for _, f := range feature.Known() {
+		names = append(names, string(f))
+	}
+	return strings.Join(names, ", ")
 }
 
 // parseInterspersed parses flags that may come before, between and after the

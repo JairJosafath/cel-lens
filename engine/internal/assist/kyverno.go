@@ -48,11 +48,11 @@ func kyvernoVariable(name, typ string) variable {
 	v := variable{name: name, typeName: typ, celType: typ}
 	switch name {
 	case "object":
-		v.desc, v.schema, v.celType = "The object being admitted; null on DELETE.", unknownType(), ""
+		v.desc, v.schema, v.celType = "The object being admitted; null on DELETE.", unknownType(reasonUnknownKind), ""
 	case "oldObject":
-		v.desc, v.schema, v.celType = "The existing object; null on CREATE.", unknownType(), ""
+		v.desc, v.schema, v.celType = "The existing object; null on CREATE.", unknownType(reasonUnknownKind), ""
 	case "namespaceObject":
-		v.desc, v.schema, v.celType = "The namespace the object belongs to; null for cluster-scoped objects.", unknownType(), ""
+		v.desc, v.schema, v.celType = "The namespace the object belongs to; null for cluster-scoped objects.", unknownType(reasonOpenSchema), ""
 	case "request":
 		v.desc, v.schema, v.celType = "The attributes of the admission request.", requestType(true), ""
 	case "variables":
@@ -85,16 +85,16 @@ func kyvernoVariable(name, typ string) variable {
 // them, as for a ValidatingAdmissionPolicy.
 func (a *Assistant) kyvernoScope(root map[string]any, e extract.Expression) []variable {
 	spec, _ := root["spec"].(map[string]any)
-	kinds, typed := matchedKinds(spec)
+	kinds := matchedKinds(spec)
 	var vars []variable
 	for _, v := range a.vars {
-		switch {
-		case v.name == "variables":
+		switch v.name {
+		case "variables":
 			if strings.HasPrefix(e.FieldPath, "spec.matchConditions[") {
 				continue
 			}
 			v.schema = variablesType(spec, e)
-		case typed && (v.name == "object" || v.name == "oldObject"):
+		case "object", "oldObject":
 			v.typeName, v.schema = kinds.name, kinds.schema
 		}
 		vars = append(vars, v)
@@ -124,7 +124,7 @@ func variablesType(spec map[string]any, e extract.Expression) schema {
 		}
 		if m, ok := item.(map[string]any); ok {
 			if name, ok := m["name"].(string); ok {
-				props[name] = map[string]any{"description": fmt.Sprintf("Policy variable %s, defined in spec.variables.", name), "x-kubernetes-preserve-unknown-fields": true}
+				props[name] = map[string]any{"description": fmt.Sprintf("Policy variable %s, defined in spec.variables.", name), "x-kubernetes-preserve-unknown-fields": true, dynKey: string(reasonVariable)}
 			}
 		}
 	}

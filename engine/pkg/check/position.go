@@ -10,53 +10,30 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
-// splitLines splits data into lines of runes without their line endings. A
-// line ends at a line feed, a carriage return, a carriage return and line feed
-// together, as the YAML parser counts lines and as editors show them.
-func splitLines(data []byte) [][]rune {
-	lines := [][]rune{{}}
-	text := string(extract.Text(data))
-	for i, c := range text {
-		switch {
-		case c == '\n' && i > 0 && text[i-1] == '\r':
-		case isBreak(c):
-			lines = append(lines, []rune{})
-		default:
-			lines[len(lines)-1] = append(lines[len(lines)-1], c)
-		}
-	}
-	return lines
-}
-
-// isBreak reports whether c ends a line.
-func isBreak(c rune) bool {
-	return c == '\n' || c == '\r'
-}
-
 // spans parses expressions to find where the nodes of their syntax trees lie.
-// The positions do not depend on declarations, so env has none. It parses each
-// text once, however many problems the expression has. env must be set; it is
-// not safe for concurrent use.
+// The positions do not depend on declarations, so env has none. It keeps the
+// tree of the last text only, so it parses a text once as long as the calls for
+// it follow each other, however many problems the expression has, and uses
+// constant memory. env must be set; it is not safe for concurrent use.
 type spans struct {
 	env    *cel.Env
-	parsed map[string]*ast.AST // nil for a text that does not parse
-	parses int                 // how many times env parsed
+	text   string   // the text last parsed, valid when parsed is true
+	tree   *ast.AST // nil for a text that does not parse
+	parsed bool
+	parses int // how many times env parsed
 }
 
 // parse returns the syntax tree of text, or nil if it does not parse.
 func (s *spans) parse(text string) *ast.AST {
-	if a, ok := s.parsed[text]; ok {
-		return a
+	if s.parsed && s.text == text {
+		return s.tree
 	}
 	var tree *ast.AST
 	if parsed, iss := s.env.Parse(text); iss.Err() == nil {
 		tree = parsed.NativeRep()
 	}
 	s.parses++
-	if s.parsed == nil {
-		s.parsed = map[string]*ast.AST{}
-	}
-	s.parsed[text] = tree
+	s.text, s.tree, s.parsed = text, tree, true
 	return tree
 }
 
@@ -69,6 +46,9 @@ func (s *spans) parse(text string) *ast.AST {
 // expression.
 func locate(parsed *ast.AST, lines [][]rune, e extract.Expression, line, col int) (start, end extract.Position, ok bool) {
 	text := []rune(e.Text)
+	if e.Chars != nil {
+		return locateChars(parsed, text, e.Chars, line, col)
+	}
 	rows := strings.Split(e.Text, "\n")
 	lead := len(e.Text) - len(strings.TrimLeft(e.Text, "\n"))
 	if line-1 < lead || line-1 >= len(rows) || col > len([]rune(rows[line-1])) {
@@ -111,6 +91,34 @@ func locate(parsed *ast.AST, lines [][]rune, e extract.Expression, line, col int
 	}
 	end, ok = at(to)
 	return start, end, ok
+}
+
+// locateChars is locate for an expression with a map from its characters to
+// the file, see extract.Expression.Chars.
+func locateChars(parsed *ast.AST, text []rune, chars []extract.Range, line, col int) (start, end extract.Position, ok bool) {
+	rows := strings.Split(string(text), "\n")
+	if line < 1 || line > len(rows) || col > len([]rune(rows[line-1])) || len(chars) != len(text) {
+		return start, end, false
+	}
+	off := col
+	for _, r := range rows[:line-1] {
+		off += len([]rune(r)) + 1
+	}
+	if off > len(text) || len(chars) == 0 {
+		return start, end, false
+	}
+	if off == len(text) {
+		// cel-go points just past the end, as for an incomplete rule.
+		last := chars[len(chars)-1].End
+		return last, extract.Position{Line: last.Line, Column: last.Column + 1}, true
+	}
+	from, to := off, off+1
+	if parsed != nil {
+		if f, t, found := nodeSpan(parsed, text, off); found && t > f && t <= len(text) {
+			from, to = f, t
+		}
+	}
+	return chars[from].Start, chars[to-1].End, true
 }
 
 // nodeSpan finds the part of text that the node at offset off in a covers, as

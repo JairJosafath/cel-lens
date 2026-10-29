@@ -497,20 +497,25 @@ func TestFixLineEnding(t *testing.T) {
 		name string
 		data string
 		eol  string
+		bad  bool // the YAML is broken, so Check also returns an error
 	}{
-		{"UTF-8 LF", text, "\n"},
-		{"UTF-8 CRLF", crlf, "\r\n"},
-		{"UTF-16LE LF", utf16le(units(text)...), "\n"},
-		{"UTF-16LE CRLF", utf16le(units(crlf)...), "\r\n"},
-		{"UTF-16BE LF", utf16be(units(text)...), "\n"},
-		{"UTF-16BE CRLF", utf16be(units(crlf)...), "\r\n"},
+		{"UTF-8 LF", text, "\n", false},
+		{"UTF-8 CRLF", crlf, "\r\n", false},
+		{"UTF-16LE LF", utf16le(units(text)...), "\n", false},
+		{"UTF-16LE CRLF", utf16le(units(crlf)...), "\r\n", false},
+		{"UTF-16BE LF", utf16be(units(text)...), "\n", false},
+		{"UTF-16BE CRLF", utf16be(units(crlf)...), "\r\n", false},
+		{"UTF-16LE LF, lone surrogate", utf16le(units(text+"---\na: ", 0xdc00, '\n')...), "\n", true},
+		{"UTF-16LE CRLF, lone surrogate", utf16le(units(crlf+"---\r\na: ", 0xdc00, '\r', '\n')...), "\r\n", true},
+		{"UTF-16BE LF, lone surrogate", utf16be(units(text+"---\na: ", 0xdc00, '\n')...), "\n", true},
+		{"UTF-16BE CRLF, lone surrogate", utf16be(units(crlf+"---\r\na: ", 0xdc00, '\r', '\n')...), "\r\n", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := check.Check(context.Background(), "crd.yaml", []byte(tt.data))
-			if err != nil {
-				t.Fatalf("Check(%s) error = %v", tt.name, err)
+			if (err != nil) != tt.bad {
+				t.Fatalf("Check(%s) error = %v, want an error only for a broken character", tt.name, err)
 			}
 			var inserted []string
 			for _, d := range got {

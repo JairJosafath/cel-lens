@@ -25,7 +25,21 @@ type Variable struct {
 	// Schema describes Type as an OpenAPI schema, in the form YAML decodes a CRD's
 	// schema to, for the fields and elements a reader can reach.
 	Schema map[string]any
+	// Dyn is why Type is dyn, one of the Dyn constants, and "" when it is not.
+	Dyn string
 }
+
+// The reasons a Variable is dyn.
+const (
+	// DynResult: the API server makes the type of the result dyn, as for an object.
+	DynResult = "result-dyn"
+	// DynUncompiled: the expression does not compile, so it has no type.
+	DynUncompiled = "uncompiled"
+	// DynKindsDiffer: the kinds the policy matches give the expression different types.
+	DynKindsDiffer = "kinds-differ"
+	// DynInput: the expression is already dyn, because it reads a value of unknown type.
+	DynInput = "input-dyn"
+)
 
 // VariableTypes returns the variables of the ValidatingAdmissionPolicy or
 // MutatingAdmissionPolicy in root, a decoded YAML document, in the order of
@@ -63,7 +77,7 @@ func VariableTypes(ctx context.Context, root map[string]any, opts ...Option) ([]
 	if len(p.Spec.Variables) == 0 {
 		return nil, nil
 	}
-	r := reporter{version: set.version, crds: set.crds}
+	r := reporter{version: set.version, crds: set.typingCRDs()}
 	var perKind [][]*celgo.Type
 	if p.Spec.MatchConstraints != nil {
 		rules := make([]matchkind.Rule, len(p.Spec.MatchConstraints.ResourceRules))
@@ -98,12 +112,21 @@ func VariableTypes(ctx context.Context, root map[string]any, opts ...Option) ([]
 			return nil, err
 		}
 		t := varType(perKind[0][i])
+		why := ""
+		switch {
+		case perKind[0][i] == nil:
+			why = DynUncompiled
+		case perKind[0][i].Kind() == celgo.DynKind:
+			why = DynInput
+		case t.IsExactType(celgo.DynType):
+			why = DynResult
+		}
 		for _, other := range perKind[1:] {
 			if !t.IsExactType(varType(other[i])) {
-				t = celgo.DynType
+				t, why = celgo.DynType, DynKindsDiffer
 			}
 		}
-		out[i] = Variable{Name: v.Name, Expression: v.Expression, Type: t.String(), Schema: typeSchema(t)}
+		out[i] = Variable{Name: v.Name, Expression: v.Expression, Type: t.String(), Schema: typeSchema(t), Dyn: why}
 	}
 	return out, nil
 }

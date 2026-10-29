@@ -1,0 +1,2 @@
+Source: https://github.com/kubernetes/website/blob/6d730bb15e1650ccfa389389edd8236b606a4d0a/content/en/examples/validatingadmissionpolicy/failure-policy-ignore.yaml
+Licence: CC-BY-4.0 (https://github.com/kubernetes/website/blob/6d730bb15e1650ccfa389389edd8236b606a4d0a/LICENSE)

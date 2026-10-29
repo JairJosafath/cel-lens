@@ -85,6 +85,19 @@ func Documents(ctx context.Context, file string, data []byte) ([]Document, []*Sy
 				index++
 				continue
 			}
+			// The documents decoded before the error are sound. Go on from the
+			// separator after the last of them, so the steps below look at the
+			// few documents near the error, not at the whole part again. That
+			// is only safe when the text up to the separator holds nothing but
+			// that document.
+			if len(docs) > startDocs {
+				last := docs[len(docs)-1].Node.Line
+				if next, ok := nextSeparator(seps, last+1); ok && next.offset < end &&
+					lastAlone(src, seps, offset, last, next.offset) {
+					offset, shift = next.offset, next.line-1
+					break
+				}
+			}
 			se := syntaxError(file, err, src, offset, end, shift)
 			// The parser reads ahead, so a bad character in a later document
 			// fails this one, with a line that does not tell where. Parse again
@@ -269,6 +282,29 @@ func nextSeparator(seps []separator, line int) (separator, bool) {
 		}
 	}
 	return separator{}, false
+}
+
+// lastAlone reports whether the document that starts on line last (counted from
+// the start of the file) is the only one in data[offset:stop], and parses
+// there. The text is read from the "---" line the document starts at, if any,
+// so it is short; text such as a "..." marker followed by a broken line, which
+// the next "---" would hide, makes it report false.
+func lastAlone(src source, seps []separator, offset, last, stop int) bool {
+	from := offset
+	for _, s := range seps {
+		if s.line > last {
+			break
+		}
+		if s.offset > from {
+			from = s.offset
+		}
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(src.part(from, stop)))
+	var node yaml.Node
+	if dec.Decode(&node) != nil {
+		return false
+	}
+	return errors.Is(dec.Decode(&node), io.EOF)
 }
 
 // lastParsing returns the last separator of seps in data[offset:end], past the

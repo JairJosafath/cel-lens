@@ -83,3 +83,32 @@ func TestNoFactoryAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTypeSourcesDocument(t *testing.T) {
+	t.Parallel()
+	if s := readFile(t, "README.md"); !strings.Contains(s, "(docs/type-sources.md)") {
+		t.Error("README.md does not link docs/type-sources.md")
+	}
+	s := readFile(t, "docs/type-sources.md")
+	for _, want := range []string{
+		"Only the YAML document an expression sits in decides its types",
+		"`---`",
+		"### CustomResourceDefinition",
+		"### ValidatingAdmissionPolicy",
+		"### MutatingAdmissionPolicy",
+		"### ValidatingWebhookConfiguration",
+		"### ValidatingPolicy",
+		"`paramKind`",
+		"`namespaceObject`",
+		"`authorizer`",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("docs/type-sources.md lacks %q", want)
+		}
+	}
+	for i, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "| ") && !strings.HasPrefix(line, "| Variable") && strings.Count(line, "|") != 6 {
+			t.Errorf("docs/type-sources.md:%d: table row has %d cells, want 5", i+1, strings.Count(line, "|")-1)
+		}
+	}
+}

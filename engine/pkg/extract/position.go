@@ -7,15 +7,50 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// splitLines splits data into lines of runes without their line endings.
-func splitLines(data []byte) [][]rune {
-	text := strings.ReplaceAll(string(Text(data)), "\r\n", "\n")
-	parts := strings.Split(text, "\n")
-	lines := make([][]rune, len(parts))
-	for i, p := range parts {
-		lines[i] = []rune(p)
+// SplitLines splits data into lines of runes without their line ends. A line
+// ends at a line feed, a carriage return, a carriage return and line feed
+// together, or a next line (U+0085), line separator (U+2028) or paragraph
+// separator (U+2029) character, as the YAML parser counts lines. The result
+// always has at least one line.
+func SplitLines(data []byte) [][]rune {
+	lines := [][]rune{{}}
+	text := string(Text(data))
+	for i, c := range text {
+		switch {
+		case c == '\n' && i > 0 && text[i-1] == '\r':
+		case IsBreak(c):
+			lines = append(lines, []rune{})
+		default:
+			lines[len(lines)-1] = append(lines[len(lines)-1], c)
+		}
 	}
 	return lines
+}
+
+// lineBreaks returns, for each line of SplitLines(data), the line break that
+// ends it as the YAML parser reads it into a folded scalar: U+2028 and U+2029
+// stay as they are, every other break (including U+0085) is a line feed. The
+// last line has none and gets a line feed.
+func lineBreaks(data []byte) []rune {
+	breaks := []rune{}
+	text := string(Text(data))
+	for i, c := range text {
+		switch {
+		case c == '\n' && i > 0 && text[i-1] == '\r':
+		case c == 0x2028 || c == 0x2029:
+			breaks = append(breaks, c)
+		case IsBreak(c):
+			breaks = append(breaks, '\n')
+		}
+	}
+	return append(breaks, '\n')
+}
+
+// IsBreak reports whether c ends a line as the YAML parser counts lines: a line
+// feed, a carriage return, or a next line, line separator or paragraph
+// separator character.
+func IsBreak(c rune) bool {
+	return c == '\n' || c == '\r' || c == 0x85 || c == 0x2028 || c == 0x2029
 }
 
 // span finds the source range of the text of scalar n, a mapping value whose

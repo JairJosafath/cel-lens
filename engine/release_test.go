@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -170,30 +171,105 @@ func copyTree(src, dst string) error {
 }
 
 // TestChangelogHeadings checks that every released section of CHANGELOG.md has
-// a heading of the form "## [X.Y.Z] - YYYY-MM-DD" with a real calendar date.
+// a heading of the form "## [X.Y.Z] - YYYY-MM-DD" with a real calendar date,
+// that each has a "[X.Y.Z]:" link definition, and that "[Unreleased]:" compares
+// the newest release to HEAD.
 func TestChangelogHeadings(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile("CHANGELOG.md")
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, p := range changelogProblems(string(data)) {
+		t.Error(p)
+	}
+}
+
+// TestChangelogProblems checks that changelogProblems reports a missing or wrong version
+// link and a stale [Unreleased] link.
+func TestChangelogProblems(t *testing.T) {
+	t.Parallel()
+	const good = "## [Unreleased]\n\n## [1.1.0] - 2026-01-02\n\n## [1.0.0] - 2026-01-01\n\n" +
+		"[Unreleased]: ../../compare/v1.1.0...HEAD\n[1.1.0]: ../../compare/v1.0.0...v1.1.0\n[1.0.0]: ../../releases/tag/v1.0.0\n"
+	tests := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"valid", good, 0},
+		{"missing version link", strings.Replace(good, "[1.1.0]: ../../compare/v1.0.0...v1.1.0\n", "", 1), 1},
+		{"stale unreleased link", strings.Replace(good, "v1.1.0...HEAD", "v1.0.0...HEAD", 1), 1},
+		{"unreleased not to HEAD", strings.Replace(good, "v1.1.0...HEAD", "v1.1.0...v1.1.0", 1), 1},
+		{"missing unreleased link", strings.Replace(good, "[Unreleased]: ../../compare/v1.1.0...HEAD\n", "", 1), 1},
+		{"copied compare link", strings.Replace(good, "[1.1.0]: ../../compare/v1.0.0...v1.1.0", "[1.1.0]: ../../compare/v0.9.0...v1.0.0", 1), 1},
+		{"compare ends at another version", strings.Replace(good, "v1.0.0...v1.1.0", "v1.0.0...v1.2.0", 1), 1},
+		{"oldest compares", strings.Replace(good, "../../releases/tag/v1.0.0", "../../compare/v0.9.0...v1.0.0", 1), 1},
+		{"no releases", "## [Unreleased]\n", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := changelogProblems(tt.in); len(got) != tt.want {
+				t.Errorf("changelogProblems(%s) = %q, want %d problems", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// changelogProblems returns one message for each problem in the changelog text:
+// a malformed heading or date, a released version without a link definition or whose link does not compare
+// the previous release to it (the oldest links to its release tag), or
+// an [Unreleased] link that does not compare the newest release to HEAD.
+func changelogProblems(text string) []string {
 	heading := regexp.MustCompile(`^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})$`)
-	released := 0
-	for i, line := range strings.Split(string(data), "\n") {
+	link := regexp.MustCompile(`^\[([^\]]+)\]: (\S+)$`)
+	links := map[string]string{}
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		if m := link.FindStringSubmatch(line); m != nil {
+			links[m[1]] = m[2]
+		}
+	}
+	var problems []string
+	var versions []string
+	for i, line := range lines {
 		if !strings.HasPrefix(line, "## [") || strings.HasPrefix(line, "## [Unreleased]") {
 			continue
 		}
-		released++
 		m := heading.FindStringSubmatch(line)
 		if m == nil {
-			t.Errorf("CHANGELOG.md:%d: heading %q is not \"## [X.Y.Z] - YYYY-MM-DD\"", i+1, line)
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: heading %q is not \"## [X.Y.Z] - YYYY-MM-DD\"", i+1, line))
 			continue
 		}
+		versions = append(versions, m[1])
 		if _, err := time.Parse(time.DateOnly, m[2]); err != nil {
-			t.Errorf("CHANGELOG.md:%d: date %q of %s: %v", i+1, m[2], m[1], err)
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: date %q of %s: %v", i+1, m[2], m[1], err))
+		}
+		if _, ok := links[m[1]]; !ok {
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: no \"[%s]:\" link definition for the heading", i+1, m[1]))
 		}
 	}
-	if released == 0 {
-		t.Error("CHANGELOG.md has no released sections")
+	if len(versions) == 0 {
+		return append(problems, "CHANGELOG.md has no released sections")
 	}
+	for i, v := range versions {
+		got, ok := links[v]
+		if !ok {
+			continue
+		}
+		want := "../../releases/tag/v" + v
+		if i+1 < len(versions) {
+			want = "../../compare/v" + versions[i+1] + "...v" + v
+		}
+		if got != want {
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md: [%s]: %s, want %s", v, got, want))
+		}
+	}
+	want := "../../compare/v" + versions[0] + "...HEAD"
+	if got, ok := links["Unreleased"]; !ok {
+		problems = append(problems, "CHANGELOG.md has no \"[Unreleased]:\" link definition, want "+want)
+	} else if got != want {
+		problems = append(problems, fmt.Sprintf("CHANGELOG.md: [Unreleased]: %s, want %s", got, want))
+	}
+	return problems
 }

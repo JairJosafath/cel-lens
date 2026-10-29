@@ -42,7 +42,8 @@ func (t *Tree) copyNode(n, parent *yaml.Node, done map[*yaml.Node]*yaml.Node) *y
 }
 
 // Remove drops the field f, found in the tree, from it: the entry of a mapping
-// or the item of a list; for an entry whose value is an alias, f.Node may be
+// or the item of a list, except that an item of a list of objects is replaced
+// by an empty object, so the items after it keep their indices; for an entry whose value is an alias, f.Node may be
 // that value. It reports whether f was in the tree. Dropping the
 // type of a schema would leave a schema that is not structural, which hides
 // the rules of the whole version, so the schema then gets the type its other
@@ -58,6 +59,12 @@ func (t *Tree) Remove(f Field) bool {
 	for i, c := range p.Content {
 		if c != f.Node {
 			continue
+		}
+		if p.Kind == yaml.SequenceNode && f.Expected == "an object" {
+			p.Content = slices.Clone(p.Content)
+			p.Content[i] = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Line: c.Line, Column: c.Column}
+			t.parents[p.Content[i]] = p
+			return true
 		}
 		n := 1
 		if p.Kind == yaml.MappingNode {

@@ -30,7 +30,7 @@ const deploymentRule = "{apiGroups: [apps], apiVersions: [v1], resources: [deplo
 
 func TestTypedComplete(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,15 +62,15 @@ func TestTypedComplete(t *testing.T) {
 		},
 		{
 			name: "wildcard stays dyn", doc: matching("{apiGroups: ['*'], apiVersions: [v1], resources: [pods]}", "object.spec.nodeName == ''"), needle: "object.spec", offset: len("object."),
-			wantSome: []string{"size", "all", "startsWith"},
+			wantSome: []string{"all", "exists", "filter"},
 		},
 		{
 			name: "custom resource stays dyn", doc: matching("{apiGroups: [example.com], apiVersions: [v1], resources: [widgets]}", "object.spec.size == 1"), needle: "object.spec", offset: len("object."),
-			wantSome: []string{"size", "all", "startsWith"},
+			wantSome: []string{"all", "exists", "filter"},
 		},
 		{
 			name: "subresource only stays dyn", doc: matching("{apiGroups: [apps], apiVersions: [v1], resources: [deployments/scale]}", "object.spec.size == 1"), needle: "object.spec", offset: len("object."),
-			wantSome: []string{"size", "all", "startsWith"},
+			wantSome: []string{"all", "exists", "filter"},
 		},
 	}
 	for _, tt := range tests {
@@ -100,7 +100,7 @@ func TestTypedComplete(t *testing.T) {
 
 func TestTypedHover(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ const bothRule = "{apiGroups: [apps], apiVersions: [v1], resources: [deployments
 // a kind that can't be known keeps object dyn.
 func TestSeveralKindsComplete(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestSeveralKindsComplete(t *testing.T) {
 // hover on a field says which kinds have it.
 func TestSeveralKindsHover(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func complete(t *testing.T, a *assist.Assistant, doc, after string) []string {
 // authorizer, and that oldObject has the fields of object.
 func TestPolicyVariablesComplete(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestPolicyVariablesComplete(t *testing.T) {
 // object at every level of the matched kind.
 func TestOldObjectCompletesLikeObject(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestOldObjectCompletesLikeObject(t *testing.T) {
 // can be null.
 func TestPolicyVariablesHover(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestPolicyVariablesHover(t *testing.T) {
 // the methods called on it.
 func TestRequestResourceHover(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestRequestResourceHover(t *testing.T) {
 // typed variables of a ValidatingAdmissionPolicy in each of its CEL fields.
 func TestMutatingPolicyVariables(t *testing.T) {
 	t.Parallel()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}

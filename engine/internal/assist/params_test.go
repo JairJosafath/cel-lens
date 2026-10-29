@@ -42,7 +42,7 @@ func withParamKind(paramKind, expression string) string {
 
 func paramsAssistant(t *testing.T) *assist.Assistant {
 	t.Helper()
-	a, err := assist.New(kubeversion.Default())
+	a, err := assist.New(kubeversion.Default(), allOn())
 	if err != nil {
 		t.Fatal(err)
 	}
