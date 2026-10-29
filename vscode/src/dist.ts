@@ -226,14 +226,28 @@ export function checkPinChecksums(pin: CorePin, checksums: string): void {
   }
 }
 
-/** Downloads the release's checksums.txt and checks every pinned asset against it. */
-export async function verifyPin(pin: CorePin, baseUrl: string = pin.baseUrl): Promise<void> {
-  const url = `${baseUrl}/checksums.txt`;
-  const response = await fetch(url);
+/** Fetches `url`; throws "Download of <url> failed: <reason>" on an HTTP error or no connection. */
+async function download(url: string): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+    throw new Error(
+      `Download of ${url} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause: error },
+    );
+  }
   if (!response.ok) {
     throw new Error(`Download of ${url} failed: HTTP ${String(response.status)}`);
   }
-  checkPinChecksums(pin, await response.text());
+  return response;
+}
+
+/** Downloads the release's checksums.txt and checks every pinned asset against it. */
+export async function verifyPin(pin: CorePin, baseUrl: string = pin.baseUrl): Promise<void> {
+  const url = `${baseUrl}/checksums.txt`;
+  checkPinChecksums(pin, await (await download(url)).text());
 }
 
 /**
@@ -247,11 +261,7 @@ export async function fetchCore(
   const binaries = new Map<string, Buffer>();
   for (const [target, asset] of Object.entries(pin.assets)) {
     const url = `${baseUrl}/${asset.name}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Download of ${url} failed: HTTP ${String(response.status)}`);
-    }
-    const bytes = Buffer.from(await response.arrayBuffer());
+    const bytes = Buffer.from(await (await download(url)).arrayBuffer());
     const actual = createHash('sha256').update(bytes).digest('hex');
     if (actual !== asset.sha256) {
       throw new Error(
@@ -351,6 +361,7 @@ async function installEngine(): Promise<void> {
     return;
   }
   const baseUrl = option('--base-url');
+  stdout.write(`Fetching cel-lens-core ${pin.version} from ${baseUrl ?? pin.baseUrl}\n`);
   await verifyPin(pin, baseUrl);
   const binaries = await fetchCore({ ...pin, assets: { [target]: asset } }, baseUrl);
   const bytes = binaries.get(target);

@@ -50,4 +50,12 @@ describe('planColors', () => {
     expect(planColors(policy, 'off', theme)).toEqual([]);
     expect(planColors(policy, 'cel', theme)).not.toEqual([]);
   });
+
+  it.each(THEMES)('colors a Kyverno policy on %s only with the kyverno feature', (theme) => {
+    const policy =
+      'apiVersion: policies.kyverno.io/v1\nkind: ValidatingPolicy\nspec:\n  validations:\n    - expression: object.a < 3\n';
+    expect(planColors(policy, 'cel', theme)).toEqual([]);
+    expect(planColors(policy, 'cel', theme, undefined, { kyverno: false })).toEqual([]);
+    expect(planColors(policy, 'cel', theme, undefined, { kyverno: true })).not.toEqual([]);
+  });
 });

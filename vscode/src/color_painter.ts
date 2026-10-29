@@ -13,6 +13,7 @@ import {
 } from './color_style';
 import type { LineWindow } from './cel_ranges';
 import { planColors } from './color_plan';
+import { EXPERIMENTAL_SETTING, KYVERNO_FEATURE, parseExperimental } from './experimental';
 
 /** How long the document must rest before it is painted again. */
 export const REPAINT_DELAY_MS = 150;
@@ -113,6 +114,7 @@ export class ColorPainter implements vscode.Disposable {
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (
+          event.affectsConfiguration(`cel-lens.${EXPERIMENTAL_SETTING}`) ||
           event.affectsConfiguration(COLOR_STYLE_SETTING_NAME) ||
           event.affectsConfiguration(LEGACY_COLOR_STYLE_SETTING_NAME)
         ) {
@@ -156,7 +158,12 @@ export class ColorPainter implements vscode.Disposable {
         }
       }
     }
-    const key = `${[...styles.values()].join(',')}/${theme}`;
+    const features = {
+      kyverno: parseExperimental(
+        vscode.workspace.getConfiguration('cel-lens').get<unknown>(EXPERIMENTAL_SETTING, []),
+      ).includes(KYVERNO_FEATURE),
+    };
+    const key = `${[...styles.values()].join(',')}/${theme}/${String(features.kyverno)}`;
     if (key !== this.paintedWith) {
       this.disposeTypes();
       this.paintedWith = key;
@@ -178,6 +185,7 @@ export class ColorPainter implements vscode.Disposable {
         styles.get(editor) ?? 'cel',
         theme,
         window,
+        features,
       )) {
         if (!this.types.has(color)) {
           this.types.set(color, vscode.window.createTextEditorDecorationType({ color }));

@@ -1,5 +1,11 @@
 import { scanCel, type CelTokenKind } from './cel_lexer';
-import { findCel, offsetMap, type DocumentPosition, type LineWindow } from './cel_ranges';
+import {
+  findCel,
+  offsetMap,
+  type CelFeatures,
+  type DocumentPosition,
+  type LineWindow,
+} from './cel_ranges';
 
 export interface CelToken {
   kind: CelTokenKind;
@@ -42,15 +48,17 @@ function locator(starts: number[]): (offset: number) => DocumentPosition {
 /**
  * Calls `visit` for every token of every CEL expression in a YAML document, in
  * document order and document positions, without collecting them. With a
- * `window`, only the expressions that overlap its lines are tokenized.
+ * `window`, only the expressions that overlap its lines are tokenized. `features` tells which
+ * experimental features count.
  */
 export function forEachCelToken(
   text: string,
   visit: (kind: CelTokenKind, start: DocumentPosition, end: DocumentPosition) => void,
   window?: LineWindow,
+  features?: CelFeatures,
 ): void {
   const positionAt = locator(lineStarts(text));
-  for (const range of findCel(text, window)) {
+  for (const range of findCel(text, window, features)) {
     const [only] = range.segments;
     if (only?.copied === true && range.segments.length === 1) {
       // One copied run sits on one line, so a token's column is its index plus the run's.

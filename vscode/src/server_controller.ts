@@ -13,6 +13,7 @@ import {
 
 import { RELEASES_PAGE_URL } from './core_releases';
 import { EngineErrorHandler } from './engine_error_handler';
+import { EXPERIMENTAL_SETTING, parseExperimental } from './experimental';
 import {
   KUBERNETES_VERSION_SETTING,
   configurationParams,
@@ -28,6 +29,12 @@ import { resolveServer, type ServerSource } from './server_path';
 
 function readVersionSetting(): string {
   return vscode.workspace.getConfiguration('cel-lens').get<string>(KUBERNETES_VERSION_SETTING, '');
+}
+
+function readExperimentalSetting(): string[] {
+  return parseExperimental(
+    vscode.workspace.getConfiguration('cel-lens').get<unknown>(EXPERIMENTAL_SETTING, []),
+  );
 }
 
 async function isFile(path: string): Promise<boolean> {
@@ -70,6 +77,8 @@ export class ServerController implements vscode.Disposable {
   private info: VersionInfo | undefined;
   /** The version the running server was last told; empty means its default. */
   private sentVersion = '';
+  /** The experimental list the running server was last told, as one string. */
+  private sentExperimental = '';
 
   constructor(
     private readonly log: vscode.LogOutputChannel,
@@ -78,17 +87,19 @@ export class ServerController implements vscode.Disposable {
   ) {}
 
   /**
-   * Tells the running server the `cel-lens.kubernetesVersion` setting, without
-   * restarting it. Queued behind a start or restart in progress, so a change
+   * Tells the running server the `cel-lens.kubernetesVersion` and `cel-lens.experimental`
+   * settings, without restarting it. Queued behind a start or restart in progress, so a change
    * made while the server starts still arrives. Never rejects.
    */
-  sendVersionSetting(): Promise<void> {
-    return this.enqueue(() => this.sendVersionSettingNow());
+  sendSettings(): Promise<void> {
+    return this.enqueue(() => this.sendSettingsNow());
   }
 
-  private async sendVersionSettingNow(): Promise<void> {
+  private async sendSettingsNow(): Promise<void> {
     const info = this.info;
-    const options = serverOptions(readVersionSetting(), info);
+    const experimental = readExperimentalSetting();
+    const options = serverOptions(readVersionSetting(), info, experimental);
+    const experimentalKey = experimental.join(',');
     try {
       if (this.client === undefined) {
         return;
@@ -96,7 +107,10 @@ export class ServerController implements vscode.Disposable {
       if (info?.supported.length === 0) {
         // The server does not say which versions it accepts, only the one it uses after
         // `initialize`, so a change restarts it and reads that.
-        if (options.kubernetesVersion !== this.sentVersion) {
+        if (
+          options.kubernetesVersion !== this.sentVersion ||
+          experimentalKey !== this.sentExperimental
+        ) {
           await this.stopNow();
           await this.startNow();
         }
@@ -104,12 +118,13 @@ export class ServerController implements vscode.Disposable {
       }
       await this.client.sendNotification(
         'workspace/didChangeConfiguration',
-        configurationParams(readVersionSetting(), info),
+        configurationParams(readVersionSetting(), info, experimental),
       );
       this.sentVersion = options.kubernetesVersion;
+      this.sentExperimental = experimentalKey;
       this.onState({ kind: 'running', info });
     } catch (error) {
-      this.log.error(`Could not tell the engine the Kubernetes version: ${String(error)}`);
+      this.log.error(`Could not tell the engine the settings: ${String(error)}`);
     }
   }
 
@@ -181,8 +196,9 @@ export class ServerController implements vscode.Disposable {
     this.log.info(
       `Starting ${server.command} ${server.args.join(' ')} (from the ${server.source})`,
     );
-    const sentOptions = serverOptions(readVersionSetting(), this.info);
+    const sentOptions = serverOptions(readVersionSetting(), this.info, readExperimentalSetting());
     this.sentVersion = sentOptions.kubernetesVersion;
+    this.sentExperimental = sentOptions.experimental.join(',');
     const trace = new StartTrace(server.command);
     let started = false;
     let shutdownReported = false;
@@ -246,10 +262,10 @@ export class ServerController implements vscode.Disposable {
       // The first start cannot know the supported versions, so it sends the raw setting;
       // once the server has reported them, correct it if the engine default replaces it.
       if (
-        serverOptions(readVersionSetting(), info).kubernetesVersion !==
+        serverOptions(readVersionSetting(), info, sentOptions.experimental).kubernetesVersion !==
         sentOptions.kubernetesVersion
       ) {
-        await this.sendVersionSettingNow();
+        await this.sendSettingsNow();
       }
     } catch (error) {
       this.onState({ kind: 'failed' });

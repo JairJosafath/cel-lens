@@ -119,6 +119,53 @@ describe('src/dist.ts fetch', { timeout: 60_000 }, () => {
     expect(again.stdout).toContain('already there');
   });
 
+  it('install logs where it fetched the engine from', async () => {
+    const installed = await run('node', [
+      'src/dist.ts',
+      'install',
+      '--bin',
+      join(directory, 'bin'),
+      '--pin',
+      join(directory, 'pin.json'),
+    ]);
+
+    expect(installed.stdout).toContain(`Fetching cel-lens-core v9.9.9 from ${baseUrl}`);
+  });
+
+  it('install fails naming the missing checksums.txt and its URL', async () => {
+    served.delete('checksums.txt');
+
+    const failure = await run('node', [
+      'src/dist.ts',
+      'install',
+      '--bin',
+      join(directory, 'bin'),
+      '--pin',
+      join(directory, 'pin.json'),
+    ]).then(
+      () => undefined,
+      (error: unknown) => error as { stderr: string },
+    );
+
+    expect(failure?.stderr).toContain(`Download of ${baseUrl}/checksums.txt failed: HTTP 404`);
+  });
+
+  it('fails naming the URL when the release cannot be reached at all', async () => {
+    await new Promise<void>((done) => {
+      server.close(() => {
+        done();
+      });
+    });
+
+    const failure = await fetchCore().then(
+      () => undefined,
+      (error: unknown) => error as { stderr: string },
+    );
+
+    expect(failure?.stderr).toContain(`Download of ${baseUrl}/checksums.txt failed:`);
+    server = createServer();
+  });
+
   it('install replaces a file in bin whose bytes are not the pinned ones', async () => {
     const bin = join(directory, 'bin');
     const install = (): Promise<{ stdout: string }> =>

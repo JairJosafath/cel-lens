@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  DidChangeConfigurationNotification,
   DidChangeTextDocumentNotification,
   DidOpenTextDocumentNotification,
   ExitNotification,
@@ -252,6 +253,27 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
     for (const link of links) {
       expect(link).toMatch(DOCS_LINK);
     }
+  });
+
+  it('shows a Kyverno diagnostic only when kyverno is in the experimental list', async () => {
+    const { uri, text } = await open('kyverno_policy.yaml');
+    const { connection } = running();
+
+    expect(await diagnosticsFor(uri, () => true)).toEqual([]);
+
+    await connection.sendNotification(DidChangeConfigurationNotification.type, {
+      settings: { ...serverOptions(''), experimental: ['kyverno'] },
+    });
+    const found = await diagnosticsFor(uri, (list) => list.length > 0);
+
+    expect(found).toMatchObject([{ source: 'cel-lens', severity: ERROR }]);
+    expect(found[0]?.range.start.line).toBe(lineOf(text, '- expression:'));
+
+    await connection.sendNotification(DidChangeConfigurationNotification.type, {
+      settings: { ...serverOptions(''), experimental: [] },
+    });
+
+    expect(await diagnosticsFor(uri, (list) => list.length === 0)).toEqual([]);
   });
 
   it('reports broken YAML where it breaks and clears the error once the text is fixed', async () => {

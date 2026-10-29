@@ -44,12 +44,13 @@ The extension carries the cel-lens engine for your platform, so there is nothing
 
 ## Settings
 
-| Setting                      | Default | What it does                                                                                                                                                                                                                               |
-| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cel-lens.colorStyle`        | `cel`   | `cel`, `classic` or `off`: the color style of the parts of a CEL expression. Change it with **cel-lens: Choose Color Style** or the status bar menu. Resource scope: user, workspace or workspace folder.                                  |
-| `cel-lens.kubernetesVersion` | `""`    | Advanced: the Kubernetes version the results match, such as `1.36`. Empty means the engine's default. The status bar shows the version the engine uses; one it refuses is logged and the engine keeps its default. May restart the engine. |
-| `cel-lens.trace.server`      | `off`   | `off`, `messages` or `verbose`: traces the protocol in the **cel-lens** output channel.                                                                                                                                                    |
-| `cel-lens.serverPath`        | `""`    | Advanced: a `cel-lens-core` binary to use instead of the bundled engine. Empty (the default) uses the bundled one. Machine scope: in a remote window (WSL, SSH, a dev container) set it on the Remote tab of Settings.                     |
+| Setting                      | Default | What it does                                                                                                                                                                                                                                                  |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cel-lens.colorStyle`        | `cel`   | `cel`, `classic` or `off`: the color style of the parts of a CEL expression. Change it with **cel-lens: Choose Color Style** or the status bar menu. Resource scope: user, workspace or workspace folder.                                                     |
+| `cel-lens.kubernetesVersion` | `""`    | Advanced: the Kubernetes version the results match, such as `1.36`. Empty means the engine's default. The status bar shows the version the engine uses; one it refuses is logged and the engine keeps its default. May restart the engine.                    |
+| `cel-lens.experimental`      | `[]`    | Advanced: the experimental features to turn on, from `kyverno`, `crd-typed-policies` and `fitting-completion`. Empty means none; see [Experimental features](#experimental-features). A name the engine does not know is ignored with one warning in the log. |
+| `cel-lens.trace.server`      | `off`   | `off`, `messages` or `verbose`: traces the protocol in the **cel-lens** output channel.                                                                                                                                                                       |
+| `cel-lens.serverPath`        | `""`    | Advanced: a `cel-lens-core` binary to use instead of the bundled engine. Empty (the default) uses the bundled one. Machine scope: in a remote window (WSL, SSH, a dev container) set it on the Remote tab of Settings.                                        |
 
 ## Supported Kubernetes versions
 
@@ -58,7 +59,26 @@ The bundled engine matches the API server's CEL environment of these Kubernetes 
 
 ## Experimental features
 
-An experimental feature is off until you name it in the `cel-lens.experimental` setting. The table of which feature is which arrives with that setting.
+Every feature is stable or experimental. A stable feature is always on. An experimental feature is off until you list its name in the `cel-lens.experimental` setting.
+
+Stable:
+
+| Feature                                          | What it does                                                                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Checks of CEL                                    | Compiles the CEL of `x-kubernetes-validations`, ValidatingAdmissionPolicy and MutatingAdmissionPolicy like the API server |
+| Language server                                  | Diagnostics, hover, completion and quick fixes                                                                            |
+| Kubernetes version                               | Results match the version in `cel-lens.kubernetesVersion`                                                                 |
+| Typed `object`, `oldObject` and policy variables | Typed from the built-in kinds a policy matches                                                                            |
+| Typed `params` of a built-in kind                | Typed from `spec.paramKind` when it names a built-in kind                                                                 |
+| Colors                                           | Colors the parts of CEL in the style of `cel-lens.colorStyle`                                                             |
+
+Experimental:
+
+| Name                 | What it does                                                                                                                                                   | Why it is experimental                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `kyverno`            | Colors, checks, hovers and completes Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`). Off, these documents get no color, diagnostic, hover or completion | Compiled with Kyverno's compiler but never run against Kyverno's engine; only `ValidatingPolicy` is read |
+| `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off                 | The workspace scan runs inside the engine's start and blocks the session while it scans                  |
+| `fitting-completion` | After a dot completion offers only what the receiver has, before a dot only the names of this kind of document, and hover says why a value is `dyn`            | Built after v0.17.1 of the engine and not yet proven on real use                                         |
 
 ## Not supported yet
 

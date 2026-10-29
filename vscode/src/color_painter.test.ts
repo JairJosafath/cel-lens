@@ -315,6 +315,22 @@ describe('ColorPainter', () => {
     expect(decorationTypes).toEqual(old);
   });
 
+  it('colors a Kyverno policy only while kyverno is in cel-lens.experimental', () => {
+    const editor = yamlEditor(
+      'apiVersion: policies.kyverno.io/v1\nkind: ValidatingPolicy\nspec:\n  validations:\n    - expression: object.a < 3\n',
+    );
+    new ColorPainter();
+    expect(colorsOf(editor)).toEqual([]);
+
+    settings.set('cel-lens.experimental', ['kyverno']);
+    changeConfiguration('cel-lens.experimental');
+    expect(colorsOf(editor)).toContain(celColors('cel', 'dark').variable);
+
+    settings.set('cel-lens.experimental', []);
+    changeConfiguration('cel-lens.experimental');
+    expect(colorsOf(editor)).toEqual([]);
+  });
+
   it('ignores other settings', () => {
     yamlEditor();
     new ColorPainter();

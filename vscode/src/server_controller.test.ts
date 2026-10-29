@@ -603,8 +603,8 @@ describe('ServerController', () => {
   });
 
   it.each([
-    ['', { kubernetesVersion: '' }],
-    ['1.35', { kubernetesVersion: '1.35' }],
+    ['', { kubernetesVersion: '', experimental: [] }],
+    ['1.35', { kubernetesVersion: '1.35', experimental: [] }],
   ])('passes the setting %j in initializationOptions as %j', async (setting, options) => {
     settings.set('cel-lens.serverPath', execPath);
     settings.set('cel-lens.kubernetesVersion', setting);
@@ -612,6 +612,40 @@ describe('ServerController', () => {
     await newController().start();
 
     expect(client.created).toMatchObject([{ options: { initializationOptions: options } }]);
+  });
+
+  it.each([
+    [undefined, []],
+    [
+      ['kyverno', ' fitting-completion ', 'kyverno', 3, ''],
+      ['kyverno', 'fitting-completion'],
+    ],
+  ])('passes the experimental setting %j in initializationOptions as %j', async (setting, list) => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.experimental', setting);
+
+    await newController().start();
+
+    expect(client.created).toMatchObject([
+      { options: { initializationOptions: { experimental: list } } },
+    ]);
+  });
+
+  it('sends the experimental list with didChangeConfiguration and does not restart', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    await controller.start();
+    settings.set('cel-lens.experimental', ['kyverno']);
+
+    await controller.sendSettings();
+
+    expect(client.notifications).toEqual([
+      {
+        method: 'workspace/didChangeConfiguration',
+        params: { settings: { kubernetesVersion: '', experimental: ['kyverno'] } },
+      },
+    ]);
+    expect(client.created).toHaveLength(1);
   });
 
   it('hands the versions in the initialize result to the listener, and clears them on stop', async () => {
@@ -660,12 +694,12 @@ describe('ServerController', () => {
     await controller.start();
     settings.set('cel-lens.kubernetesVersion', '1.36');
 
-    await controller.sendVersionSetting();
+    await controller.sendSettings();
 
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '1.36' } },
+        params: { settings: { kubernetesVersion: '1.36', experimental: [] } },
       },
     ]);
     expect(client.created).toHaveLength(1);
@@ -673,8 +707,8 @@ describe('ServerController', () => {
   });
 
   it.each([
-    ['1.99', { kubernetesVersion: '' }],
-    ['1.36', { kubernetesVersion: '1.36' }],
+    ['1.99', { kubernetesVersion: '', experimental: [] }],
+    ['1.36', { kubernetesVersion: '1.36', experimental: [] }],
   ])(
     'with setting %j, sends %j after the server reports its versions',
     async (setting, options) => {
@@ -690,11 +724,11 @@ describe('ServerController', () => {
       const controller = newController();
 
       await controller.start();
-      await controller.sendVersionSetting();
+      await controller.sendSettings();
       await controller.restart();
 
       expect(client.created.map((c) => c.options)).toMatchObject([
-        { initializationOptions: { kubernetesVersion: setting } },
+        { initializationOptions: { kubernetesVersion: setting, experimental: [] } },
         { initializationOptions: options },
       ]);
       expect(client.notifications.at(-1)).toEqual({
@@ -710,7 +744,7 @@ describe('ServerController', () => {
       [
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '' } },
+          params: { settings: { kubernetesVersion: '', experimental: [] } },
         },
       ],
     ],
@@ -742,7 +776,7 @@ describe('ServerController', () => {
     await flushMicrotasks();
     settings.set('cel-lens.kubernetesVersion', '1.36');
 
-    const sent = controller.sendVersionSetting();
+    const sent = controller.sendSettings();
     await flushMicrotasks();
     expect(client.notifications).toEqual([]);
     finishStart();
@@ -751,13 +785,13 @@ describe('ServerController', () => {
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '1.36' } },
+        params: { settings: { kubernetesVersion: '1.36', experimental: [] } },
       },
     ]);
   });
 
   it('sends nothing when no server runs', async () => {
-    await newController().sendVersionSetting();
+    await newController().sendSettings();
 
     expect(client.notifications).toEqual([]);
   });
@@ -778,11 +812,11 @@ describe('ServerController', () => {
       await controller.start();
       settings.set('cel-lens.kubernetesVersion', next);
 
-      await controller.sendVersionSetting();
+      await controller.sendSettings();
 
       expect(client.created.map((c) => c.options)).toMatchObject([
-        { initializationOptions: { kubernetesVersion: before } },
-        { initializationOptions: { kubernetesVersion: next } },
+        { initializationOptions: { kubernetesVersion: before, experimental: [] } },
+        { initializationOptions: { kubernetesVersion: next, experimental: [] } },
       ]);
       expect(client.notifications).toEqual([]);
     });
@@ -793,7 +827,7 @@ describe('ServerController', () => {
       const controller = newController();
       await controller.start();
 
-      await controller.sendVersionSetting();
+      await controller.sendSettings();
 
       expect(client.created).toHaveLength(1);
     });

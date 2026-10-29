@@ -2,7 +2,7 @@
   "name": "cel-lens-vscode",
   "displayName": "cel-lens for VS Code",
   "description": "CEL errors, hover and completion inside Kubernetes YAML.",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "publisher": "cel-lens",
   "repository": {
     "type": "git",
@@ -102,6 +102,27 @@
             "Trace the messages without their contents.",
             "Trace the messages with their contents."
           ]
+        },
+        "cel-lens.experimental": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "kyverno",
+              "crd-typed-policies",
+              "fitting-completion"
+            ],
+            "enumDescriptions": [
+              "Colors, checks, hovers and completes Kyverno ValidatingPolicy documents; experimental because they are compiled with Kyverno's compiler but never run against Kyverno's engine.",
+              "Types the params of a custom resource from a CustomResourceDefinition found in the workspace; experimental because the workspace scan blocks the engine's start while it runs.",
+              "After a dot offers only what the receiver has, before a dot only the names of the document, and hover says why a value is dyn; experimental because it is new and not yet proven on real use."
+            ]
+          },
+          "uniqueItems": true,
+          "default": [],
+          "scope": "window",
+          "order": 4,
+          "markdownDescription": "Advanced: the experimental features to turn on. An experimental feature is off until you list it here; a name the engine does not know is ignored with one warning in the log."
         },
         "cel-lens.serverPath": {
           "type": "string",

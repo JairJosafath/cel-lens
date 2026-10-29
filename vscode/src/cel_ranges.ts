@@ -413,8 +413,19 @@ function topLevelValue(text: string, key: string): string | undefined {
   return match?.[1] ?? match?.[2] ?? match?.[3];
 }
 
+/** The experimental features that change what is read as CEL. */
+export interface CelFeatures {
+  /** Kyverno `ValidatingPolicy` documents count (the `kyverno` experimental feature). */
+  kyverno: boolean;
+}
+
 /** The CEL paths of the policy in `lines[from..to]`, if the document is one. */
-function policyPaths(lines: Line[], from: number, to: number): readonly string[] | undefined {
+function policyPaths(
+  lines: Line[],
+  from: number,
+  to: number,
+  kyverno: boolean,
+): readonly string[] | undefined {
   let kind: string | undefined;
   let apiVersion: string | undefined;
   for (let i = from; i <= to; i++) {
@@ -423,7 +434,7 @@ function policyPaths(lines: Line[], from: number, to: number): readonly string[]
     apiVersion ??= topLevelValue(text, 'apiVersion');
   }
   if (kind === 'ValidatingPolicy' && apiVersion === KYVERNO_API_VERSION) {
-    return VALIDATING_PATHS;
+    return kyverno ? VALIDATING_PATHS : undefined;
   }
   if (kind === undefined || !apiVersion?.startsWith(POLICY_GROUP)) {
     return undefined;
@@ -565,9 +576,14 @@ function scanPolicy(
  * fields of the admission policies in it, in plain, quoted and block scalars.
  * It reads the text line by line, never throws, and leaves out comments and
  * keys outside their list or policy. With a `window`, it still reads every
- * line to know the lists, but decodes only the CEL that overlaps it.
+ * line to know the lists, but decodes only the CEL that overlaps it. A Kyverno policy has
+ * no CEL unless `features.kyverno` is set.
  */
-export function findCel(text: string, window?: LineWindow): CelRange[] {
+export function findCel(
+  text: string,
+  window?: LineWindow,
+  features: CelFeatures = { kyverno: false },
+): CelRange[] {
   const lines = splitLines(text);
   const found: CelRange[] = [];
   const last = Math.min(lines.length - 1, window?.toLine ?? Infinity);
@@ -579,7 +595,7 @@ export function findCel(text: string, window?: LineWindow): CelRange[] {
     }
     const end = Math.min(index - 1, last);
     if (start <= end) {
-      const paths = policyPaths(lines, start, index - 1);
+      const paths = policyPaths(lines, start, index - 1, features.kyverno);
       if (paths === undefined) {
         scanLists(lines, start, end, window, found);
       } else {

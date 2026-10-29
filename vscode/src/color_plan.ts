@@ -1,6 +1,6 @@
 import { forEachCelToken } from './cel_tokens';
 import { celColors, type CelStyle, type ThemeKind } from './cel_styles';
-import type { DocumentPosition, LineWindow } from './cel_ranges';
+import type { CelFeatures, DocumentPosition, LineWindow } from './cel_ranges';
 import type { CelTokenKind } from './cel_lexer';
 
 /** A span of the document to paint: `end` is excluded. */
@@ -17,7 +17,7 @@ export interface ColorPaint {
 
 /**
  * What to paint where: the CEL in a YAML document, grouped by color. Parts
- * that share a color in the style share one entry. `off` gives nothing. With a
+ * that share a color in the style share one entry. `off` gives nothing. A Kyverno policy is planned only with `features.kyverno`. With a
  * `window`, only the expressions that start on its lines are planned.
  */
 export function planColors(
@@ -25,6 +25,7 @@ export function planColors(
   style: CelStyle,
   theme: ThemeKind,
   window?: LineWindow,
+  features?: CelFeatures,
 ): ColorPaint[] {
   if (style === 'off') {
     return [];
@@ -50,6 +51,7 @@ export function planColors(
       ranges?.push({ start, end });
     },
     window,
+    features,
   );
   return [...byColor].map(([color, ranges]) => ({ color, ranges }));
 }

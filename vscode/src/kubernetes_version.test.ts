@@ -35,11 +35,11 @@ describe('statusTooltip', () => {
 
 describe('serverOptions', () => {
   it.each([
-    ['', { kubernetesVersion: '' }],
-    ['   ', { kubernetesVersion: '' }],
-    ['1.35', { kubernetesVersion: '1.35' }],
-    [' 1.35 ', { kubernetesVersion: '1.35' }],
-    ['v1.35', { kubernetesVersion: '1.35' }],
+    ['', { kubernetesVersion: '', experimental: [] }],
+    ['   ', { kubernetesVersion: '', experimental: [] }],
+    ['1.35', { kubernetesVersion: '1.35', experimental: [] }],
+    [' 1.35 ', { kubernetesVersion: '1.35', experimental: [] }],
+    ['v1.35', { kubernetesVersion: '1.35', experimental: [] }],
   ])('maps the setting %j to %j', (setting, options) => {
     expect(serverOptions(setting)).toEqual(options);
   });
@@ -47,11 +47,11 @@ describe('serverOptions', () => {
 
 describe('serverOptions with the engine versions', () => {
   it.each([
-    ['1.36', { kubernetesVersion: '1.36' }],
-    ['1.99', { kubernetesVersion: '' }],
-    ['v1.36', { kubernetesVersion: '1.36' }],
-    ['v1.99', { kubernetesVersion: '' }],
-    ['', { kubernetesVersion: '' }],
+    ['1.36', { kubernetesVersion: '1.36', experimental: [] }],
+    ['1.99', { kubernetesVersion: '', experimental: [] }],
+    ['v1.36', { kubernetesVersion: '1.36', experimental: [] }],
+    ['v1.99', { kubernetesVersion: '', experimental: [] }],
+    ['', { kubernetesVersion: '', experimental: [] }],
   ])('maps the setting %j to %j', (setting, options) => {
     expect(serverOptions(setting, INFO)).toEqual(options);
   });
@@ -59,18 +59,21 @@ describe('serverOptions with the engine versions', () => {
   it('trusts a server that lists no versions', () => {
     expect(serverOptions('1.99', UNLISTED)).toEqual({
       kubernetesVersion: '1.99',
+      experimental: [],
     });
   });
 });
 
 describe('configurationParams', () => {
   it('sends an empty version for an unsupported setting', () => {
-    expect(configurationParams('1.99', INFO)).toEqual({ settings: { kubernetesVersion: '' } });
+    expect(configurationParams('1.99', INFO)).toEqual({
+      settings: { kubernetesVersion: '', experimental: [] },
+    });
   });
 
   it.each([
-    ['', { settings: { kubernetesVersion: '' } }],
-    ['1.36', { settings: { kubernetesVersion: '1.36' } }],
+    ['', { settings: { kubernetesVersion: '', experimental: [] } }],
+    ['1.36', { settings: { kubernetesVersion: '1.36', experimental: [] } }],
   ])('wraps the setting %j as %j', (setting, params) => {
     expect(configurationParams(setting)).toEqual(params);
   });
@@ -158,7 +161,7 @@ describe('parseVersionInfo', () => {
         serverInfo: { name: 'cel-lens-core', version: 'v0.1.0' },
       },
     ],
-    ['a top-level version only', { kubernetesVersion: '1.36' }],
+    ['a top-level version only', { kubernetesVersion: '1.36', experimental: [] }],
   ])('reads the top-level version from %s, with no supported list', (_name, result) => {
     expect(parseVersionInfo(result, '')).toEqual({
       inUse: result.kubernetesVersion,
@@ -170,7 +173,7 @@ describe('parseVersionInfo', () => {
   it.each([['1.34'], ['1.99']])(
     'does not take the top-level version as the default when the server was started with %s',
     (sent) => {
-      expect(parseVersionInfo({ kubernetesVersion: '1.34' }, sent)).toEqual({
+      expect(parseVersionInfo({ kubernetesVersion: '1.34', experimental: [] }, sent)).toEqual({
         inUse: '1.34',
         defaultVersion: undefined,
         supported: [],
@@ -185,7 +188,7 @@ describe('parseVersionInfo', () => {
     ['no experimental', { capabilities: {} }],
     ['no celLens', initializeResult(undefined)],
     ['no version', initializeResult({})],
-    ['an empty version', initializeResult({ kubernetesVersion: '' })],
+    ['an empty version', initializeResult({ kubernetesVersion: '', experimental: [] })],
     ['a numeric version', initializeResult({ kubernetesVersion: 1.37 })],
   ])('gives nothing for %s', (_name, result) => {
     expect(parseVersionInfo(result, '')).toBeUndefined();

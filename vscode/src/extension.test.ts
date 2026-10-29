@@ -139,11 +139,46 @@ describe('activate', () => {
       expect(client.notifications).toEqual([
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '1.36' } },
+          params: { settings: { kubernetesVersion: '1.36', experimental: [] } },
         },
       ]);
     });
     expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.36');
+  });
+
+  it('sends an experimental list change to the running server', async () => {
+    settings.set('cel-lens.serverPath', process.execPath);
+    changeActiveEditor('yaml');
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    await vi.waitFor(() => {
+      expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
+    });
+
+    settings.set('cel-lens.experimental', ['kyverno']);
+    changeConfiguration('cel-lens.experimental');
+
+    await vi.waitFor(() => {
+      expect(client.notifications).toEqual([
+        {
+          method: 'workspace/didChangeConfiguration',
+          params: { settings: { kubernetesVersion: '', experimental: ['kyverno'] } },
+        },
+      ]);
+    });
+  });
+
+  it('contributes the experimental setting as an empty list of the three known names', () => {
+    const setting = manifest.contributes.configuration.properties['cel-lens.experimental'];
+
+    expect(setting).toMatchObject({
+      type: 'array',
+      default: [],
+      items: {
+        type: 'string',
+        enum: ['kyverno', 'crd-typed-policies', 'fitting-completion'],
+        enumDescriptions: [expect.any(String), expect.any(String), expect.any(String)],
+      },
+    });
   });
 
   it('sends nothing when another setting changes', async () => {

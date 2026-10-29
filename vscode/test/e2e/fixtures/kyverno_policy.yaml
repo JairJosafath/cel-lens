@@ -1,0 +1,14 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: broken-expression
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: ['CREATE']
+        resources: ['configmaps']
+  validations:
+    - expression: object.data.size() >
+      message: broken on purpose

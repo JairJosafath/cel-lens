@@ -30,6 +30,8 @@ export interface VersionInfo {
 /** What the server is told: an empty `kubernetesVersion` returns it to the engine's default. */
 export interface ServerOptions {
   readonly kubernetesVersion: string;
+  /** The experimental features turned on, from `cel-lens.experimental`. */
+  readonly experimental: readonly string[];
 }
 
 /** The parameters of `workspace/didChangeConfiguration`. */
@@ -158,15 +160,23 @@ export function statusTooltip(version: string): string {
  * one, so the server and the status bar agree. A server that lists no versions
  * is given the setting and answers with the version it uses.
  */
-export function serverOptions(setting: string, info?: VersionInfo): ServerOptions {
+export function serverOptions(
+  setting: string,
+  info?: VersionInfo,
+  experimental: readonly string[] = [],
+): ServerOptions {
   const pinned = pinnedVersion(setting);
   const listed = info !== undefined && info.supported.length > 0;
-  return { kubernetesVersion: listed && isRefused(pinned, info) ? '' : pinned };
+  return { kubernetesVersion: listed && isRefused(pinned, info) ? '' : pinned, experimental };
 }
 
 /** The `workspace/didChangeConfiguration` parameters for the setting. */
-export function configurationParams(setting: string, info?: VersionInfo): ConfigurationParams {
-  return { settings: serverOptions(setting, info) };
+export function configurationParams(
+  setting: string,
+  info?: VersionInfo,
+  experimental: readonly string[] = [],
+): ConfigurationParams {
+  return { settings: serverOptions(setting, info, experimental) };
 }
 
 /**

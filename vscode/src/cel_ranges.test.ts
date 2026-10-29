@@ -172,7 +172,15 @@ describe('findCel in admission policies', () => {
   describe.each(VAP_FIELDS)('Kyverno ValidatingPolicy %s', (_path, list, key) => {
     it.each(SCALAR_STYLES)('finds a %s scalar', (_style, value, expected) => {
       const text = `apiVersion: policies.kyverno.io/v1\nkind: ValidatingPolicy\nspec:\n  ${list}:\n    - name: n\n      ${key}: ${value}\n`;
-      expect(findCel(text).map((range) => range.source)).toEqual([expected]);
+      expect(findCel(text, undefined, { kyverno: true }).map((range) => range.source)).toEqual([
+        expected,
+      ]);
+    });
+
+    it('finds nothing without the kyverno feature', () => {
+      const text = `apiVersion: policies.kyverno.io/v1\nkind: ValidatingPolicy\nspec:\n  ${list}:\n    - name: n\n      ${key}: a\n`;
+      expect(findCel(text)).toEqual([]);
+      expect(findCel(text, undefined, { kyverno: false })).toEqual([]);
     });
   });
 
@@ -181,7 +189,7 @@ describe('findCel in admission policies', () => {
     ['a Kyverno kind not supported yet', 'policies.kyverno.io/v1', 'ClusterPolicy'],
   ])('leaves out the fields of %s', (_name, apiVersion, kind) => {
     const text = `apiVersion: ${apiVersion}\nkind: ${kind}\nspec:\n  validations:\n    - expression: a\n`;
-    expect(findCel(text)).toEqual([]);
+    expect(findCel(text, undefined, { kyverno: true })).toEqual([]);
   });
 
   it.each([

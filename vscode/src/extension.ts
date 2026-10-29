@@ -33,8 +33,11 @@ export function activate(
     status,
     new ColorPainter(),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('cel-lens.kubernetesVersion')) {
-        void server.sendVersionSetting();
+      if (
+        event.affectsConfiguration('cel-lens.kubernetesVersion') ||
+        event.affectsConfiguration('cel-lens.experimental')
+      ) {
+        void server.sendSettings();
       }
     }),
     vscode.commands.registerCommand(PICK_VERSION_COMMAND, async () => {

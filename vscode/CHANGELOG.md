@@ -6,6 +6,18 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-29
+
+### Added
+
+- The `cel-lens.experimental` setting: a list of the experimental features to turn on, from `kyverno`, `crd-typed-policies` and `fitting-completion`; empty by default. The extension passes it to the engine at start and when it changes, and the README's "Experimental features" section tells which feature is stable or experimental (#5).
+
+### Changed
+
+- `npm run engine` (the end-to-end step of `make check`) says where it fetches the engine from, and a download that fails, even with no connection, names the URL of the missing file (#27).
+- The extension carries the `cel-lens-core` v0.17.2 engine, which reads the experimental list (#5).
+- Kyverno `ValidatingPolicy` documents are colored only when `kyverno` is in `cel-lens.experimental` (#5).
+
 ## [0.16.0] - 2026-10-29
 
 ### Changed
@@ -357,7 +369,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/JairJosafath/cel-lens/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/JairJosafath/cel-lens/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/JairJosafath/cel-lens/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/JairJosafath/cel-lens/compare/v0.15.0...v0.15.1
