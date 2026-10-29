@@ -1,0 +1,18 @@
+name: Feature request
+description: Ask for something cel-lens does not do yet
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you would like it to work.
+    validations:
+      required: false

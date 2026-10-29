@@ -1,45 +1,42 @@
 # cel-lens
 
-cel-lens checks the CEL expressions in your Kubernetes YAML the way the API server does,
-so you find a broken rule in your editor before it reaches a cluster.
+Language support for CEL in Kubernetes YAML: errors, hover, completion and quick fixes that match the API server.
 
-![A misspelled field in a CRD rule, with a quick fix](docs/images/crd-quick-fix.png)\
-*A misspelled field in a CRD validation rule, with a quick fix.*
+[![CI](https://github.com/JairJosafath/cel-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/JairJosafath/cel-lens/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/JairJosafath/cel-lens)](https://github.com/JairJosafath/cel-lens/releases)
+[![License](https://img.shields.io/github/license/JairJosafath/cel-lens)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/JairJosafath/cel-lens/badge)](https://scorecard.dev/viewer/?uri=github.com/JairJosafath/cel-lens)
+[![Go Reference](https://pkg.go.dev/badge/github.com/JairJosafath/cel-lens/engine.svg)](https://pkg.go.dev/github.com/JairJosafath/cel-lens/engine)
 
-![Two errors and a hover on a policy variable in a MutatingAdmissionPolicy](docs/images/policy-problems-hover.png)\
-*Errors and a typed hover in a MutatingAdmissionPolicy.*
+![Colors: a CEL rule colored part by part as it is typed](vscode/images/colors.gif)
 
-![Completion after request. in a ValidatingAdmissionPolicy](docs/images/policy-completion.png)\
-*Completion of `request` fields in a ValidatingAdmissionPolicy.*
+![Completion: the list after typing self. and one item picked](vscode/images/completion.gif)
 
-## Install in VS Code
+## Install
 
-1. Download the `.vsix` for your platform (`linux`, `darwin` or `win32`; `x64` or `arm64`)
-   from the latest `vscode-v…` release on [Releases](https://github.com/JairJosafath/cel-lens/releases).
-2. Run `code --install-extension cel-lens-vscode-<platform>-<version>.vsix`, or
-   **Extensions: Install from VSIX...** in the Command Palette.
+- **VS Code:** download the `.vsix` for your platform from the [releases](https://github.com/JairJosafath/cel-lens/releases), then run **Extensions: Install from VSIX...** or `code --install-extension <file>.vsix`. The extension carries the engine; nothing else to set up.
+- **Command line:** `go install github.com/JairJosafath/cel-lens/engine@<version>` installs the engine; see [engine/](engine/) for the details.
 
-The engine is inside the `.vsix`, so there is nothing else to install.
+## Features
 
-## Command line and other editors
+Stable:
 
-The engine, `cel-lens-core`, runs as `cel-lens-core check <paths>` in a terminal or CI, and as
-a language server (`cel-lens-core lsp`) for any editor. [engine/README.md](engine/README.md) shows how to install it.
+| Feature                           | What it does                                         |
+| --------------------------------- | ---------------------------------------------------- |
+| Problems                          | CEL errors on the exact part that is wrong           |
+| Hover, completion and quick fixes | Types, fields and fixes for CEL in Kubernetes YAML   |
+| Colors                            | The parts of a CEL expression, in the style you pick |
+| Kubernetes version                | Results match the version you choose                 |
 
-## What it checks
+Experimental, off until you list its name in the `cel-lens.experimental` setting:
 
-- CRD `x-kubernetes-validations` rules
-- ValidatingAdmissionPolicy and MutatingAdmissionPolicy expressions
-- Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`)
+| Name | What it does                                       |
+| ---- | -------------------------------------------------- |
+| none | No experimental feature is offered in this release |
 
-Errors use the API server's own messages, from cel-go and the Kubernetes CEL libraries.
-In VS Code you also get hover, completion, quick fixes and colors for CEL.
+## Learn more
 
-## Issues
-
-Development is paused for now, but bug reports and ideas are welcome at
-<https://github.com/JairJosafath/cel-lens/issues>.
-
-## License
-
-Apache-2.0; see [LICENSE](LICENSE).
+- [engine/](engine/): the CEL engine and command line.
+- [vscode/](vscode/): the VS Code extension.
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute.
+- [SECURITY.md](SECURITY.md): how to report a vulnerability.
