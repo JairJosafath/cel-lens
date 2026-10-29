@@ -46,7 +46,7 @@ The extension carries the cel-lens engine for your platform, so there is nothing
 
 | Setting                      | Default | What it does                                                                                                                                                                                                                               |
 | ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cel-lens.colorStyle`        | `cel`   | `cel`, `classic` or `off`: the color style of the parts of a CEL expression. See Color styles in [CONTRIBUTING.md](CONTRIBUTING.md). Resource scope: user, workspace or workspace folder.                                                  |
+| `cel-lens.colorStyle`        | `cel`   | `cel`, `classic` or `off`: the color style of the parts of a CEL expression. Change it with **cel-lens: Choose Color Style** or the status bar menu. Resource scope: user, workspace or workspace folder.                                  |
 | `cel-lens.kubernetesVersion` | `""`    | Advanced: the Kubernetes version the results match, such as `1.36`. Empty means the engine's default. The status bar shows the version the engine uses; one it refuses is logged and the engine keeps its default. May restart the engine. |
 | `cel-lens.trace.server`      | `off`   | `off`, `messages` or `verbose`: traces the protocol in the **cel-lens** output channel.                                                                                                                                                    |
 | `cel-lens.serverPath`        | `""`    | Advanced: a `cel-lens-core` binary to use instead of the bundled engine. Empty (the default) uses the bundled one. Machine scope: in a remote window (WSL, SSH, a dev container) set it on the Remote tab of Settings.                     |
@@ -54,7 +54,7 @@ The extension carries the cel-lens engine for your platform, so there is nothing
 ## Supported Kubernetes versions
 
 The bundled engine matches the API server's CEL environment of these Kubernetes versions:
-`1.33`, `1.34`, `1.35`, `1.36` and `1.37`. The default is `1.37`. See Kubernetes version in [CONTRIBUTING.md](CONTRIBUTING.md) to pick another.
+`1.33`, `1.34`, `1.35`, `1.36` and `1.37`. The default is `1.37`. To pick another, run **cel-lens: Pick Kubernetes Version** or open the status bar menu.
 
 ## Experimental features
 

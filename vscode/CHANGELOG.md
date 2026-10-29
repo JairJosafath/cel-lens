@@ -6,6 +6,13 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-10-29
+
+### Changed
+
+- The README names the status bar menu and the Pick Kubernetes Version and Choose Color Style commands instead of linking to CONTRIBUTING.md (#9).
+- The public layout test is lighter on the runner (#11).
+
 ## [0.15.1] - 2026-10-29
 
 ### Added
@@ -341,7 +348,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/JairJosafath/cel-lens/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/JairJosafath/cel-lens/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/JairJosafath/cel-lens/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/JairJosafath/cel-lens/compare/v0.13.1...v0.14.0

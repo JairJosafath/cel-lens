@@ -139,6 +139,17 @@ describe('README.md as the store page', () => {
     }
   });
 
+  it('names the commands for the version and the color style instead of linking to CONTRIBUTING.md', () => {
+    const versions = readmeSection(README, 'Supported Kubernetes versions') ?? '';
+    expect(versions).toContain('status bar');
+    expect(versions).toContain('Pick Kubernetes Version');
+    const colorRow =
+      README.split('\n').find((line) => line.includes('`cel-lens.colorStyle`')) ?? '';
+    expect(colorRow).toContain('Choose Color Style');
+    expect(versions).not.toContain('CONTRIBUTING.md');
+    expect(colorRow).not.toContain('CONTRIBUTING.md');
+  });
+
   it('lists what is not supported yet', () => {
     const section = readmeSection(README, 'Not supported yet') ?? '';
     expect(section).toMatch(/Dry runs/);
