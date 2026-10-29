@@ -52,3 +52,57 @@ export function gifFrameCount(bytes: Uint8Array): number {
   }
   return 0;
 }
+
+const GRAPHIC_CONTROL = 0xf9;
+
+/** The delay of each frame of a GIF, in milliseconds; empty when the bytes are not a well-formed GIF. */
+export function gifDelaysMs(bytes: Uint8Array): number[] {
+  if (gifFrameCount(bytes) === 0) {
+    return [];
+  }
+  const screenFlags = bytes[10] ?? 0;
+  let at = 13 + (screenFlags & 0x80 ? 3 * 2 ** ((screenFlags & 7) + 1) : 0);
+  const delays: number[] = [];
+  let pending = 0;
+  while (bytes[at] !== TRAILER) {
+    if (bytes[at] === EXTENSION_INTRODUCER) {
+      if (bytes[at + 1] === GRAPHIC_CONTROL) {
+        pending = ((bytes[at + 4] ?? 0) | ((bytes[at + 5] ?? 0) << 8)) * 10;
+      }
+      at = skipSubBlocks(bytes, at + 2);
+    } else {
+      const flags = bytes[at + 9] ?? 0;
+      at += 10 + (flags & 0x80 ? 3 * 2 ** ((flags & 7) + 1) : 0) + 1;
+      at = skipSubBlocks(bytes, at);
+      delays.push(pending);
+      pending = 0;
+    }
+  }
+  return delays;
+}
+
+/** The disposal method (0 to 7) each frame of a GIF asks for; empty when the bytes are not a well-formed GIF. */
+export function gifDisposals(bytes: Uint8Array): number[] {
+  if (gifFrameCount(bytes) === 0) {
+    return [];
+  }
+  const screenFlags = bytes[10] ?? 0;
+  let at = 13 + (screenFlags & 0x80 ? 3 * 2 ** ((screenFlags & 7) + 1) : 0);
+  const disposals: number[] = [];
+  let pending = 0;
+  while (bytes[at] !== TRAILER) {
+    if (bytes[at] === EXTENSION_INTRODUCER) {
+      if (bytes[at + 1] === GRAPHIC_CONTROL) {
+        pending = ((bytes[at + 3] ?? 0) >> 2) & 7;
+      }
+      at = skipSubBlocks(bytes, at + 2);
+    } else {
+      const flags = bytes[at + 9] ?? 0;
+      at += 10 + (flags & 0x80 ? 3 * 2 ** ((flags & 7) + 1) : 0) + 1;
+      at = skipSubBlocks(bytes, at);
+      disposals.push(pending);
+      pending = 0;
+    }
+  }
+  return disposals;
+}

@@ -6,6 +6,15 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-29
+
+### Changed
+
+- The extension carries the `cel-lens-core` v0.17.2 engine (#30).
+- The release steps in `CONTRIBUTING.md` now say to run `npm run pictures` and commit `images/`, so the store page matches each release (#14).
+- The public layout test keeps tooling's temp folders out of the tree it copies (#20), prints the nested run's failures (#23), and links `node_modules` when `TMPDIR` is on another device (#24).
+- `colors.gif` and `completion.gif` in the README are retaken: 5.7 s and 4.3 s long, at 10 frames per second, and no completion list shows in `colors.gif`. `npm run pictures` now records with the browser's screencast, encodes after the action with frames that stay on screen (no disposal), and stops if a completion list shows while `colors.gif` records (#13).
+
 ## [0.15.2] - 2026-10-29
 
 ### Changed
@@ -348,7 +357,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.15.2...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/JairJosafath/cel-lens/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/JairJosafath/cel-lens/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/JairJosafath/cel-lens/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/JairJosafath/cel-lens/compare/v0.14.0...v0.15.0

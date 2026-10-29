@@ -30,18 +30,6 @@ const BADGE_SOURCES = [
   /^https:\/\/api\.scorecard\.dev\/projects\/github\.com\/JairJosafath\/cel-lens\/badge$/,
   /^https:\/\/pkg\.go\.dev\/badge\/github\.com\/JairJosafath\/cel-lens\/engine(\.svg)?$/,
 ];
-// Tools drop short-lived folders (a vite cache, a temp dir) in the root while tests run;
-// one that vanishes between listing and copying was never part of the source.
-function copyIfPresent(source: string, target: string): void {
-  try {
-    cpSync(source, target, { recursive: true });
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
-      throw error;
-    }
-  }
-}
-
 // What the published vscode/ lacks: the factory's files, public-repo/, and build output.
 const ABSENT = new Set([
   '.gitea',
@@ -271,7 +259,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     for (const entry of readdirSync(root)) {
       const source = join(root, entry);
       if (!ABSENT.has(entry) && !layout.startsWith(source)) {
-        copyIfPresent(source, join(layout, 'vscode', entry));
+        cpSync(source, join(layout, 'vscode', entry), { recursive: true });
       }
     }
     rmSync(join(layout, 'vscode', 'docs', 'agents'), { recursive: true, force: true });

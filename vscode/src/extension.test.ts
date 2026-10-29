@@ -264,7 +264,7 @@ describe('published text', () => {
   });
 
   it('names the cel-lens-core release the extension is built for', () => {
-    expect(guide).toContain('cel-lens-core` v0.15.0');
+    expect(guide).toContain('cel-lens-core` v0.17.2');
   });
 
   it('shows no message the engine does not give', () => {

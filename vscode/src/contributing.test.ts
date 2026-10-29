@@ -31,6 +31,14 @@ describe('CONTRIBUTING.md', () => {
     expect(engines?.node).toBe(`>=${documented}`);
   });
 
+  it('puts retaking the pictures and committing images/ in the release steps', () => {
+    const start = CONTRIBUTING.indexOf('## Releases');
+    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
+
+    expect(section).toContain('npm run pictures');
+    expect(section).toContain('images/');
+  });
+
   it('names no factory image or devcontainer', () => {
     expect(CONTRIBUTING).not.toMatch(/devcontainer|factory|git[e]a|docker/i);
   });

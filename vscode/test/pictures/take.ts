@@ -13,8 +13,8 @@ import { join, resolve } from 'node:path';
 import { stdout } from 'node:process';
 
 import gifenc from 'gifenc';
-import { chromium, type Page } from 'playwright';
-import { PNG } from 'pngjs';
+import { chromium, type CDPSession, type Page } from 'playwright';
+import jpeg from 'jpeg-js';
 
 const { GIFEncoder, applyPalette, quantize } = gifenc;
 
@@ -25,11 +25,17 @@ const CACHE = join(ROOT, 'node_modules/.cache/cel-lens-pictures');
 
 const VIEWPORT = { width: 1100, height: 640 };
 const GIF_COLORS = 48;
-const GIF_FRAME_MS = 120;
-const TYPING_MS = 70;
+const SCREENCAST_QUALITY = 90;
+const GIF_TICK_MS = 100;
+const GIF_TYPING_MS = 20;
 
 const CRD = 'widget_crd.yaml';
 const POLICY = 'pod_policy.yaml';
+
+const QUICK_SUGGESTIONS_OFF = { other: 'off', comments: 'off', strings: 'off' };
+
+/** YAML sets its own quick suggestions, which beat the general setting: switch them off for YAML. */
+const YAML_NO_WORD_SUGGESTIONS = { 'editor.quickSuggestions': QUICK_SUGGESTIONS_OFF };
 
 /** Settings that make the editor look the same on every run. */
 const SETTINGS = {
@@ -51,12 +57,13 @@ const SETTINGS = {
   'editor.autoClosingBrackets': 'never',
   'editor.autoClosingQuotes': 'never',
   'editor.autoIndent': 'keep',
-  'editor.quickSuggestions': { other: 'off', comments: 'off', strings: 'off' },
+  'editor.quickSuggestions': QUICK_SUGGESTIONS_OFF,
   'editor.wordWrap': 'off',
   'editor.scrollBeyondLastLine': false,
   'editor.renderWhitespace': 'none',
   'files.autoSave': 'off',
   'breadcrumbs.enabled': false,
+  '[yaml]': YAML_NO_WORD_SUGGESTIONS,
 };
 
 interface PinnedVersions {
@@ -159,65 +166,136 @@ async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   throw new Error(`openvscode-server did not answer at ${url}.`);
 }
 
-/** The pixels of a PNG as RGBA bytes. */
-function decode(png: Buffer): { width: number; height: number; data: Uint8Array } {
-  const image = PNG.sync.read(png);
-  return { width: image.width, height: image.height, data: new Uint8Array(image.data) };
+/** The pixels of a JPEG as RGBA bytes. */
+function decode(picture: Buffer): { width: number; height: number; data: Uint8Array } {
+  const image = jpeg.decode(picture, { useTArray: true });
+  return { width: image.width, height: image.height, data: image.data };
 }
 
-/** Watches a page as a GIF: frames are taken while `action` runs and a little after. */
+/** Page script (the project has no DOM types): notes whether a completion list shows from now on. */
+const WATCH_FOR_LIST = `(() => {
+  const seen = { suggest: false };
+  const observer = new MutationObserver(() => {
+    if (document.querySelector('.suggest-widget.visible') !== null) {
+      seen.suggest = true;
+    }
+  });
+  observer.observe(document.body, { subtree: true, attributes: true, childList: true });
+  window.celLensWatch = { seen, observer };
+})()`;
+
+/** Page script: stops the watch and gives whether a completion list showed. */
+const STOP_WATCHING_FOR_LIST = `(() => {
+  window.celLensWatch.observer.disconnect();
+  return window.celLensWatch.seen.suggest;
+})()`;
+
+function sameColor(a: Uint8Array, b: Uint8Array, at: number): boolean {
+  return a[at] === b[at] && a[at + 1] === b[at + 1] && a[at + 2] === b[at + 2];
+}
+
+/** A frame the browser painted, and when. */
+interface Shot {
+  readonly picture: Buffer;
+  readonly at: number;
+}
+
+/**
+ * Watches a page as a GIF. The browser pushes a frame whenever the page repaints
+ * (CDP screencast), so capturing never waits on the page while it types. The frames
+ * are held raw until `stop()`, then sampled every `GIF_TICK_MS` and encoded.
+ */
 class Recording {
-  private readonly encoder = GIFEncoder();
-  private running = true;
-  private readonly loop: Promise<void>;
-  private pending: { index: Uint8Array; palette: number[][]; at: number } | undefined;
-  private size = { width: 0, height: 0 };
+  private readonly shots: Shot[] = [];
+
+  private readonly session: CDPSession;
   private readonly page: Page;
 
-  constructor(page: Page) {
+  private constructor(session: CDPSession, page: Page) {
+    this.session = session;
     this.page = page;
-    this.loop = this.capture();
-  }
-
-  private async capture(): Promise<void> {
-    while (this.running) {
-      const shot = await this.page.screenshot({ type: 'png' });
-      const at = Date.now();
-      const { width, height, data } = decode(shot);
-      const palette = quantize(data, GIF_COLORS);
-      this.flush(at);
-      this.size = { width, height };
-      this.pending = { index: applyPalette(data, palette), palette, at };
-      await new Promise((done) => setTimeout(done, GIF_FRAME_MS));
-    }
-    this.flush(Date.now() + 1200);
-  }
-
-  /** Writes the frame waiting, shown until `until`. */
-  private flush(until: number): void {
-    if (this.pending === undefined) {
-      return;
-    }
-    const { index, palette, at } = this.pending;
-    this.encoder.writeFrame(index, this.size.width, this.size.height, {
-      palette,
-      delay: Math.max(40, until - at),
+    session.on('Page.screencastFrame', (frame) => {
+      this.shots.push({ picture: Buffer.from(frame.data, 'base64'), at: Date.now() });
+      void session.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {
+        // The recording has stopped.
+      });
     });
-    this.pending = undefined;
   }
 
-  async stop(): Promise<Uint8Array> {
-    this.running = false;
-    await this.loop;
-    this.encoder.finish();
-    return this.encoder.bytes();
+  static async start(page: Page): Promise<Recording> {
+    const session = await page.context().newCDPSession(page);
+    const recording = new Recording(session, page);
+    await page.evaluate(WATCH_FOR_LIST);
+    await session.send('Page.startScreencast', {
+      format: 'jpeg',
+      quality: SCREENCAST_QUALITY,
+      everyNthFrame: 1,
+    });
+    return recording;
+  }
+
+  /** Stops, and gives the GIF and whether a completion list was on screen meanwhile. */
+  async stop(): Promise<{ gif: Uint8Array; listSeen: boolean }> {
+    const end = Date.now();
+    await this.session.send('Page.stopScreencast');
+    const listSeen: unknown = await this.page.evaluate(STOP_WATCHING_FOR_LIST);
+    await this.session.detach();
+    return { gif: this.encode(end), listSeen: listSeen === true };
+  }
+
+  /**
+   * One frame per tick. A frame writes only the pixels that changed since the one
+   * before; the rest is transparent and left in place, which keeps the file small.
+   */
+  private encode(end: number): Uint8Array {
+    const encoder = GIFEncoder();
+    const first = this.shots[0]?.at ?? end;
+    let shown = -1;
+    let previous: Uint8Array | undefined;
+    for (let tick = first; tick < end; tick += GIF_TICK_MS) {
+      while (shown + 1 < this.shots.length && (this.shots[shown + 1]?.at ?? end) <= tick) {
+        shown += 1;
+      }
+      const { width, height, data } = decode(this.shots[shown]?.picture ?? Buffer.alloc(0));
+      const palette = quantize(data, GIF_COLORS - 1);
+      palette.push([0, 0, 0]);
+      const index = applyPalette(data, palette);
+      if (previous === undefined) {
+        encoder.writeFrame(index, width, height, { palette, delay: GIF_TICK_MS });
+      } else {
+        for (let pixel = 0; pixel < index.length; pixel += 1) {
+          if (sameColor(data, previous, pixel * 4)) {
+            index[pixel] = GIF_COLORS - 1;
+          }
+        }
+        encoder.writeFrame(index, width, height, {
+          palette,
+          delay: GIF_TICK_MS,
+          transparent: true,
+          dispose: 1,
+          transparentIndex: GIF_COLORS - 1,
+        });
+      }
+      previous = data;
+    }
+    encoder.finish();
+    return encoder.bytes();
   }
 }
 
-async function record(page: Page, action: () => Promise<void>): Promise<Uint8Array> {
-  const recording = new Recording(page);
+/** Records `action` as a GIF; `listAllowed` false makes a completion list on screen an error. */
+async function record(
+  page: Page,
+  listAllowed: boolean,
+  action: () => Promise<void>,
+): Promise<Uint8Array> {
+  const recording = await Recording.start(page);
   await action();
-  return recording.stop();
+  const { gif, listSeen } = await recording.stop();
+  if (listSeen && !listAllowed) {
+    throw new Error('A completion list appeared while a recording that must not show one ran.');
+  }
+  return gif;
 }
 
 async function pause(page: Page, ms: number): Promise<void> {
@@ -234,15 +312,11 @@ async function openFile(page: Page, name: string): Promise<void> {
   await pause(page, 500);
 }
 
-/** Types text into the focused editor; a completion list is closed after each dot unless `keepLists`. */
-async function typeText(page: Page, text: string, keepLists = false): Promise<void> {
+/** Types text into the focused editor, `delay` ms between characters. */
+async function typeText(page: Page, text: string, delay: number): Promise<void> {
   for (const character of text) {
     await page.keyboard.type(character);
-    if (character === '.' && !keepLists) {
-      await pause(page, 120);
-      await page.keyboard.press('Escape');
-    }
-    await pause(page, TYPING_MS);
+    await pause(page, delay);
   }
 }
 
@@ -294,7 +368,7 @@ async function prepare(page: Page): Promise<void> {
   await pause(page, 500);
 }
 
-async function takePictures(page: Page): Promise<void> {
+async function takePictures(page: Page, workspace: string): Promise<void> {
   await prepare(page);
   await openFile(page, CRD);
   await page.keyboard.press('Control+g');
@@ -337,20 +411,20 @@ async function takePictures(page: Page): Promise<void> {
   await page.keyboard.type('- rule: ');
   await pause(page, 300);
   let completionPicture: Uint8Array | undefined;
-  const completion = await record(page, async () => {
-    await pause(page, 600);
+  const completion = await record(page, true, async () => {
+    await pause(page, 300);
     await page.keyboard.type('self');
-    await pause(page, 400);
+    await pause(page, 200);
     await page.keyboard.type('.');
     await page.locator('.suggest-widget.visible .monaco-list-row').first().waitFor();
-    await pause(page, 1200);
-    await page.keyboard.press('ArrowDown');
     await pause(page, 700);
+    await page.keyboard.press('ArrowDown');
+    await pause(page, 500);
     completionPicture = await page.screenshot({ type: 'png' });
     await page.keyboard.press('ArrowDown');
-    await pause(page, 900);
+    await pause(page, 500);
     await page.keyboard.press('Tab');
-    await pause(page, 1200);
+    await pause(page, 800);
   });
   await save('completion.gif', completion);
   if (completionPicture === undefined) {
@@ -363,15 +437,30 @@ async function takePictures(page: Page): Promise<void> {
     await page.keyboard.press('Control+z');
   }
 
-  // colors.gif: a rule colored as it is typed.
+  // colors.gif: a rule colored as it is typed, with no completion list in the way.
+  const settingsFile = join(workspace, '.vscode/settings.json');
+  await writeFile(
+    settingsFile,
+    JSON.stringify(
+      {
+        ...SETTINGS,
+        '[yaml]': { ...YAML_NO_WORD_SUGGESTIONS, 'editor.suggestOnTriggerCharacters': false },
+      },
+      null,
+      2,
+    ),
+  );
+  await pause(page, 3000);
+  await page.locator('.suggest-widget.visible').waitFor({ state: 'hidden' });
   await startNewRule(page);
   await page.keyboard.type('- rule: ');
-  const colors = await record(page, async () => {
-    await pause(page, 500);
-    await typeText(page, "self.name.startsWith('w-') && self.replicas in [1, 2, 3]");
-    await pause(page, 1500);
+  const colors = await record(page, false, async () => {
+    await pause(page, 200);
+    await typeText(page, "self.name.startsWith('w') && self.replicas > 1", GIF_TYPING_MS);
+    await pause(page, 600);
   });
   await save('colors.gif', colors);
+  await writeFile(settingsFile, JSON.stringify(SETTINGS, null, 2));
 
   // colors.png: a whole policy in color.
   await openFile(page, POLICY);
@@ -442,7 +531,7 @@ async function main(): Promise<void> {
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       await page.goto(`${url}?folder=${encodeURIComponent(workspace)}`);
       await page.locator('.monaco-workbench').waitFor({ timeout: 60_000 });
-      await takePictures(page);
+      await takePictures(page, workspace);
     } finally {
       await browser.close();
     }

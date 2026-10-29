@@ -72,7 +72,7 @@ Bugs go to <https://github.com/JairJosafath/cel-lens/issues>. Say which Kubernet
 ## How it works
 
 The extension activates on YAML files and starts the bundled cel-lens language
-server, `cel-lens-core` v0.15.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
+server, `cel-lens-core` v0.17.2 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
 Kubernetes YAML such as CRDs and admission policies. The status bar shows the
 Kubernetes version the server reports; the engine lists the versions it supports, so Pick
 Kubernetes Version offers them; or type a version in the
@@ -220,6 +220,10 @@ version, names and checksums in `core-version.json` together. A contributor need
 other access: the default engine source is the public releases page. To fetch from
 another releases page (a mirror, say), set `CEL_LENS_CORE_RELEASES_URL` to its
 URL; files are then read from `<URL>/download/<version>/` (`src/core_releases.ts`).
+
+Before you tag a release, retake the pictures so the store page matches it: run
+`npm run pictures` (see "Retake the pictures" above) and commit the changed files in
+`images/`.
 
 The **Open Releases Page** button, shown when the engine is too old, opens
 <https://github.com/JairJosafath/cel-lens/releases> (`RELEASES_PAGE_URL`). Engine

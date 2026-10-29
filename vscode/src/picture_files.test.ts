@@ -2,13 +2,50 @@ import { readFileSync, statSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { gifFrameCount, pictureKind } from './picture_files';
+import { gifDelaysMs, gifDisposals, gifFrameCount, pictureKind } from './picture_files';
 
 const PNG_HEAD = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const GIF_HEAD = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
 // Header, a 1x1 screen without a color table, two empty 1x1 frames, the trailer.
 const frame = [0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0];
 const TWO_FRAMES = Uint8Array.from([...GIF_HEAD, 1, 0, 1, 0, 0, 0, 0, ...frame, ...frame, 0x3b]);
+
+// A graphic control extension with a delay of 5 and of 12 hundredths of a second.
+const control = (delay: number): number[] => [0x21, 0xf9, 4, 0, delay, 0, 0, 0];
+const TIMED_FRAMES = Uint8Array.from([
+  ...GIF_HEAD,
+  1,
+  0,
+  1,
+  0,
+  0,
+  0,
+  0,
+  ...control(5),
+  ...frame,
+  ...control(12),
+  ...frame,
+  0x3b,
+]);
+// The same, with disposal method 1 (do not dispose) and then 2 (restore to background).
+const controlWithDisposal = (method: number): number[] => [0x21, 0xf9, 4, method << 2, 5, 0, 0, 0];
+const DISPOSED_FRAMES = Uint8Array.from([
+  ...GIF_HEAD,
+  1,
+  0,
+  1,
+  0,
+  0,
+  0,
+  0,
+  ...controlWithDisposal(1),
+  ...frame,
+  ...controlWithDisposal(2),
+  ...frame,
+  0x3b,
+]);
+const MAX_PLAY_MS = 8000;
+const MIN_FRAMES_PER_SECOND = 5;
 
 const PNGS = ['problems.png', 'hover.png', 'completion.png', 'quick-fix.png', 'colors.png'];
 const GIFS = ['colors.gif', 'completion.gif'];
@@ -37,6 +74,28 @@ describe('gifFrameCount', () => {
   });
 });
 
+describe('gifDelaysMs', () => {
+  it.each([
+    ['frames with delays', TIMED_FRAMES, [50, 120]],
+    ['a GIF cut short', TIMED_FRAMES.subarray(0, 30), []],
+    ['frames without a delay', TWO_FRAMES, [0, 0]],
+    ['a PNG', Uint8Array.from(PNG_HEAD), []],
+  ])('reads %s', (_name, bytes, expected) => {
+    expect(gifDelaysMs(bytes)).toEqual(expected);
+  });
+});
+
+describe('gifDisposals', () => {
+  it.each([
+    ['frames with a disposal method', DISPOSED_FRAMES, [1, 2]],
+    ['frames without a control block', TWO_FRAMES, [0, 0]],
+    ['a GIF cut short', DISPOSED_FRAMES.subarray(0, 30), []],
+    ['a PNG', Uint8Array.from(PNG_HEAD), []],
+  ])('reads %s', (_name, bytes, expected) => {
+    expect(gifDisposals(bytes)).toEqual(expected);
+  });
+});
+
 describe('the pictures in images/', () => {
   it.each(PNGS)('%s is a PNG', (name) => {
     expect(pictureKind(readFileSync(`images/${name}`))).toBe('png');
@@ -47,6 +106,27 @@ describe('the pictures in images/', () => {
     expect(pictureKind(bytes)).toBe('gif');
     expect(gifFrameCount(bytes)).toBeGreaterThan(1);
     expect(statSync(`images/${name}`).size).toBeLessThan(TWO_MEGABYTES);
+  });
+
+  it.each(GIFS)('%s plays in under 8 seconds', (name) => {
+    const total = gifDelaysMs(readFileSync(`images/${name}`)).reduce(
+      (sum, delay) => sum + delay,
+      0,
+    );
+    expect(total).toBeGreaterThan(0);
+    expect(total).toBeLessThan(MAX_PLAY_MS);
+  });
+
+  it.each(GIFS)('%s has at least 5 frames per second', (name) => {
+    const delays = gifDelaysMs(readFileSync(`images/${name}`));
+    const seconds = delays.reduce((sum, delay) => sum + delay, 0) / 1000;
+    expect(delays.length / seconds).toBeGreaterThanOrEqual(MIN_FRAMES_PER_SECOND);
+  });
+
+  it.each(GIFS)('%s never clears the canvas between frames', (name) => {
+    const disposals = gifDisposals(readFileSync(`images/${name}`));
+    expect(disposals.length).toBeGreaterThan(1);
+    expect(disposals.filter((method) => method === 2 || method === 3)).toEqual([]);
   });
 
   it('the .vsix takes only images/icon.png of them', () => {
@@ -69,7 +149,7 @@ describe('npm run pictures', () => {
     expect(statSync('test/pictures/take.ts').isFile()).toBe(true);
   });
 
-  it.each([['playwright'], ['gifenc'], ['pngjs']])('pins %s to an exact version', (name) => {
+  it.each([['playwright'], ['gifenc'], ['jpeg-js']])('pins %s to an exact version', (name) => {
     expect(manifest.devDependencies[name]).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
