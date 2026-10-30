@@ -32,6 +32,18 @@ make check
 
 While you work, `npx vitest` re-runs the unit tests. Put logic in modules that do not import `vscode`, and keep tests next to the code (`foo.test.ts`). `AGENTS.md` and `docs/style/` hold the rules in full.
 
+### Check the layout test against a real engine
+
+Before `make check`, export `CEL_LENS_ENGINE_DIR` to a `cel-lens-core` checkout at the tag named in `core-version.json`:
+
+```sh
+git clone --branch "$(node -p "require('./core-version.json').version")" <url of the cel-lens-core repository> ../cel-lens-core
+export CEL_LENS_ENGINE_DIR="$PWD/../cel-lens-core"
+make check
+```
+
+The public-repo layout test (`src/public_repo.test.ts`) builds `engine/` from that checkout, so a link to a file the engine lacks fails on your machine. Without the variable, `engine/` is an empty tree, the test passes on such a link, and only CI reports it.
+
 Some tests read the maintainers' CI workflow files, which are not part of this published source. They skip, with a message saying so, when those files are missing, so `npm ci && npm test` is green in a clone; `make check` runs them where the files exist. `src/public_layout.test.ts` proves it by running `vitest run` in a copy of the tree without those files.
 
 ## Package a .vsix
@@ -72,7 +84,7 @@ Bugs go to <https://github.com/JairJosafath/cel-lens/issues>. Say which Kubernet
 ## How it works
 
 The extension activates on YAML files and starts the bundled cel-lens language
-server, `cel-lens-core` v0.20.1 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
+server, `cel-lens-core` v0.21.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
 Kubernetes YAML such as CRDs and admission policies. The status bar shows the
 Kubernetes version the server reports; the engine lists the versions it supports, so Pick
 Kubernetes Version offers them; or type a version in the
@@ -230,7 +242,7 @@ engine lacks fails. Without it, `engine/` is an empty tree and those links are n
 To release, follow these steps in order:
 
 1. Bump `version` in `package.json` (and `package-lock.json`), and the engine in `core-version.json` if it changes.
-2. Move the "Unreleased" entries of `CHANGELOG.md` under a new heading for the version and date, add the version's link line at the end in the `vscode-v` form (`[X.Y.Z]: https://github.com/JairJosafath/cel-lens/compare/vscode-v<previous>...vscode-vX.Y.Z`), and move the `[Unreleased]` link to compare `vscode-vX.Y.Z` to `HEAD`.
+2. Move the "Unreleased" entries of `CHANGELOG.md` under a new heading for the version and date, add the version's link line at the end in the `vscode-v` form (`[X.Y.Z]: https://github.com/JairJosafath/cel-lens/compare/vscode-v<previous>...vscode-vX.Y.Z`; versions older than the oldest public tag, `vscode-v0.14.0`, have no link line), and move the `[Unreleased]` link to compare `vscode-vX.Y.Z` to `HEAD`.
 3. Retake the pictures so the store page matches the release: run `npm run pictures` (see "Retake the pictures" above) and commit the changed files in `images/`.
 4. Run `make check`; it must pass before you tag, and never release a red commit.
 5. Tag the commit `vX.Y.Z` (the `version` in `package.json` with a `v` in front; the release workflow refuses any other tag) and push the tag; the release workflow attaches `dist/` to the release.

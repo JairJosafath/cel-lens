@@ -31,6 +31,21 @@ describe('CONTRIBUTING.md', () => {
     expect(engines?.node).toBe(`>=${documented}`);
   });
 
+  it('tells contributors to export CEL_LENS_ENGINE_DIR at the core-version.json tag before make check, naming the layout test', () => {
+    const start = CONTRIBUTING.indexOf('## Test');
+    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1)).replace(
+      /\s+/g,
+      ' ',
+    );
+
+    expect(section).toContain('export CEL_LENS_ENGINE_DIR=');
+    expect(section).toContain('`cel-lens-core` checkout');
+    expect(section).toContain('`core-version.json`');
+    expect(section).toContain('Before `make check`');
+    expect(section).toContain('public-repo layout test');
+    expect(section).toContain('`src/public_repo.test.ts`');
+  });
+
   it('says Kyverno ValidatingPolicy fields are colored only with kyverno in cel-lens.experimental', () => {
     const flat = CONTRIBUTING.replace(/\s+/g, ' ');
 
@@ -67,6 +82,28 @@ describe('CONTRIBUTING.md', () => {
 
     expect(numbers).toEqual(steps.map((_line, i) => i + 1));
     expect(steps.at(-1)).toContain('`vX.Y.Z`');
+  });
+
+  it('tells release step 2 to use the vscode-v compare form and move the Unreleased link', () => {
+    const start = CONTRIBUTING.indexOf('## Releases');
+    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
+    const step = section.split('\n').find((line) => line.startsWith('2. ')) ?? '';
+
+    expect(step).toContain('`vscode-v` form');
+    expect(step).toContain('compare/vscode-v<previous>...vscode-vX.Y.Z');
+    expect(step).toContain('move the `[Unreleased]` link');
+    expect(step).toContain('`vscode-vX.Y.Z` to `HEAD`');
+  });
+
+  it('says in Send a change that a CHANGELOG line names no issue number', () => {
+    const start = CONTRIBUTING.indexOf('## Send a change');
+    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1)).replace(
+      /\s+/g,
+      ' ',
+    );
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(section).toContain('a CHANGELOG line names no issue number');
   });
 
   it('names no factory image or devcontainer', () => {

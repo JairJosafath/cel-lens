@@ -2,9 +2,24 @@
 
 Every user-visible change, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/): the `version` in `package.json`.
+[Semantic Versioning](https://semver.org/): the `version` in `package.json`. Versions before 0.14.0 were released before the public repository existed, so they have no link.
 
 ## [Unreleased]
+
+## [0.24.0] - 2026-10-30
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.21.0: a type-check warning is one line per matched kind naming that kind, as the API server writes it.
+- The README's `kyverno` and `fitting-completion` rows say what the engine README says. A test compares the experimental features table with the engine's when `CEL_LENS_ENGINE_DIR` is set, so the next drift fails at the version bump.
+- The unused `@types/markdown-it` dev dependency is gone.
+- A test pins the CHANGELOG rules of `CONTRIBUTING.md`.
+- `CONTRIBUTING.md` tells contributors to export `CEL_LENS_ENGINE_DIR` to a `cel-lens-core` checkout at the pinned tag before `make check`, so the public-repo layout test catches a broken link before the push.
+
+### Fixed
+
+- The picture run waits on editor state instead of fixed pauses.
+- The Changelog's version links open only for versions the public repository has tags for: versions before 0.14.0 have no link, and 0.14.0 links to its release page.
 
 ## [0.23.0] - 2026-10-30
 
@@ -442,7 +457,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.23.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.0...HEAD
+[0.24.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.23.0...vscode-v0.24.0
 [0.23.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.22.1...vscode-v0.23.0
 [0.22.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.22.0...vscode-v0.22.1
 [0.22.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.21.0...vscode-v0.22.0
@@ -455,31 +471,4 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 [0.15.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.15.1...vscode-v0.15.2
 [0.15.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.15.0...vscode-v0.15.1
 [0.15.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.14.0...vscode-v0.15.0
-[0.14.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.13.1...vscode-v0.14.0
-[0.13.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.13.0...vscode-v0.13.1
-[0.13.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.12.1...vscode-v0.13.0
-[0.12.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.12.0...vscode-v0.12.1
-[0.12.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.11.1...vscode-v0.12.0
-[0.11.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.11.0...vscode-v0.11.1
-[0.11.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.10.0...vscode-v0.11.0
-[0.10.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.9.1...vscode-v0.10.0
-[0.9.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.9.0...vscode-v0.9.1
-[0.9.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.8.1...vscode-v0.9.0
-[0.8.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.8.0...vscode-v0.8.1
-[0.8.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.7.2...vscode-v0.8.0
-[0.7.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.7.1...vscode-v0.7.2
-[0.7.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.6.1...vscode-v0.7.1
-[0.6.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.6.0...vscode-v0.6.1
-[0.6.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.5.0...vscode-v0.6.0
-[0.5.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.4.1...vscode-v0.5.0
-[0.4.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.4.0...vscode-v0.4.1
-[0.4.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.3.1...vscode-v0.4.0
-[0.3.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.3.0...vscode-v0.3.1
-[0.3.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.2.4...vscode-v0.3.0
-[0.2.4]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.2.3...vscode-v0.2.4
-[0.2.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.2.2...vscode-v0.2.3
-[0.2.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.2.1...vscode-v0.2.2
-[0.2.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.2.0...vscode-v0.2.1
-[0.2.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.1.1...vscode-v0.2.0
-[0.1.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.1.0...vscode-v0.1.1
-[0.1.0]: https://github.com/JairJosafath/cel-lens/releases/tag/vscode-v0.1.0
+[0.14.0]: https://github.com/JairJosafath/cel-lens/releases/tag/vscode-v0.14.0

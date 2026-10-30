@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path';
 import { stdout } from 'node:process';
 
 import gifenc from 'gifenc';
-import { chromium, type CDPSession, type Page } from 'playwright';
+import { chromium, type CDPSession, type Locator, type Page } from 'playwright';
 import jpeg from 'jpeg-js';
 
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
@@ -30,14 +30,22 @@ const GIF_COLORS = 48;
 const SCREENCAST_QUALITY = 90;
 const GIF_TICK_MS = 100;
 const GIF_TYPING_MS = 20;
+/** How long a state the script waits for may take, on a slow machine. */
+const STATE_TIMEOUT_MS = 30_000;
 
 const CRD = 'widget_crd.yaml';
 const POLICY = 'pod_policy.yaml';
 
 const QUICK_SUGGESTIONS_OFF = { other: 'off', comments: 'off', strings: 'off' };
 
-/** YAML sets its own quick suggestions, which beat the general setting: switch them off for YAML. */
-const YAML_NO_WORD_SUGGESTIONS = { 'editor.quickSuggestions': QUICK_SUGGESTIONS_OFF };
+/**
+ * YAML sets its own quick suggestions, which beat the general setting: switch them off for YAML.
+ * Trigger characters are off too, so a completion list opens only when a script asks (Control+Space).
+ */
+const YAML_NO_WORD_SUGGESTIONS = {
+  'editor.quickSuggestions': QUICK_SUGGESTIONS_OFF,
+  'editor.suggestOnTriggerCharacters': false,
+};
 
 /** Settings that make the editor look the same on every run. */
 const SETTINGS = {
@@ -291,25 +299,119 @@ async function record(
   return gif;
 }
 
-async function pause(page: Page, ms: number): Promise<void> {
+/**
+ * Holds the page for `ms` so a GIF keeps a frame on screen for that long. It paces
+ * what the GIF shows and is not a wait for the editor: states are waited for with `waitForState`.
+ */
+async function holdFrame(page: Page, ms: number): Promise<void> {
   await page.waitForTimeout(ms);
+}
+
+/**
+ * Waits until `locator` is in `state`; fails with an error that names `description`,
+ * the state waited for, when it is not there after `timeout` ms.
+ */
+async function waitForState(
+  locator: Locator,
+  description: string,
+  state: 'visible' | 'hidden' = 'visible',
+  timeout = STATE_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await locator.waitFor({ state, timeout });
+  } catch (error) {
+    const reason =
+      error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
+    throw new Error(`Gave up after ${String(timeout)} ms waiting for ${description}: ${reason}`, {
+      cause: error,
+    });
+  }
+}
+
+/** Waits until a line of the active editor holds `text`. */
+async function waitForEditorText(page: Page, text: string): Promise<void> {
+  await waitForState(
+    page.locator('.monaco-editor .view-line', { hasText: text }).first(),
+    `the editor to show a line with ${text}`,
+  );
+}
+
+/** The number of lines in view whose text holds `text`. */
+async function countEditorLines(page: Page, text: string): Promise<number> {
+  return await page.locator('.monaco-editor .view-line', { hasText: text }).count();
+}
+
+/** Waits until exactly `count` lines in view hold `text`, so only what a step typed or undid satisfies it. */
+async function waitForEditorLineCount(page: Page, text: string, count: number): Promise<void> {
+  try {
+    await page.waitForFunction(
+      `[...document.querySelectorAll('.monaco-editor .view-line')].filter((line) =>
+        (line.textContent ?? '').replace(/\\u00a0/g, ' ').includes(${JSON.stringify(text)}),
+      ).length === ${String(count)}`,
+      undefined,
+      { timeout: STATE_TIMEOUT_MS },
+    );
+  } catch (error) {
+    throw new Error(
+      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for ${String(count)} editor lines with ${text}`,
+      { cause: error },
+    );
+  }
+}
+
+/** Waits until the quick-open or palette list has gone after a choice. */
+async function waitForQuickInputClosed(page: Page): Promise<void> {
+  await waitForState(
+    page.locator('.quick-input-widget'),
+    'the quick-open or palette list to close',
+    'hidden',
+  );
+}
+
+/** Waits until the hover widget is on screen and holds some text. */
+async function waitForHover(page: Page): Promise<void> {
+  await waitForState(
+    page.locator('.monaco-hover:not(.hidden)', { hasText: /\S/ }).first(),
+    'the hover widget to show its text',
+  );
+}
+
+/** Waits until no hover widget is on screen. */
+async function waitForNoHover(page: Page): Promise<void> {
+  await waitForState(
+    page.locator('.monaco-hover:not(.hidden)').first(),
+    'the hover widget to go away',
+    'hidden',
+  );
 }
 
 async function openFile(page: Page, name: string): Promise<void> {
   await page.keyboard.press('Control+p');
   await page.keyboard.type(name);
-  await page.locator('.quick-input-list .monaco-list-row', { hasText: name }).first().waitFor();
-  await pause(page, 800);
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row', { hasText: name }).first(),
+    `the quick-open list to have a row for ${name}`,
+  );
   await page.keyboard.press('Enter');
-  await page.locator('.monaco-editor .view-lines').first().waitFor();
-  await pause(page, 500);
+  await waitForQuickInputClosed(page);
+  await waitForState(
+    page.locator('.tab.active', { hasText: name }).first(),
+    `the tab of ${name} to be active`,
+  );
+  await waitForState(
+    page.locator('.monaco-editor.focused .view-line').first(),
+    `the editor of ${name} to have focus and show its content`,
+  );
 }
 
-/** Types text into the focused editor, `delay` ms between characters. */
+/**
+ * Types text into the focused editor, `delay` ms between characters. The delay paces
+ * the typing a GIF shows; it is not a wait for the editor.
+ */
 async function typeText(page: Page, text: string, delay: number): Promise<void> {
   for (const character of text) {
     await page.keyboard.type(character);
-    await pause(page, delay);
+    await holdFrame(page, delay);
   }
 }
 
@@ -339,10 +441,12 @@ async function pointAt(page: Page, line: string, word: string): Promise<{ x: num
 }
 
 async function waitForEngine(page: Page): Promise<void> {
-  await page
-    .locator('.statusbar-item', { hasText: /K8s \d/ })
-    .first()
-    .waitFor({ timeout: 90_000 });
+  await waitForState(
+    page.locator('.statusbar-item', { hasText: /K8s \d/ }).first(),
+    'the status bar to show the Kubernetes version of the engine',
+    'visible',
+    90_000,
+  );
 }
 
 async function save(name: string, bytes: Uint8Array): Promise<void> {
@@ -353,7 +457,7 @@ async function save(name: string, bytes: Uint8Array): Promise<void> {
 /** Trusts the workspace, so its settings apply, and clears the screen down to the editor. */
 async function prepare(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Yes, I trust the authors' }).click({ timeout: 60_000 });
-  await pause(page, 1500);
+  await waitForState(page.locator('.monaco-dialog-box'), 'the trust dialog to close', 'hidden');
   await page.keyboard.press('Control+k');
   await page.keyboard.press('Control+w');
   // The palette hides a close command whose bar is already hidden, so run each only when its part is on screen.
@@ -370,48 +474,53 @@ async function prepare(page: Page): Promise<void> {
 async function runCommand(page: Page, title: string): Promise<void> {
   await page.keyboard.press('F1');
   await page.keyboard.type(title);
-  await page.locator('.quick-input-list .monaco-list-row', { hasText: title }).first().waitFor();
-  await pause(page, 300);
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row', { hasText: title }).first(),
+    `the palette to list the command ${title}`,
+  );
   await page.keyboard.press('Enter');
-  await pause(page, 300);
+  await waitForQuickInputClosed(page);
 }
 
 /** Fails when the secondary side bar (the CHAT panel) is still on screen: no picture may show it. */
 async function expectSecondarySideBarHidden(page: Page): Promise<void> {
-  try {
-    await page.locator('.part.auxiliarybar').waitFor({ state: 'hidden', timeout: 5000 });
-  } catch {
-    throw new Error(
-      'The secondary side bar is still on screen after workbench.action.closeAuxiliaryBar: no picture is taken.',
-    );
-  }
+  await waitForState(
+    page.locator('.part.auxiliarybar'),
+    'the secondary side bar to be off screen after workbench.action.closeAuxiliaryBar (no picture may show it)',
+    'hidden',
+  );
 }
 
-async function takePictures(page: Page, workspace: string): Promise<void> {
+async function takePictures(page: Page): Promise<void> {
   await prepare(page);
   await openFile(page, CRD);
   await page.keyboard.press('Control+g');
   await page.keyboard.type('31');
   await page.keyboard.press('Enter');
   await waitForEngine(page);
-  await page.locator('.monaco-editor .squiggly-error').first().waitFor({ timeout: 60_000 });
-  await pause(page, 800);
+  await waitForState(
+    page.locator('.monaco-editor .squiggly-error').first(),
+    'the editor to underline the wrong field',
+    'visible',
+    60_000,
+  );
 
   // problems.png: the reason of the wrong field, on the wrong field.
   const wrong = await pointAt(page, 'self.replica > 0', 'replica ');
   await page.mouse.move(wrong.x - 20, wrong.y - 60);
   await page.mouse.move(wrong.x, wrong.y, { steps: 6 });
-  await page.locator('.monaco-hover:not(.hidden)').first().waitFor();
-  await pause(page, 600);
+  await waitForHover(page);
   await save('problems.png', await page.screenshot({ type: 'png' }));
 
   // quick-fix.png: the fix offered on that problem.
   await page.mouse.move(wrong.x, wrong.y + 120);
-  await pause(page, 400);
+  await waitForNoHover(page);
   await page.mouse.click(wrong.x, wrong.y);
   await page.keyboard.press('Control+.');
-  await page.locator('.action-widget').first().waitFor();
-  await pause(page, 500);
+  await waitForState(
+    page.locator('.action-widget .monaco-list-row').first(),
+    'the quick fix list to show a fix',
+  );
   await save('quick-fix.png', await page.screenshot({ type: 'png' }));
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+End');
@@ -420,30 +529,39 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
   const field = await pointAt(page, 'self.replicas >= self.minReplicas', 'minReplicas');
   await page.mouse.move(field.x - 20, field.y + 80);
   await page.mouse.move(field.x, field.y, { steps: 6 });
-  await page.locator('.monaco-hover:not(.hidden)').first().waitFor();
-  await pause(page, 600);
+  await waitForHover(page);
   await save('hover.png', await page.screenshot({ type: 'png' }));
   await page.mouse.move(field.x, field.y + 200);
 
   // completion.png and completion.gif: the list after self., one item picked.
+  const rulesBefore = await countEditorLines(page, '- rule:');
   await startNewRule(page);
   await page.keyboard.type('- rule: ');
-  await pause(page, 300);
+  await waitForEditorLineCount(page, '- rule:', rulesBefore + 1);
   let completionPicture: Uint8Array | undefined;
   const completion = await record(page, true, async () => {
-    await pause(page, 300);
+    await holdFrame(page, 300);
     await page.keyboard.type('self');
-    await pause(page, 200);
+    await holdFrame(page, 200);
     await page.keyboard.type('.');
-    await page.locator('.suggest-widget.visible .monaco-list-row').first().waitFor();
-    await pause(page, 700);
+    await page.keyboard.press('Control+Space');
+    await waitForState(
+      page.locator('.suggest-widget.visible .monaco-list-row').first(),
+      'the completion list to show an item after self.',
+    );
+    await holdFrame(page, 700);
     await page.keyboard.press('ArrowDown');
-    await pause(page, 500);
+    await holdFrame(page, 500);
     completionPicture = await page.screenshot({ type: 'png' });
     await page.keyboard.press('ArrowDown');
-    await pause(page, 500);
+    await holdFrame(page, 500);
     await page.keyboard.press('Tab');
-    await pause(page, 800);
+    await waitForState(
+      page.locator('.suggest-widget').first(),
+      'the completion list to close after the pick',
+      'hidden',
+    );
+    await holdFrame(page, 800);
   });
   await save('completion.gif', completion);
   if (completionPicture === undefined) {
@@ -455,35 +573,22 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
   for (let step = 0; step < 40; step += 1) {
     await page.keyboard.press('Control+z');
   }
+  await waitForEditorLineCount(page, '- rule:', rulesBefore);
 
   // colors.gif: a rule colored as it is typed, with no completion list in the way.
-  const settingsFile = join(workspace, '.vscode/settings.json');
-  await writeFile(
-    settingsFile,
-    JSON.stringify(
-      {
-        ...SETTINGS,
-        '[yaml]': { ...YAML_NO_WORD_SUGGESTIONS, 'editor.suggestOnTriggerCharacters': false },
-      },
-      null,
-      2,
-    ),
-  );
-  await pause(page, 3000);
-  await page.locator('.suggest-widget.visible').waitFor({ state: 'hidden' });
   await startNewRule(page);
   await page.keyboard.type('- rule: ');
+  await waitForEditorLineCount(page, '- rule:', rulesBefore + 1);
   const colors = await record(page, false, async () => {
-    await pause(page, 200);
+    await holdFrame(page, 200);
     await typeText(page, "self.name.startsWith('w') && self.replicas > 1", GIF_TYPING_MS);
-    await pause(page, 600);
+    await holdFrame(page, 600);
   });
   await save('colors.gif', colors);
-  await writeFile(settingsFile, JSON.stringify(SETTINGS, null, 2));
 
   // colors.png: a whole policy in color.
   await openFile(page, POLICY);
-  await pause(page, 1500);
+  await waitForEditorText(page, 'no-latest-tag');
   await page.keyboard.press('Control+End');
   await page.mouse.move(VIEWPORT.width - 5, VIEWPORT.height - 5);
   await save('colors.png', await page.screenshot({ type: 'png' }));
@@ -549,8 +654,13 @@ async function main(): Promise<void> {
     try {
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       await page.goto(`${url}?folder=${encodeURIComponent(workspace)}`);
-      await page.locator('.monaco-workbench').waitFor({ timeout: 60_000 });
-      await takePictures(page, workspace);
+      await waitForState(
+        page.locator('.monaco-workbench'),
+        'the workbench to load',
+        'visible',
+        60_000,
+      );
+      await takePictures(page);
     } finally {
       await browser.close();
     }

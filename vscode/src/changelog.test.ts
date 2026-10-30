@@ -24,22 +24,23 @@ function engineVersions(text: string): string[] {
 }
 
 const REPO = 'https://github.com/JairJosafath/cel-lens';
-
-function expectedLink(versions: string[], index: number): string {
-  const version = versions[index] ?? '';
-  const previous = versions[index + 1];
-  const tag = (name: string): string => `vscode-v${name}`;
-  if (version === 'Unreleased') {
-    return `[Unreleased]: ${REPO}/compare/${tag(versions[1] ?? '')}...HEAD`;
-  }
-  return previous === undefined
-    ? `[${version}]: ${REPO}/releases/tag/${tag(version)}`
-    : `[${version}]: ${REPO}/compare/${tag(previous)}...${tag(version)}`;
-}
+const OLDEST_PUBLIC_VERSION = '0.14.0';
 
 function linkProblems(versions: string[], refs: string[]): string[] {
-  return versions.flatMap((_, index) => {
-    const expected = expectedLink(versions, index);
+  const tag = (name: string): string => `vscode-v${name}`;
+  const oldest = versions.indexOf(OLDEST_PUBLIC_VERSION);
+  return versions.flatMap((version, index) => {
+    if (index > oldest) {
+      const stray = refs.filter((ref) => ref.startsWith(`[${version}]:`));
+      return stray.map((ref) => `no link line for ${version}, found: ${ref}`);
+    }
+    const previous = versions[index + 1];
+    const expected =
+      version === 'Unreleased'
+        ? `[Unreleased]: ${REPO}/compare/${tag(versions[1] ?? '')}...HEAD`
+        : index === oldest
+          ? `[${version}]: ${REPO}/releases/tag/${tag(version)}`
+          : `[${version}]: ${REPO}/compare/${tag(previous ?? '')}...${tag(version)}`;
     return refs.includes(expected) ? [] : [expected];
   });
 }
@@ -116,12 +117,14 @@ describe('CHANGELOG.md', () => {
     expect(sections.length).toBeGreaterThan(1);
   });
 
-  it.each(sections)('ends with a link reference for $version', ({ version }) => {
+  it.each(
+    sections.slice(0, sections.findIndex(({ version }) => version === OLDEST_PUBLIC_VERSION) + 1),
+  )('ends with one link reference for $version', ({ version }) => {
     const refs = CHANGELOG.slice(CHANGELOG.lastIndexOf('\n\n') + 2).split('\n');
     expect(refs.filter((line) => line.startsWith(`[${version}]: https://`))).toHaveLength(1);
   });
 
-  it('links every version in the public vscode-v form', () => {
+  it('links every public version in the vscode-v form and no older one', () => {
     const refs = CHANGELOG.slice(CHANGELOG.lastIndexOf('\n\n') + 2).split('\n');
     expect(
       linkProblems(
@@ -136,32 +139,45 @@ describe('CHANGELOG.md', () => {
   });
 
   const GOOD_REFS = [
-    `[Unreleased]: ${REPO}/compare/vscode-v0.2.0...HEAD`,
-    `[0.2.0]: ${REPO}/compare/vscode-v0.1.0...vscode-v0.2.0`,
-    `[0.1.0]: ${REPO}/releases/tag/vscode-v0.1.0`,
+    `[Unreleased]: ${REPO}/compare/vscode-v0.15.0...HEAD`,
+    `[0.15.0]: ${REPO}/compare/vscode-v0.14.0...vscode-v0.15.0`,
+    `[${OLDEST_PUBLIC_VERSION}]: ${REPO}/releases/tag/vscode-v${OLDEST_PUBLIC_VERSION}`,
   ];
-  const VERSIONS = ['Unreleased', '0.2.0', '0.1.0'];
+  const VERSIONS = ['Unreleased', '0.15.0', OLDEST_PUBLIC_VERSION, '0.13.1'];
 
   it.each([
     { name: 'the right links', refs: GOOD_REFS, problems: 0 },
     {
       name: 'a link in the v form',
-      refs: [GOOD_REFS[0], `[0.2.0]: ${REPO}/compare/v0.1.0...v0.2.0`, GOOD_REFS[2]],
+      refs: [GOOD_REFS[0], `[0.15.0]: ${REPO}/compare/v0.14.0...v0.15.0`, GOOD_REFS[2]],
       problems: 1,
     },
     {
       name: 'a link that compares the wrong versions',
-      refs: [GOOD_REFS[0], `[0.2.0]: ${REPO}/compare/vscode-v0.0.9...vscode-v0.2.0`, GOOD_REFS[2]],
+      refs: [
+        GOOD_REFS[0],
+        `[0.15.0]: ${REPO}/compare/vscode-v0.0.9...vscode-v0.15.0`,
+        GOOD_REFS[2],
+      ],
       problems: 1,
     },
     {
       name: 'a stale Unreleased link',
-      refs: [`[Unreleased]: ${REPO}/compare/vscode-v0.1.0...HEAD`, GOOD_REFS[1], GOOD_REFS[2]],
+      refs: [`[Unreleased]: ${REPO}/compare/vscode-v0.14.0...HEAD`, GOOD_REFS[1], GOOD_REFS[2]],
       problems: 1,
     },
     {
-      name: 'an oldest link that compares',
-      refs: [GOOD_REFS[0], GOOD_REFS[1], `[0.1.0]: ${REPO}/compare/vscode-v0.0.1...vscode-v0.1.0`],
+      name: 'the oldest public version linked with a compare',
+      refs: [
+        GOOD_REFS[0],
+        GOOD_REFS[1],
+        `[0.14.0]: ${REPO}/compare/vscode-v0.13.1...vscode-v0.14.0`,
+      ],
+      problems: 1,
+    },
+    {
+      name: 'a link on a version older than the oldest public one',
+      refs: [...GOOD_REFS, `[0.13.1]: ${REPO}/compare/vscode-v0.13.0...vscode-v0.13.1`],
       problems: 1,
     },
     { name: 'a missing link', refs: [GOOD_REFS[0], GOOD_REFS[2]], problems: 1 },
