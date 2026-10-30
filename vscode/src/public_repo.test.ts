@@ -61,6 +61,7 @@ interface Workflow {
   on?: Record<string, unknown>;
   permissions?: unknown;
   jobs?: Record<string, Job>;
+  concurrency?: unknown;
 }
 
 function readWorkflow(path: string): Workflow {
@@ -253,11 +254,12 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     ]);
   });
 
-  it('runs the Scorecard action on push to main and weekly', () => {
+  it('runs the Scorecard action weekly and on demand, not on push', () => {
     const scorecard = readWorkflow(SCORECARD_PATH);
 
-    expect(scorecard.on).toMatchObject({ push: { branches: ['main'] } });
     expect(scorecard.on).toHaveProperty('schedule');
+    expect(scorecard.on).toHaveProperty('workflow_dispatch');
+    expect(scorecard.on).not.toHaveProperty('push');
     expect(usesOf(scorecard).some((use) => use.startsWith('ossf/scorecard-action@'))).toBe(true);
   });
 
@@ -270,6 +272,18 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(Object.keys(ci.on ?? {})).toEqual(['push', 'pull_request']);
     expect(run('go test ./...')).toBe('engine');
     expect(run('npm ci && npm test')).toBe('vscode');
+  });
+
+  it('runs CI once per publish: push to main only, no tags, newer runs cancel older', () => {
+    const ci = readWorkflow(CI_PATH);
+
+    expect(ci.on).toHaveProperty('pull_request');
+    expect(ci.on).toHaveProperty('push.branches', ['main']);
+    expect(ci.on).not.toHaveProperty('push.tags');
+    expect(ci.concurrency).toEqual({
+      group: '${{ github.workflow }}-${{ github.ref }}',
+      'cancel-in-progress': true,
+    });
   });
 
   it('uses the Go version of engine/go.mod and Node 24', () => {

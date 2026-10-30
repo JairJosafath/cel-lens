@@ -6,6 +6,13 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-30
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.20.1 (#105): a wrong `params` field is warned about once per matched kind, as the API server does.
+- The public repository's CI runs once per publish, not again for each tag, and Scorecard runs weekly and on demand (#102).
+
 ## [0.22.0] - 2026-10-30
 
 ### Changed
@@ -425,7 +432,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/JairJosafath/cel-lens/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/JairJosafath/cel-lens/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/JairJosafath/cel-lens/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/JairJosafath/cel-lens/compare/v0.19.0...v0.20.0
