@@ -211,21 +211,25 @@ func TestChangelogHeadings(t *testing.T) {
 // link and a stale [Unreleased] link.
 func TestChangelogProblems(t *testing.T) {
 	t.Parallel()
+	const repo = changelogRepo
 	const good = "## [Unreleased]\n\n## [1.1.0] - 2026-01-02\n\n## [1.0.0] - 2026-01-01\n\n" +
-		"[Unreleased]: ../../compare/v1.1.0...HEAD\n[1.1.0]: ../../compare/v1.0.0...v1.1.0\n[1.0.0]: ../../releases/tag/v1.0.0\n"
+		"[Unreleased]: " + repo + "compare/core-v1.1.0...HEAD\n[1.1.0]: " + repo + "compare/core-v1.0.0...core-v1.1.0\n[1.0.0]: " + repo + "releases/tag/core-v1.0.0\n"
 	tests := []struct {
 		name string
 		in   string
 		want int
 	}{
 		{"valid", good, 0},
-		{"missing version link", strings.Replace(good, "[1.1.0]: ../../compare/v1.0.0...v1.1.0\n", "", 1), 1},
-		{"stale unreleased link", strings.Replace(good, "v1.1.0...HEAD", "v1.0.0...HEAD", 1), 1},
-		{"unreleased not to HEAD", strings.Replace(good, "v1.1.0...HEAD", "v1.1.0...v1.1.0", 1), 1},
-		{"missing unreleased link", strings.Replace(good, "[Unreleased]: ../../compare/v1.1.0...HEAD\n", "", 1), 1},
-		{"copied compare link", strings.Replace(good, "[1.1.0]: ../../compare/v1.0.0...v1.1.0", "[1.1.0]: ../../compare/v0.9.0...v1.0.0", 1), 1},
-		{"compare ends at another version", strings.Replace(good, "v1.0.0...v1.1.0", "v1.0.0...v1.2.0", 1), 1},
-		{"oldest compares", strings.Replace(good, "../../releases/tag/v1.0.0", "../../compare/v0.9.0...v1.0.0", 1), 1},
+		{"missing version link", strings.Replace(good, "[1.1.0]: "+repo+"compare/core-v1.0.0...core-v1.1.0\n", "", 1), 1},
+		{"stale unreleased link", strings.Replace(good, "core-v1.1.0...HEAD", "core-v1.0.0...HEAD", 1), 1},
+		{"unreleased not to HEAD", strings.Replace(good, "core-v1.1.0...HEAD", "core-v1.1.0...core-v1.1.0", 1), 1},
+		{"missing unreleased link", strings.Replace(good, "[Unreleased]: "+repo+"compare/core-v1.1.0...HEAD\n", "", 1), 1},
+		{"copied compare link", strings.Replace(good, "core-v1.0.0...core-v1.1.0", "core-v0.9.0...core-v1.0.0", 1), 1},
+		{"compare ends at another version", strings.Replace(good, "core-v1.0.0...core-v1.1.0", "core-v1.0.0...core-v1.2.0", 1), 1},
+		{"oldest compares", strings.Replace(good, "releases/tag/core-v1.0.0", "compare/core-v0.9.0...core-v1.0.0", 1), 1},
+		{"old relative link form", strings.Replace(good, repo+"compare/core-v1.0.0...core-v1.1.0", "../../compare/v1.0.0...v1.1.0", 1), 1},
+		{"link compares the wrong versions", strings.Replace(good, "core-v1.0.0...core-v1.1.0", "core-v0.9.0...core-v1.1.0", 1), 1},
+		{"issue reference", strings.Replace(good, "## [1.0.0] - 2026-01-01\n", "## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- A fix (#43).\n", 1), 1},
 		{"no releases", "## [Unreleased]\n", 1},
 		{"repeated heading in unreleased", "## [Unreleased]\n\n### Changed\n\n### Changed\n\n" + good[len("## [Unreleased]\n\n"):], 1},
 		{"headings out of order in newest release", strings.Replace(good, "## [1.1.0] - 2026-01-02\n", "## [1.1.0] - 2026-01-02\n\n### Fixed\n\n### Added\n", 1), 1},
@@ -241,10 +245,14 @@ func TestChangelogProblems(t *testing.T) {
 	}
 }
 
+// changelogRepo is the public repository the version links of CHANGELOG.md point into.
+const changelogRepo = "https://github.com/JairJosafath/cel-lens/"
+
 // changelogProblems returns one message for each problem in the changelog text:
 // a malformed heading or date, a released version without a link definition or whose link does not compare
 // the previous release to it (the oldest links to its release tag), or
-// an [Unreleased] link that does not compare the newest release to HEAD. It also
+// an [Unreleased] link that does not compare the newest release to HEAD, or a
+// line with a #<digits> issue reference. It also
 // reports a repeated change-type heading, or one out of Keep a Changelog order,
 // in the [Unreleased] section and the newest release.
 func changelogProblems(text string) []string {
@@ -257,12 +265,16 @@ func changelogProblems(text string) []string {
 			links[m[1]] = m[2]
 		}
 	}
+	issueRef := regexp.MustCompile(`#\d+`)
 	var problems []string
 	var versions []string
 	order := []string{"Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"}
 	sections := 0 // sections seen so far; only the first two are checked
 	last := -1    // index in order of the previous change-type heading of this section
 	for i, line := range lines {
+		if issueRef.MatchString(line) {
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: line has an issue reference, which names no public issue", i+1))
+		}
 		if strings.HasPrefix(line, "## [") {
 			sections++
 			last = -1
@@ -303,15 +315,15 @@ func changelogProblems(text string) []string {
 		if !ok {
 			continue
 		}
-		want := "../../releases/tag/v" + v
+		want := changelogRepo + "releases/tag/core-v" + v
 		if i+1 < len(versions) {
-			want = "../../compare/v" + versions[i+1] + "...v" + v
+			want = changelogRepo + "compare/core-v" + versions[i+1] + "...core-v" + v
 		}
 		if got != want {
 			problems = append(problems, fmt.Sprintf("CHANGELOG.md: [%s]: %s, want %s", v, got, want))
 		}
 	}
-	want := "../../compare/v" + versions[0] + "...HEAD"
+	want := changelogRepo + "compare/core-v" + versions[0] + "...HEAD"
 	if got, ok := links["Unreleased"]; !ok {
 		problems = append(problems, "CHANGELOG.md has no \"[Unreleased]:\" link definition, want "+want)
 	} else if got != want {

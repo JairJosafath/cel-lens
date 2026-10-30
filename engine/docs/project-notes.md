@@ -52,8 +52,8 @@ In the `full` job, `make check` passed `go mod tidy`, fmt, vet and lint. Then
 
 Cause: the e2e tests build the engine inside the tests, under their build deadline
 and under `-race`, while the other packages' tests ran on the same runner.
-cel-lens-core#26 moves that build into `make test`, so the tests use one prebuilt
-binary.
+cel-lens-core#26 moved that build into `make test`, so the tests used one prebuilt
+binary. Run 140 (see "Runner timings") shows it working on the runner.
 
 ### Why the tests build the program when `CEL_LENS_BIN` is unset
 
@@ -124,14 +124,38 @@ twice the 164 s upper figure. A full `make check` on a busy sandbox showed the r
 package at 1263 s while other work was running, so timings here vary a lot with load;
 the 143 s figure is the one to compare against.
 
+## Current root package budget (#67)
+
+This replaces the root package figures above (94 to 164 s, 143 s on a quiet
+machine), which predate #26 and #53. Measured on the 8-core sandbox on 2026-10-30:
+`go test -race -count=1 -timeout 30m .`, the root package's part of `make check`,
+takes about 36 to 43 s (36 to 38 s in the review of #53; 43 s on a re-run on
+2026-10-30 with a warm build cache, 58 s with a cold one). Inside a full
+`make check` on 2026-10-30, where every package runs in parallel, the root package
+took 65 s (`internal/assist` 248 s, `pkg/check` 119 s). Compare future runs against
+36 to 43 s alone and about 65 s inside `make check`.
+
+`go install` (`TestGoInstallFromProxy`) now runs only in `make test-dist`, not in
+`make check`; `TestDist` runs there too. Both are skipped by `go test` unless
+`CEL_LENS_DIST_TEST=1` is set.
+
 ## Runner timings
 
-From run 41 (cel-lens-core#28), against the 8-core sandbox figures above:
+From run 140 (cel-lens-core#71), the `full` job of the push `release-check/v0.19.0`
+at `5b4c2e4`, green, 2026-10-30 03:55 to 04:08Z. It is the first green full check
+after #26. The owner read the figures on the runner. The tests used the binary that
+`make` built once (`go build ... -o bin/cel-lens-core`) and passed as `CEL_LENS_BIN`,
+so #26 works on the runner. Against the 8-core sandbox figures above (inside a full
+`make check`, where every package runs in parallel):
 
-- Root package: `FAIL github.com/JairJosafath/cel-lens/engine 602.672s`, against 94
-  to 164 s on the sandbox (143 s on a quiet machine).
-- `internal/assist`: 749 s on the runner, against 261 s on the sandbox (about 2.9
-  times as long).
-- `pkg/check`: 384 s on the runner, against 82 s on the sandbox (about 4.7 times as
-  long).
+- Root package: `ok  github.com/JairJosafath/cel-lens/engine 82.562s`, against about
+  65 s on the sandbox.
+- `internal/assist`: 204.844 s, against 248 s on the sandbox.
+- `pkg/check`: 72.672 s, against 119 s on the sandbox.
+- `go test -race ./...` took 4m17s in all; `make check` took 5m47s (03:55:36 to
+  04:01:23Z).
+
+Run 41, the earlier failed run (v0.17.2, before #26), for comparison only: root
+package `FAIL ... 602.672s`, `internal/assist` 749 s, `pkg/check` 384 s.
+
 - A cold `-trimpath` build of the engine takes 5 min 15 s on an idle 8-core sandbox.

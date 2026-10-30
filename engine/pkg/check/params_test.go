@@ -156,24 +156,33 @@ func TestParamsOncePerMatchedKind(t *testing.T) {
 	}
 }
 
-// TestUntypedWarningHasNoKind checks that a warning that depends on neither
-// object nor params names no kind, once, though the policy matches two kinds
-// and has a typed paramKind.
-func TestUntypedWarningHasNoKind(t *testing.T) {
+// TestKindlessWarningPerMatchedKind checks that a warning that depends on
+// neither object nor params is one line per matched kind, naming that kind and
+// never the params kind, as status.typeChecking writes it.
+func TestKindlessWarningPerMatchedKind(t *testing.T) {
 	t.Parallel()
-	doc := strings.Replace(paramsPolicy("{apiVersion: v1, kind: ConfigMap}", "authorizer.requestResource.check('get').allowed()"),
+	const msg = "unexpected failed resolution of 'kubernetes.authorization.Authorizer'"
+	both := strings.Replace(paramsPolicy("{apiVersion: v1, kind: ConfigMap}", "authorizer.requestResource.check('update').allowed()"),
 		"resources: [deployments]}", "resources: [deployments]}\n      - {apiGroups: [apps], apiVersions: [v1], resources: [statefulsets]}", 1)
-	diags, err := check.Check(context.Background(), "policy.yaml", []byte(doc), allOn())
-	if err != nil {
-		t.Fatal(err)
+	one := paramsPolicy("{apiVersion: v1, kind: ConfigMap}", "authorizer.requestResource.check('update').allowed()")
+	tests := []struct {
+		name, doc string
+		want      []warning
+	}{
+		{"two kinds", both, []warning{{"apps/v1 Deployment: " + msg, "requestResource"}, {"apps/v1 StatefulSet: " + msg, "requestResource"}}},
+		{"one kind", one, []warning{{"apps/v1 Deployment: " + msg, "requestResource"}}},
 	}
-	if len(diags) != 1 {
-		t.Fatalf("Check(authorizer) = %v, want one warning", diags)
-	}
-	for _, kind := range []string{"v1 ConfigMap", "apps/v1"} {
-		if strings.Contains(diags[0].Message, kind) {
-			t.Errorf("Check(authorizer) message %q names %s, want no kind", diags[0].Message, kind)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags, err := check.Check(context.Background(), "policy.yaml", []byte(tt.doc), allOn())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := texts(tt.doc, diags); !slices.Equal(got, tt.want) {
+				t.Errorf("Check(authorizer) = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -107,7 +107,9 @@ is `int`, `request.userInfo.groups` is `list(string)`) and anything else,
 such as an object, or an expression that does not compile, is `dyn`. Completion
 after `variables.` offers the variables defined before that point, each with its
 type, and hover gives the type and the defining expression. A name the policy
-has no variable for, or defines later, gets `undefined field '<name>'`. For a
+has no variable for, or defines later, gets `undefined field '<name>'`. A type-check warning that depends on no
+variable, such as the `authorizer.requestResource` one, is still one line per
+matched kind naming that kind, as `status.typeChecking` writes it. For a
 MutatingAdmissionPolicy, a
 mutation must return `Object` (`applyConfiguration`) or a list of `JSONPatch`
 (`jsonPatch`), and `object` and `oldObject` are typed for completion and hover
@@ -190,6 +192,22 @@ variants, `ClusterPolicy` and `Policy`), other apiVersions of `ValidatingPolicy`
 and a ValidatingPolicy with another `evaluation.mode` than `Kubernetes` or
 `JSON` (such as `Envoy`), which is not checked.
 
+## Truth set
+
+The answers the API server recorded in `status.typeChecking` live in
+`pkg/check/testdata/truth/`, one YAML file per case: its `name`, the Kubernetes
+`version` the answer came from (`v1.37.0`), the `policy` document as it was sent
+to the API server, and the `typeChecking` lines as the API server wrote them.
+`TestTruthSet` runs `check.Check` on each policy at that version and compares the
+warnings with the lines: each line must match exactly one warning, whose message
+is `<group/version> <Kind>: <message>`, and there must be as many warnings as
+lines. The position after `<input>:` is kept for the record and not compared.
+
+To add a case, record the policy and the `status.typeChecking` lines from a real
+cluster, name the Kubernetes version it ran, and drop the file in the folder.
+A change to the wording or the prefix of a type-check warning is checked against
+these cases first and never made from a guess about the API server.
+
 ## Command-line check
 
 `cel-lens-core check [--format text|json] [--experimental name,name] <paths...>` runs the editor's checks
@@ -204,3 +222,10 @@ prints an array of `{file, start, end, severity, message}` instead (with `fixes`
 means no errors, 1 that errors were found, 2 a usage or read error (a missing
 path, malformed YAML, which is also printed as a problem at the line where it
 breaks, as the language server shows it), 130 that the run was interrupted (Ctrl-C). Unreadable paths do not stop the others being checked.
+
+A case the engine does not yet answer as the API server does carries a
+`divergence` note saying how. The test then passes while the engine still differs,
+and fails when it agrees, so the note is removed. `vap-params-missing-field` and
+its two-kinds twin carry one: the engine types a ConfigMap's `params.data` as an
+open string map and reports nothing, where the API server reports
+`undefined field 'dataa'`.

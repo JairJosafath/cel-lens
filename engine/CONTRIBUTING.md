@@ -77,7 +77,10 @@ repeat:
    (README, `--help` text, doc comments).
 3. Add a line under `[Unreleased]` in `CHANGELOG.md`, in the section of its kind
    from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), in this order:
-   `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+   `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`. The line
+   names no issue number. A release adds a link line for its notes in the
+   `core-v` form, `[0.20.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.19.0...core-v0.20.0`,
+   and `[Unreleased]` compares the newest `core-v` tag to `HEAD`.
 4. Run `make check`, commit with a Conventional Commit message (`feat:`, `fix:`,
    `test:`, `refactor:`, `docs:`) and open a pull request on the public
    repository.
