@@ -226,6 +226,19 @@ export function checkPinChecksums(pin: CorePin, checksums: string): void {
   }
 }
 
+/** The error's message, or its `code` (an AggregateError from a dual-stack host has no message). */
+function describeFailure(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  if (error.message !== '') {
+    return error.message;
+  }
+  return 'code' in error && typeof error.code === 'string' && error.code !== ''
+    ? error.code
+    : error.name;
+}
+
 /** Fetches `url`; throws "Download of <url> failed: <reason>" on an HTTP error or no connection. */
 async function download(url: string): Promise<Response> {
   let response: Response;
@@ -233,10 +246,7 @@ async function download(url: string): Promise<Response> {
     response = await fetch(url);
   } catch (error) {
     const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
-    throw new Error(
-      `Download of ${url} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-      { cause: error },
-    );
+    throw new Error(`Download of ${url} failed: ${describeFailure(cause)}`, { cause: error });
   }
   if (!response.ok) {
     throw new Error(`Download of ${url} failed: HTTP ${String(response.status)}`);

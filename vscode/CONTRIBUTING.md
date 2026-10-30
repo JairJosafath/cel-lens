@@ -112,7 +112,8 @@ and the CEL fields of admission policies (`admissionregistration.k8s.io`):
 `spec.matchConditions[].expression`, `spec.variables[].expression`,
 `spec.mutations[].applyConfiguration.expression` and `spec.mutations[].jsonPatch.expression`
 of a MutatingAdmissionPolicy. It also colors the same five fields of a Kyverno
-ValidatingPolicy (`policies.kyverno.io/v1`): `spec.validations[].expression`,
+ValidatingPolicy (`policies.kyverno.io/v1`), but only when `kyverno` is in the
+`cel-lens.experimental` setting: `spec.validations[].expression`,
 `spec.validations[].messageExpression`, `spec.matchConditions[].expression`,
 `spec.variables[].expression` and `spec.auditAnnotations[].valueExpression`. Kyverno's
 other kinds and other versions are not colored, and neither is a field of the same name

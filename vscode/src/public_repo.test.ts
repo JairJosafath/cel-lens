@@ -79,10 +79,11 @@ function usesOf(workflow: Workflow): string[] {
 }
 
 function markdownTargets(text: string): string[] {
-  // Every ](target) part, so a badge's picture and its outer link are both targets.
-  return [...text.matchAll(/\]\(([^)\s]+)\)/g)].flatMap((match) =>
-    match[1] === undefined ? [] : [match[1]],
-  );
+  // Every ](target) or ](target "title") part, so a badge's picture and its outer link are both
+  // targets, then every [id]: target definition of a reference-style link.
+  const inline = text.matchAll(/\]\(\s*([^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g);
+  const definitions = text.matchAll(/^ {0,3}\[(?!\^)[^\]]+\]:[ \t]*(\S+)/gm);
+  return [...inline, ...definitions].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 }
 
 function badges(readme: string): string[] {
@@ -99,6 +100,11 @@ describe('markdownTargets', () => {
     ['![pic](p.gif)', ['p.gif']],
     ['[![badge](b.svg)](LICENSE)', ['b.svg', 'LICENSE']],
     ['[![a](a.svg)](A) and [![b](b.svg)](B)', ['a.svg', 'A', 'b.svg', 'B']],
+    ['[a](x.md "The title")', ['x.md']],
+    ['[a](x.md \'The title\') ![p](p.gif "t")', ['x.md', 'p.gif']],
+    ['[a][id]\n\n[id]: docs/x.md', ['docs/x.md']],
+    ['[a][id]\n\n[id]: docs/x.md "Title"\n[Other]: y.md', ['docs/x.md', 'y.md']],
+    ['text[^1]\n\n[^1]: a note', []],
   ])('finds the targets of %s', (text, expected) => {
     expect(markdownTargets(text)).toEqual(expected);
   });

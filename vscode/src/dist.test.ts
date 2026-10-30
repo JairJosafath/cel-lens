@@ -166,6 +166,25 @@ describe('src/dist.ts fetch', { timeout: 60_000 }, () => {
     server = createServer();
   });
 
+  it('states the error code when a refused dual-stack connection has no message', async () => {
+    await new Promise<void>((done) => {
+      server.close(() => {
+        done();
+      });
+    });
+    const dualStackUrl = baseUrl.replace('127.0.0.1', 'localhost');
+    const pinFile = join(directory, 'pin.json');
+    await writeFile(pinFile, (await readFile(pinFile, 'utf8')).replaceAll(baseUrl, dualStackUrl));
+
+    const failure = await fetchCore().then(
+      () => undefined,
+      (error: unknown) => error as { stderr: string },
+    );
+
+    expect(failure?.stderr).toContain(`Download of ${dualStackUrl}/checksums.txt failed: ECONN`);
+    server = createServer();
+  });
+
   it('install replaces a file in bin whose bytes are not the pinned ones', async () => {
     const bin = join(directory, 'bin');
     const install = (): Promise<{ stdout: string }> =>

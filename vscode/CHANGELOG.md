@@ -6,6 +6,17 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-30
+
+### Changed
+
+- CONTRIBUTING.md says that Kyverno coloring needs the `kyverno` experimental feature (#41).
+- The public-repo Markdown link test also covers reference-style and titled links (#47).
+
+### Fixed
+
+- A failed engine download with no error message names the error code, such as ECONNREFUSED (#43).
+
 ## [0.18.0] - 2026-10-30
 
 ### Changed
@@ -381,7 +392,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/JairJosafath/cel-lens/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/JairJosafath/cel-lens/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/JairJosafath/cel-lens/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/JairJosafath/cel-lens/compare/v0.15.2...v0.16.0

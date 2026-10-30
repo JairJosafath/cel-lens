@@ -31,6 +31,12 @@ describe('CONTRIBUTING.md', () => {
     expect(engines?.node).toBe(`>=${documented}`);
   });
 
+  it('says Kyverno ValidatingPolicy fields are colored only with kyverno in cel-lens.experimental', () => {
+    const flat = CONTRIBUTING.replace(/\s+/g, ' ');
+
+    expect(flat).toContain('only when `kyverno` is in the `cel-lens.experimental` setting');
+  });
+
   it('puts retaking the pictures and committing images/ in the release steps', () => {
     const start = CONTRIBUTING.indexOf('## Releases');
     const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
