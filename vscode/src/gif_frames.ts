@@ -29,7 +29,7 @@ export interface IndexedFrame {
 }
 
 export interface IndexedFrames {
-  /** at most `colors` entries; the last is the transparent one. */
+  /** at most `colors` entries; the last is the transparent one. Colour matching excludes it: pixels are matched against the quantized entries only. */
   readonly palette: Palette;
   readonly transparentIndex: number;
   readonly frames: readonly IndexedFrame[];
@@ -65,12 +65,13 @@ export function indexFrames(
   { quantize, applyPalette }: Quantizer,
 ): IndexedFrames {
   const palette = quantize(samplePixels(frames), colors - 1);
+  const quantized = palette.slice();
   palette.push([0, 0, 0]);
   const transparentIndex = palette.length - 1;
   const indexed: IndexedFrame[] = [];
   let previous: Uint8Array | undefined;
   for (const { width, height, data } of frames) {
-    const full = applyPalette(data, palette);
+    const full = applyPalette(data, quantized);
     const index = previous === undefined ? full : full.slice();
     if (previous !== undefined) {
       for (let pixel = 0; pixel < index.length; pixel += 1) {

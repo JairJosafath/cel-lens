@@ -46,6 +46,16 @@ describe('indexFrames', () => {
     expect(result.palette[COLORS - 1]).toEqual([0, 0, 0]);
   });
 
+  it('writes a black box that appears in a later frame', () => {
+    const white = [255, 255, 255];
+    const result = indexFrames([frame(white, white), frame(white, [0, 0, 0])], COLORS, {
+      applyPalette,
+      quantize,
+    });
+    const written = result.frames[1]?.index.filter((value) => value !== result.transparentIndex);
+    expect(written).toHaveLength((SIZE / 2) * (SIZE / 2));
+  });
+
   it('keeps every pixel of the first frame', () => {
     const result = indexFrames([frame([30, 30, 30], [200, 0, 0])], COLORS, {
       applyPalette,

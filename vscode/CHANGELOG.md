@@ -6,6 +6,19 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-30
+
+### Changed
+
+- `make release-version` fails when `CHANGELOG.md` has no heading for the tagged version (#63).
+- Tests: `describeFailure` is tested directly, so the dual-stack download test no longer depends on the runner's network (#58).
+- The public-repo Markdown link test resolves the remaining CommonMark link forms (#60).
+- The Makefile change for #63 is merged as a Standard change (#80).
+
+### Fixed
+
+- Near-black pixels no longer vanish in later frames of the GIFs the picture run makes; the README GIFs are retaken with the next picture run (#76).
+
 ## [0.20.0] - 2026-10-30
 
 ### Changed
@@ -400,7 +413,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/JairJosafath/cel-lens/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/JairJosafath/cel-lens/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/JairJosafath/cel-lens/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/JairJosafath/cel-lens/compare/v0.17.0...v0.18.0

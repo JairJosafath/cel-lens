@@ -227,7 +227,7 @@ export function checkPinChecksums(pin: CorePin, checksums: string): void {
 }
 
 /** The error's message, or its `code` (an AggregateError from a dual-stack host has no message). */
-function describeFailure(error: unknown): string {
+export function describeFailure(error: unknown): string {
   if (!(error instanceof Error)) {
     return String(error);
   }

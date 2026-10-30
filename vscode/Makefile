@@ -64,10 +64,15 @@ else
 	$(VSCE) --out dist/$(NAME)-$(PACKAGE_VERSION).vsix
 endif
 
-release-version: # Fail when VERSION is not package.json's version.
+release-version: # Fail when VERSION is not package.json's version or CHANGELOG.md lacks its heading.
 	@if [ "$(VERSION)" != "v$(PACKAGE_VERSION)" ]; then \
 		echo "Tag $(VERSION) does not match version $(PACKAGE_VERSION) in package.json." >&2; \
 		echo "Set \"version\": \"$(VERSION:v%=%)\" there, add its CHANGELOG.md entry, then tag again." >&2; \
+		exit 1; \
+	fi
+	@if ! grep -qF "## [$(VERSION:v%=%)]" CHANGELOG.md; then \
+		echo "CHANGELOG.md has no \"## [$(VERSION:v%=%)]\" heading." >&2; \
+		echo "Move the Unreleased notes under that heading, then tag again." >&2; \
 		exit 1; \
 	fi
 

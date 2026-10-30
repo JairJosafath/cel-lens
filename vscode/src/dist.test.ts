@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { CORE_RELEASES_ENV, releaseDownloadUrl } from './core_releases';
-import { checkPinChecksums, parsePin, type CorePin } from './dist';
+import { checkPinChecksums, describeFailure, parsePin, type CorePin } from './dist';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -181,7 +181,8 @@ describe('src/dist.ts fetch', { timeout: 60_000 }, () => {
       (error: unknown) => error as { stderr: string },
     );
 
-    expect(failure?.stderr).toContain(`Download of ${dualStackUrl}/checksums.txt failed: ECONN`);
+    expect(failure?.stderr).toContain(`Download of ${dualStackUrl}/checksums.txt failed: `);
+    expect(failure?.stderr).toContain('ECONNREFUSED');
     server = createServer();
   });
 
@@ -242,6 +243,21 @@ describe('src/dist.ts fetch', { timeout: 60_000 }, () => {
 
     expect(failure?.stderr).toContain('HTTP 404');
     await expect(access(join(directory, 'out'))).rejects.toThrow();
+  });
+});
+
+describe('describeFailure', () => {
+  it.each([
+    [
+      'the code of an AggregateError with an empty message',
+      Object.assign(new AggregateError([]), { code: 'ECONNREFUSED' }),
+      'ECONNREFUSED',
+    ],
+    ['the message of an error with one', new Error('connect failed'), 'connect failed'],
+    ['the name of an error with neither message nor code', new TypeError(''), 'TypeError'],
+    ['the text of a value that is not an Error', 'plain text', 'plain text'],
+  ])('gives %s', (_name, error, expected) => {
+    expect(describeFailure(error)).toBe(expected);
   });
 });
 
