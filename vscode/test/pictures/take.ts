@@ -356,9 +356,35 @@ async function prepare(page: Page): Promise<void> {
   await pause(page, 1500);
   await page.keyboard.press('Control+k');
   await page.keyboard.press('Control+w');
-  await page.keyboard.press('Control+b');
-  await page.keyboard.press('Control+Alt+b');
-  await pause(page, 500);
+  // The palette hides a close command whose bar is already hidden, so run each only when its part is on screen.
+  if (await page.locator('.part.sidebar').isVisible()) {
+    await runCommand(page, 'View: Close Primary Side Bar');
+  }
+  if (await page.locator('.part.auxiliarybar').isVisible()) {
+    await runCommand(page, 'View: Hide Secondary Side Bar');
+  }
+  await expectSecondarySideBarHidden(page);
+}
+
+/** Runs a command through the command palette, by its title. */
+async function runCommand(page: Page, title: string): Promise<void> {
+  await page.keyboard.press('F1');
+  await page.keyboard.type(title);
+  await page.locator('.quick-input-list .monaco-list-row', { hasText: title }).first().waitFor();
+  await pause(page, 300);
+  await page.keyboard.press('Enter');
+  await pause(page, 300);
+}
+
+/** Fails when the secondary side bar (the CHAT panel) is still on screen: no picture may show it. */
+async function expectSecondarySideBarHidden(page: Page): Promise<void> {
+  try {
+    await page.locator('.part.auxiliarybar').waitFor({ state: 'hidden', timeout: 5000 });
+  } catch {
+    throw new Error(
+      'The secondary side bar is still on screen after workbench.action.closeAuxiliaryBar: no picture is taken.',
+    );
+  }
 }
 
 async function takePictures(page: Page, workspace: string): Promise<void> {

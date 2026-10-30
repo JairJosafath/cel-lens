@@ -63,7 +63,7 @@ It is not part of `make check`, and it needs a network: it downloads openvscode-
 
 ## Send a change
 
-One concern per pull request. Write a failing test first, make it pass, and describe the change under "Unreleased" in `CHANGELOG.md` when users can see it. Use Conventional Commit messages (`feat:`, `fix:`, `test:`, `refactor:`, `docs:`).
+One concern per pull request. Write a failing test first, make it pass, and describe the change under "Unreleased" in `CHANGELOG.md` when users can see it; a CHANGELOG line names no issue number. Use Conventional Commit messages (`feat:`, `fix:`, `test:`, `refactor:`, `docs:`).
 
 ## Report a bug
 
@@ -230,7 +230,7 @@ engine lacks fails. Without it, `engine/` is an empty tree and those links are n
 To release, follow these steps in order:
 
 1. Bump `version` in `package.json` (and `package-lock.json`), and the engine in `core-version.json` if it changes.
-2. Move the "Unreleased" entries of `CHANGELOG.md` under a new heading for the version and date.
+2. Move the "Unreleased" entries of `CHANGELOG.md` under a new heading for the version and date, add the version's link line at the end in the `vscode-v` form (`[X.Y.Z]: https://github.com/JairJosafath/cel-lens/compare/vscode-v<previous>...vscode-vX.Y.Z`), and move the `[Unreleased]` link to compare `vscode-vX.Y.Z` to `HEAD`.
 3. Retake the pictures so the store page matches the release: run `npm run pictures` (see "Retake the pictures" above) and commit the changed files in `images/`.
 4. Run `make check`; it must pass before you tag, and never release a red commit.
 5. Tag the commit `vX.Y.Z` (the `version` in `package.json` with a `v` in front; the release workflow refuses any other tag) and push the tag; the release workflow attaches `dist/` to the release.
