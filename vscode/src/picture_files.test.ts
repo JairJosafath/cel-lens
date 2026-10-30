@@ -2,7 +2,13 @@ import { readFileSync, statSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { gifDelaysMs, gifDisposals, gifFrameCount, pictureKind } from './picture_files';
+import {
+  gifColorTables,
+  gifDelaysMs,
+  gifDisposals,
+  gifFrameCount,
+  pictureKind,
+} from './picture_files';
 
 const PNG_HEAD = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const GIF_HEAD = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
@@ -42,6 +48,50 @@ const DISPOSED_FRAMES = Uint8Array.from([
   ...frame,
   ...controlWithDisposal(2),
   ...frame,
+  0x3b,
+]);
+// A 2-colour global table on the screen, and a 2-colour local table on the second frame only.
+const TABLE = [0, 0, 0, 255, 255, 255];
+const localFrame = [0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0x80, ...TABLE, 2, 2, 0x44, 0x01, 0];
+const GLOBAL_TABLE_ONLY = Uint8Array.from([
+  ...GIF_HEAD,
+  1,
+  0,
+  1,
+  0,
+  0x80,
+  0,
+  0,
+  ...TABLE,
+  ...frame,
+  ...frame,
+  0x3b,
+]);
+const GLOBAL_AND_LOCAL = Uint8Array.from([
+  ...GIF_HEAD,
+  1,
+  0,
+  1,
+  0,
+  0x80,
+  0,
+  0,
+  ...TABLE,
+  ...frame,
+  ...localFrame,
+  0x3b,
+]);
+const LOCAL_ONLY = Uint8Array.from([
+  ...GIF_HEAD,
+  1,
+  0,
+  1,
+  0,
+  0,
+  0,
+  0,
+  ...localFrame,
+  ...localFrame,
   0x3b,
 ]);
 const MAX_PLAY_MS = 8000;
@@ -96,6 +146,18 @@ describe('gifDisposals', () => {
   });
 });
 
+describe('gifColorTables', () => {
+  it.each([
+    ['a global table and no local ones', GLOBAL_TABLE_ONLY, { hasGlobal: true, localCount: 0 }],
+    ['a global table and one local one', GLOBAL_AND_LOCAL, { hasGlobal: true, localCount: 1 }],
+    ['local tables and no global one', LOCAL_ONLY, { hasGlobal: false, localCount: 2 }],
+    ['no tables at all', TWO_FRAMES, { hasGlobal: false, localCount: 0 }],
+    ['bytes that are not a GIF', Uint8Array.from(PNG_HEAD), { hasGlobal: false, localCount: 0 }],
+  ])('finds %s', (_name, bytes, expected) => {
+    expect(gifColorTables(bytes)).toEqual(expected);
+  });
+});
+
 describe('the pictures in images/', () => {
   it.each(PNGS)('%s is a PNG', (name) => {
     expect(pictureKind(readFileSync(`images/${name}`))).toBe('png');
@@ -127,6 +189,13 @@ describe('the pictures in images/', () => {
     const disposals = gifDisposals(readFileSync(`images/${name}`));
     expect(disposals.length).toBeGreaterThan(1);
     expect(disposals.filter((method) => method === 2 || method === 3)).toEqual([]);
+  });
+
+  it.each(GIFS)('%s has one global colour table and no local ones', (name) => {
+    expect(gifColorTables(readFileSync(`images/${name}`))).toEqual({
+      hasGlobal: true,
+      localCount: 0,
+    });
   });
 
   it('the .vsix takes only images/icon.png of them', () => {

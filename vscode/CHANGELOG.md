@@ -6,6 +6,14 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-30
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.19.0 (#70).
+- The public-repo layout test builds `engine/` from the checkout named by `CEL_LENS_ENGINE_DIR` when it is set, so a link to a file the engine lacks fails (#16).
+- A test checks that each README GIF has one global colour table and no local tables (#51).
+
 ## [0.19.0] - 2026-10-30
 
 ### Changed
@@ -392,7 +400,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/JairJosafath/cel-lens/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/JairJosafath/cel-lens/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/JairJosafath/cel-lens/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/JairJosafath/cel-lens/compare/v0.16.0...v0.17.0

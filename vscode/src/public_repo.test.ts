@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -109,6 +109,49 @@ describe('markdownTargets', () => {
     expect(markdownTargets(text)).toEqual(expected);
   });
 });
+
+// Builds the published layout and lists the relative links of public-repo/ that point at nothing.
+// engine/ comes from the checkout when one is given, else from empty files.
+function missingLinks(engineCheckout: string | undefined): string[] {
+  layout = mkdtempSync(join(tmpdir(), 'public-repo-'));
+  const root = resolve('.');
+  cpSync(FOLDER, layout, { recursive: true });
+  // Entry by entry: a copy cannot go inside itself, and the layout may sit under the root.
+  for (const entry of readdirSync(root)) {
+    const source = join(root, entry);
+    if (!ABSENT.has(entry) && !layout.startsWith(source)) {
+      cpSync(source, join(layout, 'vscode', entry), { recursive: true });
+    }
+  }
+  rmSync(join(layout, 'vscode', 'docs', 'agents'), { recursive: true, force: true });
+  if (engineCheckout === undefined || engineCheckout === '') {
+    mkdirSync(join(layout, 'engine'));
+    for (const file of ENGINE_FILES) {
+      writeFileSync(join(layout, 'engine', file), '');
+    }
+  } else {
+    cpSync(engineCheckout, join(layout, 'engine'), {
+      recursive: true,
+      filter: (source) => !['.git', 'node_modules'].includes(basename(source)),
+    });
+  }
+
+  const built = layout;
+  return filesUnder(FOLDER)
+    .filter((file) => file.endsWith('.md'))
+    .flatMap((file) =>
+      markdownTargets(readFileSync(file, 'utf8'))
+        .filter((target) => !/^([a-z][a-z0-9+.-]*:|#)/i.test(target))
+        .map((target) => ({ file, target }))
+        .filter(
+          ({ file: from, target }) =>
+            !existsSync(
+              join(built, dirname(from.slice(FOLDER.length + 1)), target.split('#')[0] ?? ''),
+            ),
+        )
+        .map(({ file: from, target }) => `${from}: ${target}`),
+    );
+}
 
 afterEach(() => {
   if (layout !== undefined) {
@@ -279,41 +322,26 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
   });
 
   it('resolves every relative link and picture of its Markdown in the published layout', () => {
-    layout = mkdtempSync(join(tmpdir(), 'public-repo-'));
-    const root = resolve('.');
-    cpSync(FOLDER, layout, { recursive: true });
-    // Entry by entry: a copy cannot go inside itself, and the layout may sit under the root.
-    for (const entry of readdirSync(root)) {
-      const source = join(root, entry);
-      if (!ABSENT.has(entry) && !layout.startsWith(source)) {
-        cpSync(source, join(layout, 'vscode', entry), { recursive: true });
-      }
-    }
-    rmSync(join(layout, 'vscode', 'docs', 'agents'), { recursive: true, force: true });
-    mkdirSync(join(layout, 'engine'));
-    for (const file of ENGINE_FILES) {
-      writeFileSync(join(layout, 'engine', file), '');
-    }
+    // CEL_LENS_ENGINE_DIR names a checkout of the engine; without it engine/ is an empty tree.
+    expect(missingLinks(process.env['CEL_LENS_ENGINE_DIR'])).toEqual([]);
+  });
 
-    const missing = filesUnder(FOLDER)
-      .filter((file) => file.endsWith('.md'))
-      .flatMap((file) =>
-        markdownTargets(readFileSync(file, 'utf8'))
-          .filter((target) => !/^([a-z][a-z0-9+.-]*:|#)/i.test(target))
-          .map((target) => ({ file, target }))
-          .filter(
-            ({ file: from, target }) =>
-              !existsSync(
-                join(
-                  layout ?? '',
-                  dirname(from.slice(FOLDER.length + 1)),
-                  target.split('#')[0] ?? '',
-                ),
-              ),
-          )
-          .map(({ file: from, target }) => `${from}: ${target}`),
-      );
+  it('fails on a link to a file the engine checkout lacks', () => {
+    const checkout = mkdtempSync(join(tmpdir(), 'engine-'));
+    try {
+      writeFileSync(join(checkout, 'README.md'), '');
+      writeFileSync(join(checkout, 'go.mod'), '');
 
-    expect(missing).toEqual([]);
+      const missing = missingLinks(checkout);
+
+      expect(missing.some((entry) => entry.endsWith('engine/CONTRIBUTING.md'))).toBe(true);
+      expect(missing.some((entry) => entry.endsWith('engine/SECURITY.md'))).toBe(true);
+    } finally {
+      rmSync(checkout, { recursive: true, force: true });
+    }
+  });
+
+  it('passes with the empty engine tree when no checkout is given', () => {
+    expect(missingLinks(undefined)).toEqual([]);
   });
 });

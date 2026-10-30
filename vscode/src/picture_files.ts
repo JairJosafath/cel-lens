@@ -106,3 +106,30 @@ export function gifDisposals(bytes: Uint8Array): number[] {
   }
   return disposals;
 }
+
+/** Where a GIF keeps its colours: whether it has a global table, and how many frames carry a local one. */
+export interface GifColorTables {
+  hasGlobal: boolean;
+  localCount: number;
+}
+
+/** Reads the colour tables of a GIF; no global table and no local ones when the bytes are not a well-formed GIF. */
+export function gifColorTables(bytes: Uint8Array): GifColorTables {
+  if (gifFrameCount(bytes) === 0) {
+    return { hasGlobal: false, localCount: 0 };
+  }
+  const screenFlags = bytes[10] ?? 0;
+  let at = 13 + (screenFlags & 0x80 ? 3 * 2 ** ((screenFlags & 7) + 1) : 0);
+  let localCount = 0;
+  while (bytes[at] !== TRAILER) {
+    if (bytes[at] === EXTENSION_INTRODUCER) {
+      at = skipSubBlocks(bytes, at + 2);
+    } else {
+      const flags = bytes[at + 9] ?? 0;
+      localCount += flags & 0x80 ? 1 : 0;
+      at += 10 + (flags & 0x80 ? 3 * 2 ** ((flags & 7) + 1) : 0) + 1;
+      at = skipSubBlocks(bytes, at);
+    }
+  }
+  return { hasGlobal: (screenFlags & 0x80) !== 0, localCount };
+}
