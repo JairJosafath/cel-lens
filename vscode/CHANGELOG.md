@@ -6,6 +6,18 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-30
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.20.0 (#89).
+- CI fetches the pinned engine source and sets `CEL_LENS_ENGINE_DIR`, so a pull request that links to a file the engine lacks fails the layout test (#65).
+- The `releaseDownloadUrl` comment names no engine version, and the README says the `crd-typed-policies` scan runs only while the feature is on (#72).
+- `CONTRIBUTING.md` documents `CEL_LENS_ENGINE_DIR` (#66).
+- Tests: one GIF frame walker serves `gifFrameCount`, `gifDelaysMs`, `gifDisposals` and `gifColorTables` (#68).
+- Tests: the public-repo Markdown link test parses Markdown with a CommonMark library instead of regexes (#79).
+- The CI workflow change for #65 is merged as a Standard change (#86).
+
 ## [0.21.0] - 2026-10-30
 
 ### Changed
@@ -413,7 +425,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/JairJosafath/cel-lens/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/JairJosafath/cel-lens/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/JairJosafath/cel-lens/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/JairJosafath/cel-lens/compare/v0.18.0...v0.19.0

@@ -2,7 +2,7 @@
   "name": "cel-lens-vscode",
   "displayName": "cel-lens for VS Code",
   "description": "CEL errors, hover and completion inside Kubernetes YAML.",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "publisher": "cel-lens",
   "repository": {
     "type": "git",
@@ -176,6 +176,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@types/markdown-it": "14.2.0",
     "@types/node": "24.19.1",
     "@types/vscode": "1.100.0",
     "@vscode/vsce": "4.0.0",
@@ -183,6 +184,7 @@
     "eslint": "10.11.0",
     "gifenc": "1.0.3",
     "jpeg-js": "0.4.4",
+    "markdown-it": "15.0.3",
     "playwright": "1.64.1",
     "prettier": "3.9.9",
     "tinybench": "6.2.0",

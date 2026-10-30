@@ -5,8 +5,8 @@ export const RELEASES_PAGE_URL = 'https://github.com/JairJosafath/cel-lens/relea
 export const CORE_RELEASES_ENV = 'CEL_LENS_CORE_RELEASES_URL';
 
 /**
- * The folder that serves the files of one engine release (`version` is `v0.17.2`). By default
- * the public release tagged `core-v0.17.2`; with the variable set, `<override>/download/v0.17.2`.
+ * The folder that serves the files of one engine release (`version` looks like `vX.Y.Z`). By default
+ * the public release tagged `core-vX.Y.Z`; with the variable set, `<override>/download/vX.Y.Z`.
  */
 export function releaseDownloadUrl(
   version: string,

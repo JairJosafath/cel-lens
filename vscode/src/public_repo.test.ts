@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
+import MarkdownIt from 'markdown-it';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -78,17 +79,30 @@ function usesOf(workflow: Workflow): string[] {
     .flatMap((step) => (step.uses === undefined ? [] : [step.uses]));
 }
 
+// Every link, picture and reference definition a CommonMark renderer sees: text in code blocks and
+// code spans is not a link. Targets stay as written (no percent-encoding) and appear once.
 function markdownTargets(text: string): string[] {
-  // Every ](target) part, with an optional "title", 'title' or (title), so a badge's picture and its
-  // outer link are both targets, then every [id]: target definition of a reference-style link,
-  // whose target may sit on the next line. A target is <in angle brackets> or has no spaces.
-  const inline = text.matchAll(
-    /\]\(\s*(<[^<>\n]*>|[^)\s<]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g,
-  );
-  const definitions = text.matchAll(/^ {0,3}\[(?!\^)[^\]]+\]:[ \t]*\n?[ \t]*(<[^<>\n]*>|\S+)/gm);
-  return [...inline, ...definitions].flatMap((match) =>
-    match[1] === undefined ? [] : [match[1].replace(/^<(.*)>$/, '$1')],
-  );
+  const parser = new MarkdownIt();
+  parser.normalizeLink = (url) => url;
+  parser.validateLink = () => true;
+  const env: { references?: Record<string, { href: string; title: string }> } = {};
+  // A link's target follows its content, so a badge's picture comes before its outer link.
+  const open: string[] = [];
+  const inline: string[] = [];
+  for (const token of parser.parse(text, env).flatMap((block) => block.children ?? [])) {
+    const target = token.attrGet('href') ?? token.attrGet('src');
+    if (token.type === 'link_open') {
+      open.push(String(target));
+    } else if (token.type === 'link_close') {
+      inline.push(open.pop() ?? '');
+    } else if (token.type === 'image' && target !== null) {
+      inline.push(String(target));
+    }
+  }
+  const definitions = Object.entries(env.references ?? {})
+    .filter(([label]) => !label.startsWith('^'))
+    .map(([, reference]) => reference.href);
+  return [...new Set([...inline, ...definitions])];
 }
 
 function badges(readme: string): string[] {
@@ -113,6 +127,9 @@ describe('markdownTargets', () => {
     ['[a](<a b.md>) ![p](<p q.gif> "t")', ['a b.md', 'p q.gif']],
     ['[a][id]\n\n[id]:\n  docs/x.md\n[b]: <c d.md>', ['docs/x.md', 'c d.md']],
     ['text[^1]\n\n[^1]: a note', []],
+    ['[a](foo(bar).md) [b](x\\)y.md)', ['foo(bar).md', 'x)y.md']],
+    ['```\n[a](in-fence.md)\n```\n\n~~~\n[b](tilde.md)\n~~~', []],
+    ['`[a](in-span.md)` and [b](real.md)', ['real.md']],
   ])('finds the targets of %s', (text, expected) => {
     expect(markdownTargets(text)).toEqual(expected);
   });
