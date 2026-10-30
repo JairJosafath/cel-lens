@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { copyTree } from './copy_tree';
 import { HAS_FACTORY_WORKFLOWS } from './factory_files';
 import { describeFailures, type NestedReport } from './nested_report';
 
@@ -28,37 +29,6 @@ function listTestFiles(root: string): string[] {
     .filter((file) => /^src\/.*\.test\.ts$/.test(file));
 }
 
-// Hard-linked, not copied: the same files without the minutes of copying, and unlike symbolic
-// links npm list accepts the tree. Hard links need the repository's file system, so when the
-// temporary directory is on another one the copy is made beside the repository, as CI does.
-function copyTree(root: string, base: string): string {
-  const modules = join(root, 'node_modules');
-  const parents = [base, dirname(root)];
-  for (const [index, parent] of parents.entries()) {
-    let folder: string;
-    try {
-      folder = mkdtempSync(join(parent, 'public-layout-'));
-    } catch {
-      continue;
-    }
-    cpSync(root, folder, {
-      recursive: true,
-      filter: (source) => !ABSENT.has(source.slice(root.length + 1).replaceAll('\\', '/')),
-    });
-    const linked = spawnSync('cp', ['-al', modules, join(folder, 'node_modules')]);
-    if (linked.status === 0) {
-      return folder;
-    }
-    if (index === parents.length - 1) {
-      // No file system to link on: copying is the last resort.
-      cpSync(modules, join(folder, 'node_modules'), { recursive: true });
-      return folder;
-    }
-    rmSync(folder, { recursive: true, force: true });
-  }
-  return expect.fail('No folder to copy the repository into.');
-}
-
 let copy: string | undefined;
 let nestedTmp: string | undefined;
 
@@ -80,7 +50,7 @@ describe.skipIf(!HAS_FACTORY_WORKFLOWS)(
       'passes vitest run in a copy without the factory files, with the installed packages hard-linked',
       () => {
         const root = resolve('.');
-        copy = copyTree(root, tmpdir());
+        copy = copyTree(root, [tmpdir(), dirname(root)], (path) => ABSENT.has(path));
         // A clone is a git repository, and some tests list its files.
         for (const args of [
           ['init', '-q'],

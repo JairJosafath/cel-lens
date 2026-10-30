@@ -16,7 +16,9 @@ import gifenc from 'gifenc';
 import { chromium, type CDPSession, type Page } from 'playwright';
 import jpeg from 'jpeg-js';
 
-const { GIFEncoder, applyPalette, quantize } = gifenc;
+import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
+
+const { GIFEncoder } = gifenc;
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const FIXTURES = import.meta.dirname;
@@ -190,10 +192,6 @@ const STOP_WATCHING_FOR_LIST = `(() => {
   return window.celLensWatch.seen.suggest;
 })()`;
 
-function sameColor(a: Uint8Array, b: Uint8Array, at: number): boolean {
-  return a[at] === b[at] && a[at + 1] === b[at + 1] && a[at + 2] === b[at + 2];
-}
-
 /** A frame the browser painted, and when. */
 interface Shot {
   readonly picture: Buffer;
@@ -244,39 +242,34 @@ class Recording {
   }
 
   /**
-   * One frame per tick. A frame writes only the pixels that changed since the one
-   * before; the rest is transparent and left in place, which keeps the file small.
+   * One frame per tick, all quantized with one palette. A frame writes only the pixels
+   * whose palette colour changed since the one before; the rest is transparent and left in place, which keeps the file small. All frames are held in memory until encoded.
    */
   private encode(end: number): Uint8Array {
-    const encoder = GIFEncoder();
     const first = this.shots[0]?.at ?? end;
+    const raw: RawFrame[] = [];
     let shown = -1;
-    let previous: Uint8Array | undefined;
     for (let tick = first; tick < end; tick += GIF_TICK_MS) {
       while (shown + 1 < this.shots.length && (this.shots[shown + 1]?.at ?? end) <= tick) {
         shown += 1;
       }
-      const { width, height, data } = decode(this.shots[shown]?.picture ?? Buffer.alloc(0));
-      const palette = quantize(data, GIF_COLORS - 1);
-      palette.push([0, 0, 0]);
-      const index = applyPalette(data, palette);
-      if (previous === undefined) {
-        encoder.writeFrame(index, width, height, { palette, delay: GIF_TICK_MS });
-      } else {
-        for (let pixel = 0; pixel < index.length; pixel += 1) {
-          if (sameColor(data, previous, pixel * 4)) {
-            index[pixel] = GIF_COLORS - 1;
-          }
-        }
-        encoder.writeFrame(index, width, height, {
-          palette,
-          delay: GIF_TICK_MS,
-          transparent: true,
-          dispose: 1,
-          transparentIndex: GIF_COLORS - 1,
-        });
-      }
-      previous = data;
+      raw.push(decode(this.shots[shown]?.picture ?? Buffer.alloc(0)));
+    }
+    if (raw.length === 0) {
+      throw new Error('The recording has no frames: the page showed nothing to turn into a GIF.');
+    }
+    const { palette, transparentIndex, frames } = indexFrames(raw, GIF_COLORS, gifenc);
+    const encoder = GIFEncoder();
+    for (const [number, { index, width, height }] of frames.entries()) {
+      // Only the first frame carries the palette (as the global table); later frames reuse it.
+      encoder.writeFrame(
+        index,
+        width,
+        height,
+        number === 0
+          ? { palette, delay: GIF_TICK_MS }
+          : { delay: GIF_TICK_MS, transparent: true, dispose: 1, transparentIndex },
+      );
     }
     encoder.finish();
     return encoder.bytes();

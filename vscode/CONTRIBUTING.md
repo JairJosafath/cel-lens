@@ -221,9 +221,13 @@ other access: the default engine source is the public releases page. To fetch fr
 another releases page (a mirror, say), set `CEL_LENS_CORE_RELEASES_URL` to its
 URL; files are then read from `<URL>/download/<version>/` (`src/core_releases.ts`).
 
-Before you tag a release, retake the pictures so the store page matches it: run
-`npm run pictures` (see "Retake the pictures" above) and commit the changed files in
-`images/`.
+To release, follow these steps in order:
+
+1. Bump `version` in `package.json` (and `package-lock.json`), and the engine in `core-version.json` if it changes.
+2. Move the "Unreleased" entries of `CHANGELOG.md` under a new heading for the version and date.
+3. Retake the pictures so the store page matches the release: run `npm run pictures` (see "Retake the pictures" above) and commit the changed files in `images/`.
+4. Run `make check`; it must pass before you tag, and never release a red commit.
+5. Tag the commit `vX.Y.Z` (the `version` in `package.json` with a `v` in front; the release workflow refuses any other tag) and push the tag; the release workflow attaches `dist/` to the release.
 
 The **Open Releases Page** button, shown when the engine is too old, opens
 <https://github.com/JairJosafath/cel-lens/releases> (`RELEASES_PAGE_URL`). Engine

@@ -8,7 +8,7 @@ declare module 'gifenc' {
       width: number,
       height: number,
       options: {
-        palette: Palette;
+        palette?: Palette;
         delay: number;
         transparent?: boolean;
         dispose?: number;
@@ -19,10 +19,15 @@ declare module 'gifenc' {
     bytes(): Uint8Array;
   }
 
+  export function quantize(rgba: Uint8Array | Uint8ClampedArray, maxColors: number): Palette;
+  export function applyPalette(rgba: Uint8Array | Uint8ClampedArray, palette: Palette): Uint8Array;
+  export function GIFEncoder(): GifEncoder;
+
+  // Node loads the package as a default export; vitest also resolves the named ones.
   const gifenc: {
-    GIFEncoder: () => GifEncoder;
-    quantize: (rgba: Uint8Array | Uint8ClampedArray, maxColors: number) => Palette;
-    applyPalette: (rgba: Uint8Array | Uint8ClampedArray, palette: Palette) => Uint8Array;
+    GIFEncoder: typeof GIFEncoder;
+    quantize: typeof quantize;
+    applyPalette: typeof applyPalette;
   };
   export default gifenc;
 }

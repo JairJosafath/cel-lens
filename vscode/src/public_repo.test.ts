@@ -79,7 +79,8 @@ function usesOf(workflow: Workflow): string[] {
 }
 
 function markdownTargets(text: string): string[] {
-  return [...text.matchAll(/!?\[[^\]]*\]\(([^)\s]+)\)/g)].flatMap((match) =>
+  // Every ](target) part, so a badge's picture and its outer link are both targets.
+  return [...text.matchAll(/\]\(([^)\s]+)\)/g)].flatMap((match) =>
     match[1] === undefined ? [] : [match[1]],
   );
 }
@@ -91,6 +92,17 @@ function badges(readme: string): string[] {
 }
 
 let layout: string | undefined;
+
+describe('markdownTargets', () => {
+  it.each([
+    ['[a](x.md)', ['x.md']],
+    ['![pic](p.gif)', ['p.gif']],
+    ['[![badge](b.svg)](LICENSE)', ['b.svg', 'LICENSE']],
+    ['[![a](a.svg)](A) and [![b](b.svg)](B)', ['a.svg', 'A', 'b.svg', 'B']],
+  ])('finds the targets of %s', (text, expected) => {
+    expect(markdownTargets(text)).toEqual(expected);
+  });
+});
 
 afterEach(() => {
   if (layout !== undefined) {
@@ -200,6 +212,15 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(BADGE_SOURCES.map((source) => found.filter((url) => source.test(url)).length)).toEqual([
       1, 1, 1, 1, 1,
     ]);
+  });
+
+  it('checks the outer link of each of the five badges among its targets', () => {
+    const outer = [...readme.matchAll(/\[!\[[^\]]*\]\([^)\s]+\)\]\(([^)\s]+)\)/g)].flatMap(
+      (match) => (match[1] === undefined ? [] : [match[1]]),
+    );
+
+    expect(outer).toHaveLength(5);
+    expect(markdownTargets(readme)).toEqual(expect.arrayContaining(outer));
   });
 
   it('shows the two GIFs by their published paths', () => {

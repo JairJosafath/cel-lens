@@ -39,6 +39,30 @@ describe('CONTRIBUTING.md', () => {
     expect(section).toContain('images/');
   });
 
+  it.each([
+    ['version bump', '`version` in `package.json`'],
+    ['CHANGELOG', '`CHANGELOG.md`'],
+    ['pictures', '`npm run pictures`'],
+    ['check', '`make check`'],
+    ['tagging', '`vX.Y.Z`'],
+  ])('lists the %s step in the numbered release steps', (_name, text) => {
+    const start = CONTRIBUTING.indexOf('## Releases');
+    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
+    const steps = section.split('\n').filter((line) => /^\d+\. /.test(line));
+
+    expect(steps.some((line) => line.includes(text))).toBe(true);
+  });
+
+  it('numbers the release steps from 1 and tags last', () => {
+    const start = CONTRIBUTING.indexOf('## Releases');
+    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
+    const steps = section.split('\n').filter((line) => /^\d+\. /.test(line));
+    const numbers = steps.map((line) => Number(/^(\d+)\./.exec(line)?.[1]));
+
+    expect(numbers).toEqual(steps.map((_line, i) => i + 1));
+    expect(steps.at(-1)).toContain('`vX.Y.Z`');
+  });
+
   it('names no factory image or devcontainer', () => {
     expect(CONTRIBUTING).not.toMatch(/devcontainer|factory|git[e]a|docker/i);
   });

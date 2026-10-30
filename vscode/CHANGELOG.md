@@ -6,6 +6,18 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-30
+
+### Changed
+
+- The public-repo Markdown link test also checks the targets of badge links (#17).
+- The public layout test's copy fallback works on unusual layouts (#36).
+- CONTRIBUTING.md's Releases section is a numbered checklist: version bump, changelog, pictures, `make check`, tag (#33).
+
+### Fixed
+
+- `npm run pictures` quantizes all frames of a GIF with one palette and compares palette colours, not raw JPEG pixels, so a kept background pixel cannot differ from a rewritten one by a few levels (#31).
+
 ## [0.17.0] - 2026-10-29
 
 ### Added
@@ -369,7 +381,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/JairJosafath/cel-lens/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/JairJosafath/cel-lens/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/JairJosafath/cel-lens/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/JairJosafath/cel-lens/compare/v0.15.1...v0.15.2
