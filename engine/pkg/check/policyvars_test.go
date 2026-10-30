@@ -38,8 +38,8 @@ func TestPolicyVariables(t *testing.T) {
 		{name: "authorizer chain", expr: authChain},
 		// The admission compiler declares authorizer.requestResource; the type checker
 		// of the API server (policy/validating/typechecking.go) declares only
-		// authorizer, so for a policy that matches a built-in kind it warns, as here.
-		{name: "authorizer requestResource", expr: "authorizer.requestResource.check('get').allowed()", want: []warning{{"apps/v1 Deployment: unexpected failed resolution of 'kubernetes.authorization.Authorizer'", "requestResource"}}},
+		// authorizer, so for a policy that matches a built-in kind it warns, once and with no kind, as here.
+		{name: "authorizer requestResource", expr: "authorizer.requestResource.check('get').allowed()", want: []warning{{"unexpected failed resolution of 'kubernetes.authorization.Authorizer'", "requestResource"}}},
 		{name: "authorizer path", expr: "authorizer.path('/healthz').check('get').reason() != ''"},
 		{name: "authorizer service account", expr: "authorizer.serviceAccount('ci', 'build').group('').resource('pods').name('p').subresource('log').check('get').errored()"},
 		{name: "authorizer selectors", expr: "authorizer.group('').resource('pods').fieldSelector('spec.nodeName=n1').labelSelector('a=b').check('list').error() == ''"},

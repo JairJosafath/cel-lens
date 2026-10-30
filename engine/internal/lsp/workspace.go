@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 const (
@@ -159,8 +161,13 @@ func (ss *session) registerWatchers() error {
 
 // didChangeWatchedFiles reads the changed files again, or forgets the deleted
 // ones, and checks the open documents again when the CRDs changed. A file that
-// is open keeps the text of the editor.
+// is open keeps the text of the editor. While crd-typed-policies is off it reads
+// nothing and publishes nothing: the CRDs are not used, and turning the feature
+// on scans the whole workspace, which finds what changed meanwhile. It still
+// forgets deleted files, a cheap step, so the scan never sees a CRD whose file
+// is gone.
 func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMessage) error {
+	on := ss.features.Has(feature.CRDTypedPolicies)
 	var p struct {
 		Changes []struct {
 			URI  string `json:"uri"`
@@ -177,11 +184,11 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		}
 		if c.Type == fileDeleted {
 			changed = ss.crds.Forget(crdKey(c.URI)) || changed
-		} else {
+		} else if on {
 			changed = ss.readFromDisk(ctx, c.URI) || changed
 		}
 	}
-	if !changed {
+	if !changed || !on {
 		return nil
 	}
 	return ss.publishAll(ctx, "")

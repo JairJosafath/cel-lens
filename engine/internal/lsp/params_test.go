@@ -342,3 +342,66 @@ func TestWatchersRegistered(t *testing.T) {
 		return
 	}
 }
+
+func TestWatchedFilesIgnoredWhileFeatureOff(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crd.yaml")
+	c := scanSession(t, dir)
+	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
+	c.openURI(policyURI, policy)
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Fatalf("diagnostics with crd-typed-policies off = %+v, want none", diags)
+	}
+	if err := os.WriteFile(path, []byte(widgetCRDText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c.notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{{"uri": "file://" + filepath.ToSlash(path), "type": 1}}})
+	// The server handles messages in order. A re-check caused by the event
+	// would publish (empty) diagnostics before the ones of this edit, so the
+	// first diagnostics read must be the syntax error of the edit.
+	c.changeURI(policyURI, 2, strings.Replace(policy, "params.spec.maxReplica", "params.spec.maxReplica +", 1))
+	if diags := c.nextDiagnostics(); len(diags) == 0 {
+		t.Fatal("first diagnostics after the watched file event are empty, want those of the edit (the event must publish nothing)")
+	}
+	c.changeURI(policyURI, 3, policy)
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Fatalf("diagnostics after the edit was undone = %+v, want none", diags)
+	}
+	enableCRDTypedPolicies(c)
+	diags := c.nextDiagnostics()
+	if len(diags) != 1 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplica'" {
+		t.Errorf("diagnostics after turning the feature on = %+v, want the warning from the CRD written while it was off", diags)
+	}
+}
+
+func TestDeletedCRDForgottenWhileFeatureOff(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crd.yaml")
+	if err := os.WriteFile(path, []byte(widgetCRDText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := scanSession(t, dir)
+	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
+	c.openURI(policyURI, policy)
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Fatalf("diagnostics with crd-typed-policies off = %+v, want none", diags)
+	}
+	enableCRDTypedPolicies(c)
+	if diags := c.nextDiagnostics(); len(diags) != 1 {
+		t.Fatalf("diagnostics with the feature on = %+v, want the warning", diags)
+	}
+	c.notify("workspace/didChangeConfiguration", map[string]any{"settings": map[string]any{"experimental": []string{}}})
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Fatalf("diagnostics after turning the feature off = %+v, want none", diags)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	c.notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{{"uri": "file://" + filepath.ToSlash(path), "type": 3}}})
+	enableCRDTypedPolicies(c)
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Errorf("diagnostics after turning the feature on = %+v, want none: the CRD file was deleted", diags)
+	}
+}

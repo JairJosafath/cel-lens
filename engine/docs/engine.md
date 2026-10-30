@@ -133,7 +133,8 @@ type checker does:
   deleted, the open policies are checked again without restarting the server;
   for files that change on disk, the editor must send
   `workspace/didChangeWatchedFiles`, which the server asks for when the client
-  allows it.
+  allows it. These events are followed only while `crd-typed-policies` is on,
+  except deletions; turning the feature on scans the workspace again.
 - Anything else stays `dyn`, as before, with no field warnings: a kind that is
   neither built in nor defined by a CRD found as above, an unknown version, or
   a `paramKind` that is not a mapping with `apiVersion` and `kind`. Hover on

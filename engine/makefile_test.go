@@ -2,8 +2,10 @@ package main
 
 import (
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckLightTarget(t *testing.T) {
@@ -55,5 +57,27 @@ func TestTestTargetBuildsOnce(t *testing.T) {
 	}
 	if strings.Count(got, "go build") != 1 || !strings.Contains(got, "CEL_LENS_BIN=") {
 		t.Errorf("make -n test = %q, want one go build and CEL_LENS_BIN set for go test", got)
+	}
+}
+
+func TestInnerTimeoutBelowMakefileTimeout(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	out, err := exec.Command("make", "-n", "test").CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n test: %v\n%s", err, out)
+	}
+	m := regexp.MustCompile(`go test\b[^\n]*? -timeout (\S+)`).FindStringSubmatch(string(out))
+	if m == nil {
+		t.Fatalf("make -n test = %q, want a go test with -timeout", out)
+	}
+	outer, err := time.ParseDuration(m[1])
+	if err != nil {
+		t.Fatalf("Makefile test -timeout %q: %v", m[1], err)
+	}
+	if innerTimeout >= outer {
+		t.Errorf("innerTimeout = %v, want below the Makefile's -timeout %v", innerTimeout, outer)
 	}
 }

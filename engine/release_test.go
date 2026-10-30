@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +45,7 @@ func TestDist(t *testing.T) {
 	}
 	// dist/ is the Makefile's fixed output; work in a copy of the build inputs.
 	work := t.TempDir()
-	if err := copyTree(root, work); err != nil {
+	if err := copyBuildInputs(t.Context(), root, work); err != nil {
 		t.Fatalf("copy sources: %v", err)
 	}
 	// The real platform list: dropping one from the Makefile fails here.
@@ -144,30 +147,49 @@ func TestDist(t *testing.T) {
 	}
 }
 
-// copyTree copies the regular files under src into dst, leaving out .git and
-// the build output directories.
-func copyTree(src, dst string) error {
-	fsys := os.DirFS(src)
-	return fs.WalkDir(fsys, ".", func(rel string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch rel {
-			case ".git", ".gotmp", "dist", "bin":
-				return filepath.SkipDir
+// copyBuildInputs copies the files git tracks in src into dst, so untracked and
+// ignored files, and the build output directories, cannot change a build in dst.
+func copyBuildInputs(ctx context.Context, src, dst string) error {
+	files, err := trackedFiles(ctx, src)
+	if err != nil {
+		return err
+	}
+	return copyTracked(files, src, dst)
+}
+
+// TestCopyBuildInputs checks that the copy TestDist builds in holds tracked
+// files and leaves out an untracked one.
+func TestCopyBuildInputs(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is not on PATH: %v", err)
+	}
+	src := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"add", "tracked.txt"}} {
+		if args[0] == "init" {
+			if err := os.WriteFile(filepath.Join(src, "tracked.txt"), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
 			}
-			return os.MkdirAll(filepath.Join(dst, rel), 0o750)
 		}
-		if !d.Type().IsRegular() {
-			return nil
+		cmd := exec.CommandContext(t.Context(), "git", args...) //nolint:gosec // G204: fixed test inputs
+		cmd.Dir = src
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
-		data, err := fs.ReadFile(fsys, rel)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(filepath.Join(dst, rel), data, 0o600)
-	})
+	}
+	if err := os.WriteFile(filepath.Join(src, "untracked.txt"), []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := copyBuildInputs(t.Context(), src, dst); err != nil {
+		t.Fatalf("copyBuildInputs(%s) = %v", src, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "tracked.txt")); err != nil {
+		t.Errorf("tracked.txt is not in the copy: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "untracked.txt")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("untracked.txt in the copy: Stat error = %v, want not exist", err)
+	}
 }
 
 // TestChangelogHeadings checks that every released section of CHANGELOG.md has
@@ -205,6 +227,9 @@ func TestChangelogProblems(t *testing.T) {
 		{"compare ends at another version", strings.Replace(good, "v1.0.0...v1.1.0", "v1.0.0...v1.2.0", 1), 1},
 		{"oldest compares", strings.Replace(good, "../../releases/tag/v1.0.0", "../../compare/v0.9.0...v1.0.0", 1), 1},
 		{"no releases", "## [Unreleased]\n", 1},
+		{"repeated heading in unreleased", "## [Unreleased]\n\n### Changed\n\n### Changed\n\n" + good[len("## [Unreleased]\n\n"):], 1},
+		{"headings out of order in newest release", strings.Replace(good, "## [1.1.0] - 2026-01-02\n", "## [1.1.0] - 2026-01-02\n\n### Fixed\n\n### Added\n", 1), 1},
+		{"older release may differ", strings.Replace(good, "## [1.0.0] - 2026-01-01\n", "## [1.0.0] - 2026-01-01\n\n### Fixed\n\n### Added\n", 1), 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,7 +244,9 @@ func TestChangelogProblems(t *testing.T) {
 // changelogProblems returns one message for each problem in the changelog text:
 // a malformed heading or date, a released version without a link definition or whose link does not compare
 // the previous release to it (the oldest links to its release tag), or
-// an [Unreleased] link that does not compare the newest release to HEAD.
+// an [Unreleased] link that does not compare the newest release to HEAD. It also
+// reports a repeated change-type heading, or one out of Keep a Changelog order,
+// in the [Unreleased] section and the newest release.
 func changelogProblems(text string) []string {
 	heading := regexp.MustCompile(`^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})$`)
 	link := regexp.MustCompile(`^\[([^\]]+)\]: (\S+)$`)
@@ -232,7 +259,26 @@ func changelogProblems(text string) []string {
 	}
 	var problems []string
 	var versions []string
+	order := []string{"Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"}
+	sections := 0 // sections seen so far; only the first two are checked
+	last := -1    // index in order of the previous change-type heading of this section
 	for i, line := range lines {
+		if strings.HasPrefix(line, "## [") {
+			sections++
+			last = -1
+		}
+		if name, ok := strings.CutPrefix(line, "### "); ok && sections <= 2 {
+			at := slices.Index(order, name)
+			switch {
+			case at < 0:
+				problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: heading %q is not a Keep a Changelog change type", i+1, line))
+			case at == last:
+				problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: heading %q repeats in its section", i+1, line))
+			case at < last:
+				problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: heading %q is out of order, want %s", i+1, line, strings.Join(order, ", ")))
+			}
+			last = max(last, at)
+		}
 		if !strings.HasPrefix(line, "## [") || strings.HasPrefix(line, "## [Unreleased]") {
 			continue
 		}

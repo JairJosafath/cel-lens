@@ -155,6 +155,27 @@ func TestParamsOncePerPolicy(t *testing.T) {
 	}
 }
 
+// TestUntypedWarningHasNoKind checks that a warning that depends on neither
+// object nor params names no kind, once, though the policy matches two kinds
+// and has a typed paramKind.
+func TestUntypedWarningHasNoKind(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(paramsPolicy("{apiVersion: v1, kind: ConfigMap}", "authorizer.requestResource.check('get').allowed()"),
+		"resources: [deployments]}", "resources: [deployments]}\n      - {apiGroups: [apps], apiVersions: [v1], resources: [statefulsets]}", 1)
+	diags, err := check.Check(context.Background(), "policy.yaml", []byte(doc), allOn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("Check(authorizer) = %v, want one warning", diags)
+	}
+	for _, kind := range []string{"v1 ConfigMap", "apps/v1"} {
+		if strings.Contains(diags[0].Message, kind) {
+			t.Errorf("Check(authorizer) message %q names %s, want no kind", diags[0].Message, kind)
+		}
+	}
+}
+
 // TestParamsWithoutParamKind checks the result when a policy uses params with
 // no spec.paramKind. The API server's admission compiler declares params only
 // when the policy has one (createEnvForOpts in

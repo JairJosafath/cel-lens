@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -129,5 +132,49 @@ func TestPublicSourceTestsPass(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go test . in the public copy: %v\n%s", err, out)
+	}
+}
+
+// TestNoFactoryPathOutsideRootTests keeps the promise TestPublicSourceTestsPass
+// relies on: only root-package tests may name the factory's files, because only
+// the root package's tests run in the copy that lacks them. It checks the string
+// literals of every other _test.go file, so a comment may still mention them.
+func TestNoFactoryPathOutsideRootTests(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p != "." && (strings.HasPrefix(d.Name(), ".") || d.Name() == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, "_test.go") || filepath.Dir(p) == "." {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", p, err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			for _, name := range factoryPaths {
+				if strings.Contains(lit.Value, name) {
+					t.Errorf("%s names %q; only root-package tests may, as the public copy runs only those",
+						fset.Position(lit.Pos()), name)
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

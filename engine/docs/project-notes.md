@@ -29,8 +29,8 @@ first build, the two builds shared no cache entries, so every dependency
 (Kubernetes, Kyverno, cel-go) was compiled twice. On a slow machine
 `internal/assist` also took almost nine minutes with `-race`.
 
-Fix: the e2e build (`build` in `e2e_test.go`) uses `-trimpath`, so the install
-reuses its build cache; the `test` target passes `-timeout 30m` (a Makefile
+Fix: before #26, the e2e build used `-trimpath`, so the install reused its build
+cache (#26 later replaced that build); the `test` target passes `-timeout 30m` (a Makefile
 change, merged as Standard change #6). Not user-visible, so no CHANGELOG line.
 
 Budget: on the 8-core sandbox, `go test -race -count=1 -timeout 30m ./...` takes

@@ -24,8 +24,10 @@ import (
 // typeCheck does what the API server does for status.typeChecking: for each
 // kind the policy matches, it compiles the validations of p again with object
 // and oldObject typed from the schema of the kind, and reports what fails as
-// warnings that name the kind. What fails because of params, which does not
-// depend on the matched kind, is reported once, naming the kind of paramKind.
+// warnings that name the kind. What fails with object, oldObject and params all
+// dyn depends on none of them and is reported once, naming no kind. What fails
+// because of params, which does not depend on the matched kind, is reported
+// once, naming the kind of paramKind.
 // Nothing is checked when a matched kind cannot be
 // known (see matchkind.Resolve), so object stays dyn. Only expressions in clean, those
 // that compile without the types, are checked, so no problem is shown twice.
@@ -41,48 +43,97 @@ func (r *reporter) typeCheck(ctx context.Context, p *admissionregistrationv1.Val
 	if !ok {
 		return nil
 	}
-	byParams, err := r.typeCheckParams(ctx, p, exprs, clean)
+	reported, err := r.typeCheckUntyped(ctx, p, exprs, clean)
 	if err != nil {
 		return err
 	}
+	if err := r.typeCheckParams(ctx, p, exprs, clean, reported); err != nil {
+		return err
+	}
 	for _, kind := range kinds {
-		if err := r.typeCheckKind(ctx, p, kind, exprs, clean, byParams); err != nil {
+		if err := r.typeCheckKind(ctx, p, kind, exprs, clean, reported); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// typeCheckParams compiles the expressions in clean with params typed and
-// object and oldObject dyn, and reports what fails with the kind of paramKind.
-// It returns the issues it reported, by field, for typeCheckKind to skip. It
-// reports nothing when params stays dyn.
-func (r *reporter) typeCheckParams(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool) (map[string]map[string]bool, error) {
-	pk := p.Spec.ParamKind
-	paramsType := r.paramsType(pk)
-	if paramsType == nil {
-		return nil, nil
-	}
-	envSet, err := typedEnvSet(r.version.EnvSet(), nil, paramsType, true)
+// typeCheckUntyped compiles the expressions in clean with object, oldObject and
+// params all dyn, and reports what fails without a kind, as it depends on none.
+// It returns the issues it reported, by field, for the later compiles to skip.
+func (r *reporter) typeCheckUntyped(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool) (map[string]map[string]bool, error) {
+	hasParams := p.Spec.ParamKind != nil
+	envSet, err := typedEnvSet(r.version.EnvSet(), nil, nil, hasParams)
 	if err != nil {
-		return nil, fmt.Errorf("build CEL environment for %s %s: %w", pk.APIVersion, pk.Kind, err)
+		return nil, fmt.Errorf("build CEL environment: %w", err)
 	}
 	composite, err := plugincel.NewCompositedCompilerForTypeChecking(envSet)
 	if err != nil {
-		return nil, fmt.Errorf("build CEL environment for %s %s: %w", pk.APIVersion, pk.Kind, err)
+		return nil, fmt.Errorf("build CEL environment: %w", err)
+	}
+	composite.Compiler = typedCompiler{composite}
+	decls := plugincel.OptionalVariableDeclarations{HasParams: hasParams, HasAuthorizer: true}
+	reported := map[string]map[string]bool{}
+	err = r.compileValidations(ctx, composite, decls, p, exprs, clean, func(field string, e extract.Expression, issues []string) {
+		reported[field] = issueSet(issues)
+		r.reportAs(e, SeverityWarning, "", strings.Join(issues, "\n"))
+	})
+	return reported, err
+}
+
+// issueSet returns issues as a set.
+func issueSet(issues []string) map[string]bool {
+	set := map[string]bool{}
+	for _, issue := range issues {
+		set[issue] = true
+	}
+	return set
+}
+
+// unreported returns the issues not in seen.
+func unreported(issues []string, seen map[string]bool) []string {
+	var kept []string
+	for _, issue := range issues {
+		if !seen[issue] {
+			kept = append(kept, issue)
+		}
+	}
+	return kept
+}
+
+// typeCheckParams compiles the expressions in clean with params typed and
+// object and oldObject dyn, and reports what fails with the kind of paramKind,
+// except the issues already in reported. It adds what it reports to reported,
+// by field, for typeCheckKind to skip. It reports nothing when params stays dyn.
+func (r *reporter) typeCheckParams(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, reported map[string]map[string]bool) error {
+	pk := p.Spec.ParamKind
+	paramsType := r.paramsType(pk)
+	if paramsType == nil {
+		return nil
+	}
+	envSet, err := typedEnvSet(r.version.EnvSet(), nil, paramsType, true)
+	if err != nil {
+		return fmt.Errorf("build CEL environment for %s %s: %w", pk.APIVersion, pk.Kind, err)
+	}
+	composite, err := plugincel.NewCompositedCompilerForTypeChecking(envSet)
+	if err != nil {
+		return fmt.Errorf("build CEL environment for %s %s: %w", pk.APIVersion, pk.Kind, err)
 	}
 	composite.Compiler = typedCompiler{composite}
 	decls := plugincel.OptionalVariableDeclarations{HasParams: true, HasAuthorizer: true}
-	reported := map[string]map[string]bool{}
-	err = r.compileValidations(ctx, composite, decls, p, exprs, clean, func(field string, e extract.Expression, issues []string) {
-		set := map[string]bool{}
-		for _, issue := range issues {
-			set[issue] = true
+	return r.compileValidations(ctx, composite, decls, p, exprs, clean, func(field string, e extract.Expression, issues []string) {
+		kept := unreported(issues, reported[field])
+		if len(kept) == 0 {
+			return
 		}
-		reported[field] = set
-		r.reportAs(e, SeverityWarning, pk.APIVersion+" "+pk.Kind+": ", strings.Join(issues, "\n"))
+		if reported[field] == nil {
+			reported[field] = map[string]bool{}
+		}
+		for _, issue := range kept {
+			reported[field][issue] = true
+		}
+		r.reportAs(e, SeverityWarning, pk.APIVersion+" "+pk.Kind+": ", strings.Join(kept, "\n"))
 	})
-	return reported, err
 }
 
 // compileValidations stores the variables of p in composite, compiles each
@@ -116,21 +167,15 @@ func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.
 	return nil
 }
 
-// typeCheckKind is typeCheck for one kind. It skips the issues in byParams, by
-// field, which typeCheckParams reported.
-func (r *reporter) typeCheckKind(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, kind matchkind.Kind, exprs map[string]extract.Expression, clean map[string]bool, byParams map[string]map[string]bool) error {
+// typeCheckKind is typeCheck for one kind. It skips the issues in reported, by
+// field, which the compiles before it reported.
+func (r *reporter) typeCheckKind(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, kind matchkind.Kind, exprs map[string]extract.Expression, clean map[string]bool, reported map[string]map[string]bool) error {
 	composite, decls, err := r.typedComposite(p, kind)
 	if err != nil || composite == nil {
 		return err
 	}
 	return r.compileValidations(ctx, composite, decls, p, exprs, clean, func(field string, e extract.Expression, issues []string) {
-		var kept []string
-		for _, issue := range issues {
-			if !byParams[field][issue] {
-				kept = append(kept, issue)
-			}
-		}
-		if len(kept) > 0 {
+		if kept := unreported(issues, reported[field]); len(kept) > 0 {
 			r.reportAs(e, SeverityWarning, kind.String()+": ", strings.Join(kept, "\n"))
 		}
 	})
