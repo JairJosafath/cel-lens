@@ -31,13 +31,22 @@ func TestWorkflowsKeepGoTempOutOfTmp(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			s := readFactoryFile(t, path)
-			if !strings.Contains(s, "GOTMPDIR: ${{ gitea.workspace }}/.gotmp") {
-				t.Errorf("%s does not set GOTMPDIR to .gotmp in the workspace", path)
+			// A file with a full job is checked job by job: each one
+			// sets GOTMPDIR and creates it before its own first make step.
+			light, full, hasFull := strings.Cut(s, "\n  full:")
+			jobs := []string{light}
+			if hasFull {
+				jobs = append(jobs, full)
 			}
-			mk := strings.Index(s, `mkdir -p "$GOTMPDIR"`)
-			build := strings.Index(s, "run: make ")
-			if mk < 0 || mk > build {
-				t.Errorf("%s must create GOTMPDIR before its first make step", path)
+			for _, job := range jobs {
+				if !strings.Contains(job, "GOTMPDIR: ${{ gitea.workspace }}/.gotmp") {
+					t.Errorf("%s has a job that does not set GOTMPDIR to .gotmp in the workspace", path)
+				}
+				mk := strings.Index(job, `mkdir -p "$GOTMPDIR"`)
+				build := strings.Index(job, "run: make ")
+				if mk < 0 || mk > build {
+					t.Errorf("%s has a job that does not create GOTMPDIR before its first make step", path)
+				}
 			}
 			if strings.Contains(s, "rm ") && strings.Contains(s, "/tmp") {
 				t.Errorf("%s must not delete files in /tmp", path)
@@ -86,15 +95,27 @@ func TestCheckWorkflowSkipsHeavyStepsForDocsOnly(t *testing.T) {
 	if !strings.Contains(s, `scripts/changes.sh docs-only "$BASE"`) {
 		t.Error("check.yaml does not ask scripts/changes.sh docs-only")
 	}
-	for _, step := range []string{"run: make check", "run: make vet-windows", "run: make test-windows", "run: make test-dist"} {
-		i := strings.Index(s, step)
-		if i < 0 {
-			t.Errorf("check.yaml does not run %q", step)
-			continue
+	// The full job runs on a release-check branch and never skips; only the
+	// light check job does.
+	step := "run: make check-light"
+	i := strings.Index(s, step)
+	if i < 0 {
+		t.Fatalf("check.yaml does not run %q", step)
+	}
+	before := s[:i]
+	if j := strings.LastIndex(before, "- name:"); !strings.Contains(before[j:], "steps.changes.outputs.code == 'true'") {
+		t.Errorf("check.yaml runs %q even for a docs-only change", step)
+	}
+	_, full, found := strings.Cut(s, "\n  full:")
+	if !found {
+		t.Fatal("check.yaml has no full job")
+	}
+	for _, step := range []string{"run: make check\n", "run: make vet-windows", "run: make test-windows", "run: make test-dist"} {
+		if !strings.Contains(full, step) {
+			t.Errorf("the full job does not run %q", step)
 		}
-		before := s[:i]
-		if j := strings.LastIndex(before, "- name:"); !strings.Contains(before[j:], "steps.changes.outputs.code == 'true'") {
-			t.Errorf("check.yaml runs %q even for a docs-only change", step)
-		}
+	}
+	if strings.Contains(full, "steps.changes") {
+		t.Error("the full job skips steps on a docs-only change")
 	}
 }

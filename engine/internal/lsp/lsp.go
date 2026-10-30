@@ -54,6 +54,9 @@ type session struct {
 	crds check.CRDs
 	// watchFiles is true when the client lets the server ask for file changes.
 	watchFiles bool
+	// folders are the workspace folders, which are scanned for CRDs once
+	// crd-typed-policies is on.
+	folders []string
 	// checker finds the problems of a document; nil means check.Check.
 	checker  func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Diagnostic, error)
 	init     bool
@@ -287,7 +290,10 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 		return err
 	}
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
-	ss.scanWorkspace(ctx, p.folders())
+	ss.folders = p.folders()
+	if ss.features.Has(feature.CRDTypedPolicies) {
+		ss.scanWorkspace(ctx, ss.folders)
+	}
 	return ss.warn(problems)
 }
 
@@ -311,7 +317,7 @@ func (ss *session) configure(o *kubeOptions) (changed bool, problems []message, 
 		if *o.KubernetesVersion != "" {
 			var perr error
 			if v, perr = kubeversion.Parse(*o.KubernetesVersion); perr != nil {
-				problems = append(problems, message{messageError, fmt.Sprintf("kubernetesVersion: %v; keeping %s", perr, ss.kube)})
+				problems = append(problems, message{typ: messageError, text: fmt.Sprintf("kubernetesVersion: %v; keeping %s", perr, ss.kube)})
 				v = ss.kube
 			}
 		}
@@ -320,7 +326,7 @@ func (ss *session) configure(o *kubeOptions) (changed bool, problems []message, 
 		var unknown []string
 		on, unknown = feature.Parse(*o.Experimental)
 		if w := feature.Warning(unknown); w != "" {
-			problems = append(problems, message{messageWarning, "experimental: " + w})
+			problems = append(problems, message{typ: messageWarning, text: "experimental: " + w, log: true})
 		}
 	}
 	if v == ss.kube && on == ss.features {
@@ -338,6 +344,8 @@ func (ss *session) configure(o *kubeOptions) (changed bool, problems []message, 
 type message struct {
 	typ  int
 	text string
+	// log sends the message to the client's log, not as a notification.
+	log bool
 }
 
 // The protocol's MessageType values the server sends.
@@ -346,10 +354,15 @@ const (
 	messageWarning = 2
 )
 
-// warn shows each of problems to the user.
+// warn shows each of problems to the user, or writes it to the client's log
+// when it is marked log.
 func (ss *session) warn(problems []message) error {
 	for _, p := range problems {
-		if err := ss.conn.Notify("window/showMessage", map[string]any{"type": p.typ, "message": p.text}); err != nil {
+		method := "window/showMessage"
+		if p.log {
+			method = "window/logMessage"
+		}
+		if err := ss.conn.Notify(method, map[string]any{"type": p.typ, "message": p.text}); err != nil {
 			return err
 		}
 	}
@@ -357,7 +370,8 @@ func (ss *session) warn(problems []message) error {
 }
 
 // didChangeConfiguration applies a new kubernetesVersion and experimental list
-// and checks the open documents again when either changed.
+// and checks the open documents again when either changed. Turning on
+// crd-typed-policies scans the workspace for CRDs first.
 func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		Settings *kubeOptions `json:"settings"`
@@ -365,9 +379,13 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	if !decode(params, &p) || p.Settings == nil {
 		return nil
 	}
+	wasOn := ss.features.Has(feature.CRDTypedPolicies)
 	changed, problems, err := ss.configure(p.Settings)
 	if err != nil {
 		return err
+	}
+	if !wasOn && ss.features.Has(feature.CRDTypedPolicies) {
+		ss.scanWorkspace(ctx, ss.folders)
 	}
 	if err := ss.warn(problems); err != nil || !changed {
 		return err

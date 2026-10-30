@@ -38,3 +38,22 @@ func TestCheckLightTarget(t *testing.T) {
 		t.Error("make help does not name check-light")
 	}
 }
+
+func TestTestTargetBuildsOnce(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	out, err := exec.Command("make", "-n", "test").CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n test: %v\n%s", err, out)
+	}
+	got := string(out)
+	build, run := strings.Index(got, "go build"), strings.Index(got, "go test")
+	if build < 0 || run < 0 || build > run {
+		t.Errorf("make -n test = %q, want go build once before go test", got)
+	}
+	if strings.Count(got, "go build") != 1 || !strings.Contains(got, "CEL_LENS_BIN=") {
+		t.Errorf("make -n test = %q, want one go build and CEL_LENS_BIN set for go test", got)
+	}
+}

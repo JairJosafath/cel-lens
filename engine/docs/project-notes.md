@@ -9,16 +9,21 @@ The check before a release tag is these `make` targets, in this order:
 3. `make test-windows`
 4. `make test-dist`
 
-CI's `full` job of `.gitea/workflows/check.yaml` gates its last three steps
-(vet-windows, test-windows, test-dist) on `steps.changes.outputs.code`, but the
-job has no `changes` step, so they are skipped there. Until the Standard fixes
-the workflow, run those three targets by hand before every release.
+CI's `full` job of `.gitea/workflows/check.yaml` runs all four on a push to a
+`release-check/**` branch.
 
-## v0.17.2: the full check timed out
+## v0.17.2: release
+
+v0.17.2 was tagged at the merge of #18 and published on GitHub as `core-v0.17.2` on
+2026-10-29. https://github.com/JairJosafath/cel-lens/releases/tag/core-v0.17.2 holds
+`checksums.txt` and the six binaries; the source is under `engine/` at the tag
+`engine/v0.17.2`.
+
+## v0.17.2: the first full check timed out
 
 Cause: `go test -race ./...` ran past `go test`'s default 10-minute timeout in the
 root package (`panic: test timed out after 10m0s` in `TestGoInstallFromProxy`).
-The e2e tests build the binary with `go build`, and `TestGoInstallFromProxy` then
+Before #26 the e2e tests built the binary with `go build` from `e2e_test.go`, and `TestGoInstallFromProxy`
 ran `go install -trimpath` into a fresh module cache; without `-trimpath` in the
 first build, the two builds shared no cache entries, so every dependency
 (Kubernetes, Kyverno, cel-go) was compiled twice. On a slow machine
@@ -26,7 +31,7 @@ first build, the two builds shared no cache entries, so every dependency
 
 Fix: the e2e build (`build` in `e2e_test.go`) uses `-trimpath`, so the install
 reuses its build cache; the `test` target passes `-timeout 30m` (a Makefile
-change, proposed as a Standard change). Not user-visible, so no CHANGELOG line.
+change, merged as Standard change #6). Not user-visible, so no CHANGELOG line.
 
 Budget: on the 8-core sandbox, `go test -race -count=1 -timeout 30m ./...` takes
 about 4.5 minutes (root package 94 to 164 s, `internal/assist` 261 s, `pkg/check`
@@ -38,6 +43,17 @@ which shares no build cache with the tests, so it compiles every dependency agai
 about 7 minutes on the sandbox (it passed the default 10-minute limit only just, and
 failed once on a cold cache). The target now also passes `-timeout 30m`.
 `make vet-windows` and `make test-windows` pass in under a minute.
+
+## v0.17.2: the second full check failed (run 41)
+
+In the `full` job, `make check` passed `go mod tidy`, fmt, vet and lint. Then
+`go test -race -count=1 -timeout 30m ./...` printed `go build: signal: killed` and
+`FAIL github.com/JairJosafath/cel-lens/engine 602.672s`; every other package passed.
+
+Cause: the e2e tests build the engine inside the tests, under their build deadline
+and under `-race`, while the other packages' tests ran on the same runner.
+cel-lens-core#26 moves that build into `make test`, so the tests use one prebuilt
+binary.
 
 ## Experimental features (#4): where the issue's list disagreed with the evidence
 
@@ -73,7 +89,40 @@ and followed the evidence where they differed.
   and the CHANGELOG line for #417 is true only for types other than CRDs.
 - `fitting-completion`, "built after v0.17.1, never released": the CHANGELOG puts
   #415, #417, #419 and #420 under `[0.17.2] - 2026-10-13` and `aa2ee33 Prepare
-  v0.17.2` exists, but the repository has no tags, so I could not tell whether
-  0.17.2 was published. What is gated is the code of b90b4ca (#419), 2661148
+  v0.17.2` exists; v0.17.2 was published later (see "v0.17.2: release"). What is gated is the code of b90b4ca (#419), 2661148
   (#420: `oldSelf` is not offered on the uncorrelatable portion of a schema) and
   51d8812 (#415). #417 changed no code, so it is not gated.
+
+## The public-layout test no longer reruns every package (#16)
+
+`TestPublicSourceTestsPass` copied the tree without the factory's files and ran
+`go test ./...` in it, so every package ran a second time, and in the root package
+`TestGoInstallFromProxy` built every dependency again. With `-race` in `make check`
+the root package took 581 s (it was 94 to 164 s before #3).
+
+Options measured on the 8-core sandbox: the cost is the inner run, not the copy.
+Only the root package reads the factory's files (`ci_test.go`, `changes_test.go`,
+`license_test.go`; `internal/assist` names `AGENTS.md` in a comment only), so the
+copy now runs `go test -short .`: the root package alone, and without the install
+test, which the outer run already covers. Compiling the test binaries first was not
+needed. A test that reads `.gitea/` without skipping still fails in the copy (tried
+with a temporary test: `stat .gitea: no such file or directory`), and the test still
+skips itself in the copy (no `.gitea`) and under `-short`.
+
+Result: `go test -race -count=1 -v .` on the root package takes 143 s on a quiet
+machine (`TestPublicSourceTestsPass` 46 s, `TestGoInstallFromProxy` 41 s), within
+twice the 164 s upper figure. A full `make check` on a busy sandbox showed the root
+package at 1263 s while other work was running, so timings here vary a lot with load;
+the 143 s figure is the one to compare against.
+
+## Runner timings
+
+From run 41 (cel-lens-core#28), against the 8-core sandbox figures above:
+
+- Root package: `FAIL github.com/JairJosafath/cel-lens/engine 602.672s`, against 94
+  to 164 s on the sandbox (143 s on a quiet machine).
+- `internal/assist`: 749 s on the runner, against 261 s on the sandbox (about 2.9
+  times as long).
+- `pkg/check`: 384 s on the runner, against 82 s on the sandbox (about 4.7 times as
+  long).
+- A cold `-trimpath` build of the engine takes 5 min 15 s on an idle 8-core sandbox.

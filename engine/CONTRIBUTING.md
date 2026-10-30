@@ -35,7 +35,7 @@ release lists the SHA-256 of every file (`sha256sum -c checksums.txt`).
 ```sh
 make check         # tidy, format, vet, lint, test with -race, dyn report
 make check-light   # vet, lint and build, no tests
-go test ./...      # the tests only
+make test          # the tests only: builds bin/cel-lens-core once, then go test -race
 ```
 
 `make check` needs [golangci-lint](https://golangci-lint.run/welcome/install/)
@@ -46,7 +46,8 @@ reason. `make fmt` formats. Run `make check` before every commit.
 
 Add a test that fails first, then the change that makes it pass. Tests sit
 next to the code; fixtures and golden files are in `testdata/` and a golden
-file is rewritten with `go test ./... -update`, after which you review every
+file is rewritten with `make build` and then
+`CEL_LENS_BIN=$PWD/bin/cel-lens-core go test ./... -update`, after which you review every
 diff. `go test -bench Diagnostics ./internal/lsp/` measures the 300 ms
 diagnostics budget on a 1,000-line CRD.
 
@@ -61,10 +62,9 @@ repeat:
 - `TestPublicSourceTestsPass` proves that `go test ./...` passes on a copy of
   the tree without those files; it skips on the public copy, where it would
   only repeat the run, and with `-short`.
-- `TestGoInstallFromProxy` skips with `-short`: it builds every dependency from
-  a fresh module cache.
-- `TestDist` skips unless `CEL_LENS_DIST_TEST=1` (`make test-dist`): it
-  cross-compiles the release binaries.
+- `TestDist` and `TestGoInstallFromProxy` skip unless `CEL_LENS_DIST_TEST=1`
+  (`make test-dist`): the first cross-compiles the release binaries, the second
+  runs `go install` and builds every dependency from a fresh module cache.
 
 ## Send a change
 

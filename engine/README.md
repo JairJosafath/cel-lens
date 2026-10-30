@@ -93,7 +93,9 @@ Details are in [docs/engine.md](docs/engine.md).
 Every feature is stable or experimental. A stable feature is always on. An
 experimental feature is off until you list its name in `--experimental` or in
 the `experimental` setting. A name that is not an experimental feature is
-ignored, with one warning that names the known ones.
+ignored, with one warning that names the known ones. The warning goes to the
+command's stderr and to the language server's log (`window/logMessage`), which
+VS Code shows in the cel-lens output channel; it is not a popup.
 
 Stable:
 
@@ -111,7 +113,7 @@ Experimental:
 | Name | What it does | Why it is experimental |
 |---|---|---|
 | `kyverno` | Checks, hover and completion for Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`). Off, these documents are parsed but get no diagnostic, hover or completion | Compiled with Kyverno's compiler but never run against Kyverno's engine; `namespaceObject` is still `dyn` in hover; only `ValidatingPolicy` is read |
-| `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off | A CRD in a neighbouring `---` document of the same file still types it (`docs/type-sources.md`), and the workspace scan runs inside `initialize` and blocks the session while it scans |
+| `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off | A CRD in a neighbouring `---` document of the same file still types it (`docs/type-sources.md`). The workspace scan runs only while the feature is on: at `initialize`, or when `didChangeConfiguration` turns it on, and it blocks the session until it ends |
 | `fitting-completion` | After a dot completion offers only what the receiver has, before a dot only the names of this kind of document, and hover says why a value is `dyn`. Off, completion and hover behave as in v0.17.1 | Built after v0.17.1 and not yet proven on real use |
 
 How the types of `object`, `params` and the policy variables are found is in

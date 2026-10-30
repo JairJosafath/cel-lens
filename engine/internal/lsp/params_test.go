@@ -168,14 +168,82 @@ func TestParamsFromWorkspaceCRD(t *testing.T) {
 	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
 	c.openURI(policyURI, policy)
 	diags := c.nextDiagnostics()
-	if len(diags) != 1 || diags[0].Severity != 2 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplica'" {
-		t.Fatalf("diagnostics = %+v, want one warning: apps/v1 Deployment: undefined field 'maxReplica'", diags)
+	if len(diags) != 1 || diags[0].Severity != 2 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplica'" {
+		t.Fatalf("diagnostics = %+v, want one warning: example.com/v1 Widget: undefined field 'maxReplica'", diags)
 	}
 	if labels := c.completeLabels(policy, "params.spec.maxReplica", len("params.spec.")); !contains(labels, "maxReplicas") {
 		t.Errorf("completion after params.spec. = %v, want maxReplicas", labels)
 	}
 	if got := c.hoverText(policy, "params.spec", 2); !strings.Contains(got, "params: example.com/v1 Widget") {
 		t.Errorf("hover on params = %q, want it to name example.com/v1 Widget", got)
+	}
+}
+
+// scanSession initializes a server on dir with crd-typed-policies off and
+// returns the client.
+func scanSession(t *testing.T, dir string) *client {
+	t.Helper()
+	c := start(t)
+	params := map[string]any{
+		"processId": nil, "capabilities": map[string]any{}, "rootUri": nil,
+		"workspaceFolders": []map[string]any{{"uri": "file://" + filepath.ToSlash(dir), "name": "ws"}},
+	}
+	if _, rerr := c.call("initialize", params); rerr != nil {
+		t.Fatalf("initialize error = %+v", rerr)
+	}
+	c.notify("initialized", map[string]any{})
+	return c
+}
+
+func enableCRDTypedPolicies(c *client) {
+	c.notify("workspace/didChangeConfiguration", map[string]any{"settings": map[string]any{"experimental": []string{"crd-typed-policies"}}})
+}
+
+func TestInitializeSkipsWorkspaceScan(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crd.yaml")
+	if err := os.WriteFile(path, []byte(widgetCRDText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := scanSession(t, dir)
+	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
+	c.openURI(policyURI, policy)
+	// The server handles messages in order, so the diagnostics of the open
+	// document come after any scan that initialize started.
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Fatalf("diagnostics with crd-typed-policies off = %+v, want none", diags)
+	}
+	// A scan during initialize would have recorded the CRD; remove it so
+	// only a scan at the switch could find it.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	enableCRDTypedPolicies(c)
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Errorf("diagnostics after turning the feature on = %+v, want none (initialize did not scan, the CRD is gone)", diags)
+	}
+}
+
+func TestEnablingFeatureScansAndRechecks(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	c := scanSession(t, dir)
+	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
+	c.openURI(policyURI, policy)
+	// The server handles messages in order, so any scan that initialize
+	// started has finished once these diagnostics arrive; only a scan at the
+	// switch can find the CRD written next.
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Fatalf("diagnostics with crd-typed-policies off = %+v, want none", diags)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "crd.yaml"), []byte(widgetCRDText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enableCRDTypedPolicies(c)
+	diags := c.nextDiagnostics()
+	if len(diags) != 1 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplica'" {
+		t.Errorf("diagnostics after turning the feature on = %+v, want the warning from the CRD written after initialize", diags)
 	}
 }
 
@@ -190,7 +258,7 @@ func TestParamsFollowCRDChanges(t *testing.T) {
 	renamed := strings.Replace(widgetCRDText, "maxReplicas", "maxCount", 1)
 	c.openURI(crdURI, renamed)
 	diags := c.nextDiagnostics()
-	if len(diags) != 1 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplicas'" {
+	if len(diags) != 1 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplicas'" {
 		t.Fatalf("diagnostics after the CRD was added = %+v, want a warning about maxReplicas", diags)
 	}
 	c.changeURI(crdURI, 2, widgetCRDText)

@@ -25,7 +25,7 @@ func TestBinaryLeavesStdinMode(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = pw.Close()                                        // the program reads end of file at once
-			cmd := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // bin is the binary this test built
+			cmd := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // bin is the binary make test built
 			cmd.Stdin = pr
 			_ = cmd.Run() // lsp exits 1 for a session without shutdown
 			flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, pr.Fd(), syscall.F_GETFL, 0)

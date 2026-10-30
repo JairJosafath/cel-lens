@@ -139,9 +139,12 @@ type checker does:
   a `paramKind` that is not a mapping with `apiVersion` and `kind`. Hover on
   `params` then says it is `dyn` because the kind was not found.
 
-Hover on `params` names the kind. A wrong field gets a warning that names the
-kind the policy matches, like `status.typeChecking`: `apps/v1 Deployment:
-undefined field 'maxReplica'`. Like `object`, `params` is checked against its
+Hover on `params` names the kind. A wrong `params` field gets a warning that
+names the params kind, written `<apiVersion> <Kind>` of `spec.paramKind`:
+`example.com/v1 Widget: undefined field 'maxReplica'`. A wrong `object` or
+`oldObject` field names the matched kind, like `status.typeChecking`: `apps/v1
+Deployment: undefined field 'replicaz'`. A `params` warning is shown once per
+policy, however many kinds it matches. Like `object`, `params` is checked against its
 type only for a policy that matches built-in kinds. A policy without
 `spec.paramKind` has no `params`: using it is the error `undeclared reference to
 'params' (in container '')`, as the API server's admission compiler declares

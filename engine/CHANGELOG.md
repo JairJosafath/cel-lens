@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-30
+
+### Fixed
+
+- A warning about a wrong `params` field names the kind of `spec.paramKind` (`example.com/v1 Widget: undefined field 'minReplica'`), not the kind the policy matches, and is shown once per policy; `object` and `oldObject` warnings keep the matched kind (#51).
+- The warning for an unknown name in the `experimental` list is written to the language server's log (`window/logMessage`) once for the whole list, not shown as a notification (#50).
+
+### Changed
+
+- The language server scans the workspace for CRDs only while `crd-typed-policies` is on, so `initialize` no longer blocks on it by default; turning the feature on through `workspace/didChangeConfiguration` scans and re-checks the open documents (#14).
+
 ### Added
 
 - `CONTRIBUTING.md` says how to build, test and send a change, that `make check` fails on any warning, and which tests skip in the published source and why (#5).
@@ -16,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The README is short and direct, for the command line and other editors: what it does, what `check` prints, install with `go install github.com/JairJosafath/cel-lens/engine@latest`, flags, versions, features, other editors and what is not supported yet (#5).
+- The public-layout test copies only tracked files and bounds its inner `go test` by the test's context, which makes `make check` cheaper (#16, #17).
+- `make test` builds the engine once instead of inside the end-to-end tests, and `TestGoInstallFromProxy` no longer compiles the engine inside `go test` (#26, #45, #53, #63).
+- The check workflow's full job runs `vet-windows`, `test-windows` and `test-dist`, and uses the same `GOTMPDIR` setting as the light job (#9, #36, #39, #56).
+- `docs/project-notes.md` is refreshed after the v0.17.2 tag and run 41, and its Standard-change wording is current (#10, #30).
 
 ## [0.17.2] - 2026-10-29
 
@@ -395,7 +410,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean (#52).
 
-[Unreleased]: ../../compare/v0.17.2...HEAD
+[Unreleased]: ../../compare/v0.19.0...HEAD
+[0.19.0]: ../../compare/v0.17.2...v0.19.0
 [0.17.2]: ../../compare/v0.17.1...v0.17.2
 [0.17.1]: ../../compare/v0.15.1...v0.17.1
 [0.15.1]: ../../compare/v0.15.0...v0.15.1

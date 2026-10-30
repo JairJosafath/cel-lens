@@ -42,8 +42,8 @@ vet-windows: ## Run go vet for Windows, which also vets the *_windows.go files.
 lint: ## Lint with .golangci.yml, failing on any finding.
 	golangci-lint run
 
-test: ## Run the tests with the race detector, never from the cache.
-	go test -race -count=1 -timeout 30m ./...
+test: build ## Build the engine once, then run the tests with the race detector, never from the cache.
+	CEL_LENS_BIN=$(CURDIR)/bin/$(BINARY) go test -race -count=1 -timeout 30m ./...
 
 dyn-report: ## Print how many expressions of real policies meet dyn, and why.
 	@[ ! -f internal/assist/dynreport_test.go ] || (cd internal/assist && go test -count=1 -run '^TestDynReport$$')
@@ -54,8 +54,8 @@ test-windows: ## Compile the test binaries of the packages with Windows-only fil
 		GOOS=windows go test -c -o /dev/null $$dir; \
 	done
 
-test-dist: ## Run the release-build test (TestDist), which go test skips.
-	CEL_LENS_DIST_TEST=1 go test -race -count=1 -timeout 30m -run '^TestDist$$' .
+test-dist: ## Run the release-build and go install tests, which go test skips.
+	CEL_LENS_DIST_TEST=1 go test -race -count=1 -timeout 30m -run '^(TestDist|TestGoInstallFromProxy)$$' .
 
 build: ## Build bin/cel-lens-core for this machine.
 	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) .

@@ -114,7 +114,10 @@ func TestExperimentalUnknownName(t *testing.T) {
 			tt.send(c)
 			for {
 				m := c.read()
-				if m.Method != "window/showMessage" {
+				if m.Method == "window/showMessage" {
+					t.Fatalf("window/showMessage %s, want the warning only in window/logMessage", m.Params)
+				}
+				if m.Method != "window/logMessage" {
 					continue
 				}
 				var p struct {
@@ -125,7 +128,7 @@ func TestExperimentalUnknownName(t *testing.T) {
 					t.Fatal(err)
 				}
 				if p.Type != 2 || !strings.Contains(p.Message, `"nope"`) || !strings.Contains(p.Message, "crd-typed-policies, fitting-completion, kyverno") {
-					t.Errorf("showMessage = %+v, want a warning naming nope and the known names", p)
+					t.Errorf("logMessage = %+v, want a warning naming nope and the known names", p)
 				}
 				break
 			}
@@ -133,6 +136,57 @@ func TestExperimentalUnknownName(t *testing.T) {
 			c.open(kyvernoPolicy)
 			if _, diags := c.diagnostics(); len(diags) != 0 {
 				t.Errorf("diagnostics = %+v, want none: the unknown name is ignored", diags)
+			}
+		})
+	}
+}
+
+func TestExperimentalWarningCount(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		list []string
+		want int
+	}{
+		{"two unknown names", []string{"a-one", "b-two", "kyverno"}, 1},
+		{"only known names", []string{"kyverno", "fitting-completion"}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := start(t)
+			initializeWith(t, c, map[string]any{"experimental": tt.list})
+			got := 0
+			if tt.want > 0 {
+				// The pipe has no buffer: read the warning before sending more.
+				for m := c.read(); ; m = c.read() {
+					if m.Method == "window/showMessage" {
+						t.Fatalf("window/showMessage %s, want none", m.Params)
+					}
+					if m.Method == "window/logMessage" {
+						got++
+						if !strings.Contains(string(m.Params), "a-one") || !strings.Contains(string(m.Params), "b-two") {
+							t.Errorf("logMessage = %s, want both names", m.Params)
+						}
+						break
+					}
+				}
+			}
+			c.open(kyvernoPolicy)
+			for {
+				m := c.read()
+				if m.Method == "window/showMessage" {
+					t.Fatalf("window/showMessage %s, want none", m.Params)
+				}
+				if m.Method == "window/logMessage" {
+					got++
+				}
+				if m.Method == "textDocument/publishDiagnostics" {
+					break
+				}
+			}
+			if got != tt.want {
+				t.Errorf("logMessage count = %d, want %d", got, tt.want)
 			}
 		})
 	}

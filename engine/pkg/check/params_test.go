@@ -78,7 +78,7 @@ func loadCRDs(t *testing.T, files map[string]string) *check.CRDs {
 
 // TestParamsType checks that params is typed from the policy's paramKind, and
 // that a field it lacks gets the warning of status.typeChecking, naming the
-// kind the policy matches.
+// kind of params, and object the kind the policy matches.
 func TestParamsType(t *testing.T) {
 	t.Parallel()
 	crds := loadCRDs(t, map[string]string{"widget.yaml": widgetCRD})
@@ -90,27 +90,35 @@ func TestParamsType(t *testing.T) {
 		{name: "built-in field", doc: paramsPolicy("{apiVersion: v1, kind: ConfigMap}", "params.data['k'] == 'v'")},
 		{
 			name: "built-in wrong field", doc: paramsPolicy("{apiVersion: v1, kind: ConfigMap}", "params.nope == 1"),
-			want: []warning{{"apps/v1 Deployment: undefined field 'nope'", "nope"}},
+			want: []warning{{"v1 ConfigMap: undefined field 'nope'", "nope"}},
 		},
 		{name: "custom resource field", doc: paramsPolicy(widgetKind, "object.spec.replicas <= params.spec.maxReplicas"), crds: crds},
 		{
 			name: "custom resource wrong field", doc: paramsPolicy(widgetKind, "object.spec.replicas <= params.spec.maxReplica"), crds: crds,
-			want: []warning{{"apps/v1 Deployment: undefined field 'maxReplica'", "maxReplica"}},
+			want: []warning{{"example.com/v1 Widget: undefined field 'maxReplica'", "maxReplica"}},
 		},
 		{
 			name: "custom resource wrong type", doc: paramsPolicy(widgetKind, "params.spec.maxReplicas == 'a'"), crds: crds,
-			want: []warning{{"apps/v1 Deployment: found no matching overload for '_==_' applied to '(int, string)'", "=="}},
+			want: []warning{{"example.com/v1 Widget: found no matching overload for '_==_' applied to '(int, string)'", "=="}},
 		},
 		{name: "full metadata", doc: paramsPolicy(widgetKind, "has(params.metadata.labels) && params.metadata.labels['a'] == 'b' && params.metadata.namespace == 'x' && params.kind == 'Widget'"), crds: crds},
 		{name: "rest of ObjectMeta", doc: paramsPolicy(widgetKind, "params.metadata.ownerReferences.size() == 0 && params.metadata.selfLink == '' && params.metadata.managedFields.size() == 0"), crds: crds},
 		{
 			name: "metadata wrong field", doc: paramsPolicy(widgetKind, "params.metadata.nope == 'x'"), crds: crds,
-			want: []warning{{"apps/v1 Deployment: undefined field 'nope'", "nope"}},
+			want: []warning{{"example.com/v1 Widget: undefined field 'nope'", "nope"}},
 		},
 		{name: "the named version", doc: paramsPolicy("{apiVersion: example.com/v2, kind: Widget}", "params.spec.limit > 1"), crds: crds},
 		{
 			name: "another version's field", doc: paramsPolicy("{apiVersion: example.com/v2, kind: Widget}", "params.spec.maxReplicas > 1"), crds: crds,
-			want: []warning{{"apps/v1 Deployment: undefined field 'maxReplicas'", "maxReplicas"}},
+			want: []warning{{"example.com/v2 Widget: undefined field 'maxReplicas'", "maxReplicas"}},
+		},
+		{
+			name: "wrong on object and params", doc: paramsPolicy(widgetKind, "object.spec.replicaz <= params.spec.maxReplica"), crds: crds,
+			want: []warning{{"apps/v1 Deployment: undefined field 'replicaz'", "replicaz"}, {"example.com/v1 Widget: undefined field 'maxReplica'", "maxReplica"}},
+		},
+		{
+			name: "wrong on object only", doc: paramsPolicy(widgetKind, "object.spec.replicaz <= params.spec.maxReplicas"), crds: crds,
+			want: []warning{{"apps/v1 Deployment: undefined field 'replicaz'", "replicaz"}},
 		},
 		{name: "kind not in the CRDs stays dyn", doc: paramsPolicy(widgetKind, "params.spec.nope == 1")},
 		{name: "unknown version stays dyn", doc: paramsPolicy("{apiVersion: example.com/v3, kind: Widget}", "params.spec.nope == 1"), crds: crds},
@@ -129,6 +137,21 @@ func TestParamsType(t *testing.T) {
 				t.Errorf("Check(%s) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestParamsOncePerPolicy checks that a wrong params field of a policy that
+// matches two kinds is reported once, not once per kind.
+func TestParamsOncePerPolicy(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(paramsPolicy("{apiVersion: v1, kind: ConfigMap}", "params.dataa == 'x'"),
+		"resources: [deployments]}", "resources: [deployments]}\n      - {apiGroups: [apps], apiVersions: [v1], resources: [statefulsets]}", 1)
+	diags, err := check.Check(context.Background(), "policy.yaml", []byte(doc), allOn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := texts(doc, diags), []warning{{"v1 ConfigMap: undefined field 'dataa'", "dataa"}}; !slices.Equal(got, want) {
+		t.Errorf("Check(two kinds) = %v, want %v", got, want)
 	}
 }
 

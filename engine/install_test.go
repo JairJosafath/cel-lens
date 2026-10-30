@@ -82,10 +82,12 @@ func writeModuleProxy(t *testing.T, root, dir, version string) {
 
 // TestGoInstallFromProxy installs the module the way go install does, from a
 // file-based module proxy with no network, and checks that the installed
-// program reports the version it was installed at.
+// program reports the version it was installed at. It runs only when
+// CEL_LENS_DIST_TEST is set (make test-dist), so go test never compiles the
+// engine again.
 func TestGoInstallFromProxy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("installing builds every dependency from a fresh module cache")
+	if os.Getenv("CEL_LENS_DIST_TEST") == "" {
+		t.Skip("go install builds every dependency; set CEL_LENS_DIST_TEST=1 or run make test-dist")
 	}
 	const version = "v1.2.3"
 	proxy := t.TempDir()

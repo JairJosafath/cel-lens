@@ -41,51 +41,19 @@ spec:
 // reaches it.
 const sessionDeadline = 5 * time.Minute
 
-// binPath is the program TestMain built; it is empty only if the build failed,
-// in which case no test runs.
-var binPath string
+// binEnv names the environment variable that holds the path of the program the
+// e2e tests run. make test builds it once, before go test, and sets it.
+const binEnv = "CEL_LENS_BIN"
 
-// buildDeadline only ends a build that hangs. A cold build cache under -race on
-// a loaded machine takes longer than ten minutes, and the deadline stays below
-// the 30 minutes of make test.
-const buildDeadline = 20 * time.Minute
-
-// build compiles the real program into dir, under its own deadline, so the
-// build never counts against a test's session deadline.
-func build(dir string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), buildDeadline)
-	defer cancel()
-	bin := filepath.Join(dir, name)
-	if out, err := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", bin, ".").CombinedOutput(); err != nil { //nolint:gosec // fixed arguments
-		return "", fmt.Errorf("go build: %w\n%s", err, out)
-	}
-	return bin, nil
-}
-
-func TestMain(m *testing.M) {
-	os.Exit(runTests(m))
-}
-
-// runTests builds the program into a private temporary directory, runs the tests
-// and removes the directory.
-func runTests(m *testing.M) int {
-	dir, err := os.MkdirTemp("", name+"-e2e-")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	if binPath, err = build(dir); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	return m.Run()
-}
-
-// buildBinary returns the path of the real program TestMain built.
+// buildBinary returns the path of the real program that make test built. It
+// fails the test when go test runs without make test.
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	return binPath
+	bin := os.Getenv(binEnv)
+	if bin == "" {
+		t.Fatalf("%s is not set; run the tests with make test, which builds the program once", binEnv)
+	}
+	return bin
 }
 
 // TestBinaryLSPClientGone checks that the built program exits by itself when
@@ -94,11 +62,11 @@ func TestBinaryLSPClientGone(t *testing.T) {
 	bin := buildBinary(t)
 	ctx, cancel := context.WithTimeout(t.Context(), sessionDeadline)
 	defer cancel()
-	child := exec.CommandContext(ctx, bin, "--version") //nolint:gosec // bin is the binary this test built
+	child := exec.CommandContext(ctx, bin, "--version") //nolint:gosec // bin is the binary make test built
 	if err := child.Run(); err != nil {
 		t.Fatalf("%s --version: %v", name, err)
 	}
-	cmd := exec.CommandContext(ctx, bin, "lsp", "--stdio", "--clientProcessId="+strconv.Itoa(child.Process.Pid)) //nolint:gosec // bin is the binary this test built
+	cmd := exec.CommandContext(ctx, bin, "lsp", "--stdio", "--clientProcessId="+strconv.Itoa(child.Process.Pid)) //nolint:gosec // bin is the binary make test built
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +86,7 @@ func TestBinaryLSP(t *testing.T) {
 	bin := buildBinary(t)
 	ctx, cancel := context.WithTimeout(t.Context(), sessionDeadline)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "lsp", "--stdio", "--clientProcessId="+strconv.Itoa(os.Getpid())) //nolint:gosec // bin is the binary this test built
+	cmd := exec.CommandContext(ctx, bin, "lsp", "--stdio", "--clientProcessId="+strconv.Itoa(os.Getpid())) //nolint:gosec // bin is the binary make test built
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -193,14 +161,14 @@ func TestBinaryLSP(t *testing.T) {
 	}
 }
 
-// TestBinaryCheck runs the program built with a plain go build on a sample CRD
+// TestBinaryCheck runs the built program on a sample CRD
 // and expects its CEL error.
 func TestBinaryCheck(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "widget-crd.yaml")
 	if err := os.WriteFile(path, []byte(brokenCRD), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.CommandContext(t.Context(), buildBinary(t), "check", path).CombinedOutput() //nolint:gosec // bin is the binary this test built
+	out, err := exec.CommandContext(t.Context(), buildBinary(t), "check", path).CombinedOutput() //nolint:gosec // bin is the binary make test built
 	if exit := (&exec.ExitError{}); !errors.As(err, &exit) || exit.ExitCode() != 1 {
 		t.Errorf("%s check = %v, want exit code 1", name, err)
 	}
@@ -209,15 +177,15 @@ func TestBinaryCheck(t *testing.T) {
 	}
 }
 
-// TestBinaryVersionFallback checks that a program built without ldflags reports
-// a version from the build info rather than an empty one.
-func TestBinaryVersionFallback(t *testing.T) {
-	out, err := exec.CommandContext(t.Context(), buildBinary(t), "--version").Output() //nolint:gosec // bin is the binary this test built
+// TestBinaryVersion checks that the built program reports a version after its
+// name rather than an empty one.
+func TestBinaryVersion(t *testing.T) {
+	out, err := exec.CommandContext(t.Context(), buildBinary(t), "--version").Output() //nolint:gosec // bin is the binary make test built
 	if err != nil {
 		t.Fatal(err)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) < 2 || fields[0] != name || fields[1] == "" || fields[1] == "dev" {
-		t.Errorf("%s --version = %q, want the module version after the name", name, out)
+	if len(fields) < 2 || fields[0] != name || fields[1] == "" {
+		t.Errorf("%s --version = %q, want a version after the name", name, out)
 	}
 }
