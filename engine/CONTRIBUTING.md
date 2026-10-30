@@ -38,6 +38,10 @@ make check-light   # vet, lint and build, no tests
 make test          # the tests only: builds bin/cel-lens-core once, then go test -race
 ```
 
+`go test ./...` passes on its own: when `CEL_LENS_BIN` is unset, the root package
+builds the program once and the tests run it. `make test` is the quicker way to
+repeat it, since it builds `bin/cel-lens-core` once and hands it to the tests.
+
 `make check` needs [golangci-lint](https://golangci-lint.run/welcome/install/)
 and gofumpt. **It fails on any warning**: `golangci-lint run` and `go vet` fail
 on every finding, so fix the code rather than silence the finding. A

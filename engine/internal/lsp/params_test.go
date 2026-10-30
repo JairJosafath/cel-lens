@@ -168,8 +168,8 @@ func TestParamsFromWorkspaceCRD(t *testing.T) {
 	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
 	c.openURI(policyURI, policy)
 	diags := c.nextDiagnostics()
-	if len(diags) != 1 || diags[0].Severity != 2 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplica'" {
-		t.Fatalf("diagnostics = %+v, want one warning: example.com/v1 Widget: undefined field 'maxReplica'", diags)
+	if len(diags) != 1 || diags[0].Severity != 2 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplica'" {
+		t.Fatalf("diagnostics = %+v, want one warning: apps/v1 Deployment: undefined field 'maxReplica'", diags)
 	}
 	if labels := c.completeLabels(policy, "params.spec.maxReplica", len("params.spec.")); !contains(labels, "maxReplicas") {
 		t.Errorf("completion after params.spec. = %v, want maxReplicas", labels)
@@ -242,7 +242,7 @@ func TestEnablingFeatureScansAndRechecks(t *testing.T) {
 	}
 	enableCRDTypedPolicies(c)
 	diags := c.nextDiagnostics()
-	if len(diags) != 1 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplica'" {
+	if len(diags) != 1 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplica'" {
 		t.Errorf("diagnostics after turning the feature on = %+v, want the warning from the CRD written after initialize", diags)
 	}
 }
@@ -258,7 +258,7 @@ func TestParamsFollowCRDChanges(t *testing.T) {
 	renamed := strings.Replace(widgetCRDText, "maxReplicas", "maxCount", 1)
 	c.openURI(crdURI, renamed)
 	diags := c.nextDiagnostics()
-	if len(diags) != 1 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplicas'" {
+	if len(diags) != 1 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplicas'" {
 		t.Fatalf("diagnostics after the CRD was added = %+v, want a warning about maxReplicas", diags)
 	}
 	c.changeURI(crdURI, 2, widgetCRDText)
@@ -370,7 +370,7 @@ func TestWatchedFilesIgnoredWhileFeatureOff(t *testing.T) {
 	}
 	enableCRDTypedPolicies(c)
 	diags := c.nextDiagnostics()
-	if len(diags) != 1 || diags[0].Message != "example.com/v1 Widget: undefined field 'maxReplica'" {
+	if len(diags) != 1 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplica'" {
 		t.Errorf("diagnostics after turning the feature on = %+v, want the warning from the CRD written while it was off", diags)
 	}
 }

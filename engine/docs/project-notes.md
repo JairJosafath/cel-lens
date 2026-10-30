@@ -55,6 +55,15 @@ and under `-race`, while the other packages' tests ran on the same runner.
 cel-lens-core#26 moves that build into `make test`, so the tests use one prebuilt
 binary.
 
+### Why the tests build the program when `CEL_LENS_BIN` is unset
+
+#26 made `buildBinary` fail without `CEL_LENS_BIN`, which broke the public CI
+(job `engine`) and every contributor who runs plain `go test ./...`. Now the
+tests use `CEL_LENS_BIN` when set and otherwise build the program once per test
+process (`go build -trimpath`, lazily, into a temporary directory that `TestMain`
+removes), with no deadline of its own. `make test` and the factory's check still
+build once and set `CEL_LENS_BIN`; `TestTestTargetBuildsOnce` guards that.
+
 ## Experimental features (#4): where the issue's list disagreed with the evidence
 
 The issue described `kyverno`, `crd-typed-policies` and `fitting-completion`. I

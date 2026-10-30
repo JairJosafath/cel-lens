@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,15 +46,47 @@ const sessionDeadline = 5 * time.Minute
 // e2e tests run. make test builds it once, before go test, and sets it.
 const binEnv = "CEL_LENS_BIN"
 
-// buildBinary returns the path of the real program that make test built. It
-// fails the test when go test runs without make test.
+// built is the program this test process builds itself when binEnv is unset.
+// It is built at most once, by the first test that needs it.
+var built struct {
+	once sync.Once
+	dir  string
+	bin  string
+	err  error
+}
+
+// TestMain removes the directory of the program the tests built themselves.
+func TestMain(m *testing.M) {
+	m.Run()
+	if built.dir != "" {
+		_ = os.RemoveAll(built.dir)
+	}
+}
+
+// buildBinary returns the path of the real program the e2e tests run: the one
+// binEnv names (make test builds it once), or else one built here, once per
+// test process, into a temporary directory that TestMain removes. The build has
+// no deadline of its own; the test's timeout bounds it.
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	bin := os.Getenv(binEnv)
-	if bin == "" {
-		t.Fatalf("%s is not set; run the tests with make test, which builds the program once", binEnv)
+	if bin := os.Getenv(binEnv); bin != "" {
+		return bin
 	}
-	return bin
+	built.once.Do(func() {
+		built.dir, built.err = os.MkdirTemp("", "cel-lens-core-test-") //nolint:usetesting // t.TempDir ends with the first test; the program serves them all
+		if built.err != nil {
+			return
+		}
+		built.bin = filepath.Join(built.dir, name)
+		cmd := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-o", built.bin, ".") //nolint:gosec // fixed arguments
+		if out, err := cmd.CombinedOutput(); err != nil {
+			built.err = fmt.Errorf("go build -trimpath -o %s .: %w\n%s", built.bin, err, out)
+		}
+	})
+	if built.err != nil {
+		t.Fatal(built.err)
+	}
+	return built.bin
 }
 
 // TestBinaryLSPClientGone checks that the built program exits by itself when

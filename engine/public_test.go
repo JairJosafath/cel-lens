@@ -129,6 +129,7 @@ func TestPublicSourceTestsPass(t *testing.T) {
 	}
 	cmd := exec.CommandContext(t.Context(), "go", "test", "-short", "-count=1", "-timeout", innerTimeout.String(), ".") //nolint:gosec // fixed arguments
 	cmd.Dir = dst
+	cmd.Env = append(os.Environ(), binEnv+"="+buildBinary(t))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go test . in the public copy: %v\n%s", err, out)

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-30
+
+### Fixed
+
+- `go test ./...` passes without `make test`, since the tests build the program once when `CEL_LENS_BIN` is unset (#26 made them fail) (#80).
+- A wrong `params` field is warned about once per matched kind, naming that kind (`apps/v1 Deployment: undefined field 'dataa'`), as the API server's `status.typeChecking` does; this takes back the change of #51 (v0.19.0) (#79).
+
 ## [0.20.0] - 2026-10-30
 
 ### Changed
@@ -416,7 +423,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean (#52).
 
-[Unreleased]: ../../compare/v0.20.0...HEAD
+[Unreleased]: ../../compare/v0.20.1...HEAD
+[0.20.1]: ../../compare/v0.20.0...v0.20.1
 [0.20.0]: ../../compare/v0.19.0...v0.20.0
 [0.19.0]: ../../compare/v0.17.2...v0.19.0
 [0.17.2]: ../../compare/v0.17.1...v0.17.2

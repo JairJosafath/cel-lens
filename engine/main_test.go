@@ -530,7 +530,7 @@ spec:
 	if got := run(t.Context(), []string{"check", "--experimental", "crd-typed-policies", dir}, strings.NewReader(""), &stdout, &stderr); got != exitOK {
 		t.Errorf("run(check) = %d, want %d (warnings do not fail)", got, exitOK)
 	}
-	checkOutput(t, "stdout", stdout.String(), "warning: example.com/v1 Widget: undefined field 'maxReplica'")
+	checkOutput(t, "stdout", stdout.String(), "warning: apps/v1 Deployment: undefined field 'maxReplica'")
 	checkOutput(t, "stderr", stderr.String(), "")
 }
 

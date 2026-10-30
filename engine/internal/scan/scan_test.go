@@ -365,8 +365,8 @@ func TestRunTypesParamsFromCRDs(t *testing.T) {
 		paths []string
 		want  string
 	}{
-		{"CRD in another folder of the run", []string{"a", "z"}, "a/policy.yaml:11:56: warning: example.com/v1 Widget: undefined field 'maxReplica'\n"},
-		{"CRD file named after the policy", []string{"a/policy.yaml", "z/crd.yaml"}, "a/policy.yaml:11:56: warning: example.com/v1 Widget: undefined field 'maxReplica'\n"},
+		{"CRD in another folder of the run", []string{"a", "z"}, "a/policy.yaml:11:56: warning: apps/v1 Deployment: undefined field 'maxReplica'\n"},
+		{"CRD file named after the policy", []string{"a/policy.yaml", "z/crd.yaml"}, "a/policy.yaml:11:56: warning: apps/v1 Deployment: undefined field 'maxReplica'\n"},
 		{"CRD not among the files", []string{"a"}, ""},
 	}
 	for _, tt := range tests {
