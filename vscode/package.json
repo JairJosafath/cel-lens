@@ -2,7 +2,7 @@
   "name": "cel-lens-vscode",
   "displayName": "cel-lens for VS Code",
   "description": "CEL errors, hover and completion inside Kubernetes YAML.",
-  "version": "0.24.1",
+  "version": "0.24.2",
   "publisher": "cel-lens",
   "repository": {
     "type": "git",
@@ -114,7 +114,7 @@
             ],
             "enumDescriptions": [
               "Colors, checks, hovers and completes Kyverno ValidatingPolicy documents; experimental because they are compiled with Kyverno's compiler but never run against Kyverno's engine.",
-              "Types the params of a custom resource from a CustomResourceDefinition found in the workspace; experimental because the workspace scan blocks the engine's start while it runs.",
+              "Types the params of a custom resource from a CustomResourceDefinition found in the workspace, and hover says the feature is off when it is; experimental because the workspace scan blocks the engine's start while it runs.",
               "After a dot offers only what the receiver has, before a dot only the names of the document, and hover says why a value is dyn; experimental because it is new and not yet proven on real use."
             ]
           },

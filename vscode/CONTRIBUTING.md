@@ -84,7 +84,7 @@ Bugs go to <https://github.com/JairJosafath/cel-lens/issues>. Say which Kubernet
 ## How it works
 
 The extension activates on YAML files and starts the bundled cel-lens language
-server, `cel-lens-core` v0.21.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
+server, `cel-lens-core` v0.21.1 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
 Kubernetes YAML such as CRDs and admission policies. The status bar shows the
 Kubernetes version the server reports; the engine lists the versions it supports, so Pick
 Kubernetes Version offers them; or type a version in the

@@ -56,6 +56,24 @@ describe('compareExperimentalRows', () => {
       new Map([['alpha', 'Does c']]),
       ['alpha: differs\n  extension: Does a\n  engine:    Does c'],
     ],
+    [
+      'a color note added to the engine text',
+      new Map([['alpha', 'Does a. Off, it gets no colors']]),
+      base,
+      [],
+    ],
+    [
+      'a note in other words added to the engine text',
+      new Map([['alpha', 'Does a. Off, it gets no hover']]),
+      base,
+      ['alpha: differs\n  extension: Does a. Off, it gets no hover\n  engine:    Does a'],
+    ],
+    [
+      'a color note that also changes the engine text',
+      new Map([['alpha', 'Does b. Off, it gets no colors']]),
+      base,
+      ['alpha: differs\n  extension: Does b. Off, it gets no colors\n  engine:    Does a'],
+    ],
   ])('reports %s', (_name, extension, engine, expected) => {
     expect(compareExperimentalRows(extension, engine)).toEqual(expected);
   });

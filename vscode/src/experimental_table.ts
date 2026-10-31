@@ -28,6 +28,22 @@ export function experimentalRows(readme: string): Map<string, string> {
   return rows;
 }
 
+/** A word about colors, in any form the READMEs and the setting use. */
+export const COLOR_WORD = /\bcolou?r(?:s|ed|ing)?\b/i;
+
+/**
+ * Coloring is the extension's work and the engine never colors, so the engine README cannot say
+ * what a feature does to colors. A row of the extension may therefore add one sentence about
+ * colors to the engine's text; any other difference in words is still a difference.
+ */
+function addsOnlyColorNote(extensionText: string, engineText: string): boolean {
+  if (!extensionText.includes(engineText)) {
+    return false;
+  }
+  const added = extensionText.replace(engineText, '').replace(/^[\s.,;]+|[\s.,;]+$/g, '');
+  return added === '' || (/^[^.]*$/.test(added) && COLOR_WORD.test(added));
+}
+
 /** What differs between two tables, one line per feature missing from a side or worded differently. */
 export function compareExperimentalRows(
   extension: Map<string, string>,
@@ -38,7 +54,7 @@ export function compareExperimentalRows(
     const engineText = engine.get(name);
     if (engineText === undefined) {
       problems.push(`${name}: the engine README lacks this feature`);
-    } else if (engineText !== text) {
+    } else if (!addsOnlyColorNote(text, engineText)) {
       problems.push(`${name}: differs\n  extension: ${text}\n  engine:    ${engineText}`);
     }
   }

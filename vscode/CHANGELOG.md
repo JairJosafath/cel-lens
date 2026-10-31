@@ -6,6 +6,20 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-10-31
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.21.1, which fixes the engine's own tests and changelog links; nothing changes in what the editor shows.
+- The end-to-end test covers a per-kind type-check warning, and a test checks that `cursorLineText` serialises standalone for the page; nothing changes in what the editor shows.
+- The `crd-typed-policies` description in Settings now mentions hover, as the README does. A test compares the checks, hover, completion and typing each `cel-lens.experimental` description names with the README's "What it does" cell, and the color check accepts colored and coloring.
+
+### Fixed
+
+- The picture script screenshots a hover or a list (quick fixes, completion) only once it is fully shown: rendered, opaque and with no animation still running, so a slow machine no longer catches it half faded in. A widget that never settles fails the run with a message that names it.
+- The picture script waits after its undos for the cursor line to be the fixture's line before the last, taken from the fixture file, not read from the editor at a moment the cursor may not have moved yet.
+- The store page says again that a Kyverno policy gets no colors while the `kyverno` feature is off: the experimental table's kyverno row names colors, and the stable table's Colors row says a Kyverno policy is colored only with `kyverno` on. The test that compares the table with the engine README allows a note about colors on top of the engine's text.
+
 ## [0.24.1] - 2026-10-30
 
 ### Changed
@@ -469,7 +483,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.1...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.2...HEAD
+[0.24.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.1...vscode-v0.24.2
 [0.24.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.0...vscode-v0.24.1
 [0.24.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.23.0...vscode-v0.24.0
 [0.23.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.22.1...vscode-v0.23.0

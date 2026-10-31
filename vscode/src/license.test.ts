@@ -1,9 +1,7 @@
 import { readFileSync } from 'node:fs';
 
-import { listFiles } from '@vscode/vsce';
 import { describe, expect, it } from 'vitest';
 
-const LIST_TIMEOUT_MS = 60_000;
 const manifest: unknown = JSON.parse(readFileSync('package.json', 'utf8'));
 
 describe('the Apache-2.0 license', () => {
@@ -18,16 +16,11 @@ describe('the Apache-2.0 license', () => {
     },
   );
 
-  it(
-    'is listed among the files vsce packages',
-    async () => {
-      // listFiles applies .vscodeignore without running the vscode:prepublish build.
-      const listed = await listFiles({ packagedDependencies: [] });
-      expect(listed).toContain('LICENSE');
-      // Loading vsce and walking the tree is slow on a loaded runner; the default 5 s is too short.
-    },
-    LIST_TIMEOUT_MS,
-  );
+  it('is re-included by .vscodeignore, so vsce packages it', () => {
+    // `make package-check` packages for real; reading the ignore file keeps this test off the disk walk.
+    const lines = readFileSync('.vscodeignore', 'utf8').split('\n');
+    expect(lines).toContain('!LICENSE*');
+  });
 
   it('is named in the README', () => {
     expect(readFileSync('README.md', 'utf8')).toContain('licensed under Apache-2.0');

@@ -63,22 +63,22 @@ Every feature is stable or experimental. A stable feature is always on. An exper
 
 Stable:
 
-| Feature                                          | What it does                                                                                                              |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| Checks of CEL                                    | Compiles the CEL of `x-kubernetes-validations`, ValidatingAdmissionPolicy and MutatingAdmissionPolicy like the API server |
-| Language server                                  | Diagnostics, hover, completion and quick fixes                                                                            |
-| Kubernetes version                               | Results match the version in `cel-lens.kubernetesVersion`                                                                 |
-| Typed `object`, `oldObject` and policy variables | Typed from the built-in kinds a policy matches                                                                            |
-| Typed `params` of a built-in kind                | Typed from `spec.paramKind` when it names a built-in kind                                                                 |
-| Colors                                           | Colors the parts of CEL in the style of `cel-lens.colorStyle`                                                             |
+| Feature                                          | What it does                                                                                                                    |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| Checks of CEL                                    | Compiles the CEL of `x-kubernetes-validations`, ValidatingAdmissionPolicy and MutatingAdmissionPolicy like the API server       |
+| Language server                                  | Diagnostics, hover, completion and quick fixes                                                                                  |
+| Kubernetes version                               | Results match the version in `cel-lens.kubernetesVersion`                                                                       |
+| Typed `object`, `oldObject` and policy variables | Typed from the built-in kinds a policy matches                                                                                  |
+| Typed `params` of a built-in kind                | Typed from `spec.paramKind` when it names a built-in kind                                                                       |
+| Colors                                           | Colors the parts of CEL in the style of `cel-lens.colorStyle`; a Kyverno policy only with the `kyverno` experimental feature on |
 
 Experimental:
 
-| Name                 | What it does                                                                                                                                                                                        | Why it is experimental                                                                                   |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `kyverno`            | Checks, hover and completion for Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`). Off, these documents are parsed but get no diagnostic, hover or completion                                  | Compiled with Kyverno's compiler but never run against Kyverno's engine; only `ValidatingPolicy` is read |
-| `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off                                                      | The workspace scan runs only while the feature is on, at initialize or when the setting turns it on      |
-| `fitting-completion` | After a dot completion offers only what the receiver has, before a dot only the names of this kind of document, and hover says why a value is `dyn`. Off, completion and hover behave as in v0.17.1 | Built after v0.17.1 of the engine and not yet proven on real use                                         |
+| Name                 | What it does                                                                                                                                                                                                  | Why it is experimental                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `kyverno`            | Checks, hover and completion for Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`). Off, these documents are parsed but get no diagnostic, hover or completion. Off, a Kyverno policy also gets no colors | Compiled with Kyverno's compiler but never run against Kyverno's engine; only `ValidatingPolicy` is read |
+| `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off                                                                | The workspace scan runs only while the feature is on, at initialize or when the setting turns it on      |
+| `fitting-completion` | After a dot completion offers only what the receiver has, before a dot only the names of this kind of document, and hover says why a value is `dyn`. Off, completion and hover behave as in v0.17.1           | Built after v0.17.1 of the engine and not yet proven on real use                                         |
 
 Kyverno `ValidatingPolicy` documents are colored only with `kyverno` in `cel-lens.experimental`; off, they keep the plain YAML colors.
 

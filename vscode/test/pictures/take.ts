@@ -17,6 +17,7 @@ import { chromium, type CDPSession, type Locator, type Page } from 'playwright';
 import jpeg from 'jpeg-js';
 
 import { cursorLineText } from '../../src/cursor_line.ts';
+import { widgetShown } from '../../src/widget_shown.ts';
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
 import { pickFrames, VirtualClock, type StampedFrame } from '../../src/gif_timeline.ts';
 
@@ -378,29 +379,6 @@ async function waitForEditorText(page: Page, text: string): Promise<void> {
   );
 }
 
-/** The number of lines in view whose text holds `text`. */
-async function countEditorLines(page: Page, text: string): Promise<number> {
-  return await page.locator('.monaco-editor .view-line', { hasText: text }).count();
-}
-
-/** Waits until exactly `count` lines in view hold `text`, so only what a step typed or undid satisfies it. */
-async function waitForEditorLineCount(page: Page, text: string, count: number): Promise<void> {
-  try {
-    await page.waitForFunction(
-      `[...document.querySelectorAll('.monaco-editor .view-line')].filter((line) =>
-        (line.textContent ?? '').replace(/\\u00a0/g, ' ').includes(${JSON.stringify(text)}),
-      ).length === ${String(count)}`,
-      undefined,
-      { timeout: STATE_TIMEOUT_MS },
-    );
-  } catch (error) {
-    throw new Error(
-      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for ${String(count)} editor lines with ${text}`,
-      { cause: error },
-    );
-  }
-}
-
 /** Waits until the line the cursor is on holds `text`, wherever the editor is scrolled. */
 async function waitForCursorLine(page: Page, text: string): Promise<void> {
   try {
@@ -417,6 +395,39 @@ async function waitForCursorLine(page: Page, text: string): Promise<void> {
   }
 }
 
+/** The line before the last of the CRD fixture: the line the cursor is on after moveToLastRule. */
+async function readLastRuleLine(): Promise<string> {
+  const lines = (await readFile(join(FIXTURES, CRD), 'utf8')).split('\n');
+  const line = lines.at(-2);
+  if (line === undefined) {
+    throw new Error(`${CRD} has no line before its last.`);
+  }
+  return line;
+}
+
+/** Moves the cursor to the end of the last line before the final one, the spot a new rule starts from. */
+async function moveToLastRule(page: Page): Promise<void> {
+  await page.keyboard.press('Control+End');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('End');
+}
+
+/** Waits until the line the cursor is on is exactly `text`, wherever the editor is scrolled. */
+async function waitForCursorLineIs(page: Page, text: string): Promise<void> {
+  try {
+    await page.waitForFunction(
+      `(${cursorLineText.toString()})(document) === ${JSON.stringify(text)}`,
+      undefined,
+      { timeout: STATE_TIMEOUT_MS },
+    );
+  } catch (error) {
+    throw new Error(
+      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for the cursor line to be ${text}`,
+      { cause: error },
+    );
+  }
+}
+
 /** Waits until the quick-open or palette list has gone after a choice. */
 async function waitForQuickInputClosed(page: Page): Promise<void> {
   await waitForState(
@@ -426,12 +437,33 @@ async function waitForQuickInputClosed(page: Page): Promise<void> {
   );
 }
 
-/** Waits until the hover widget is on screen and holds some text. */
+/** Waits until every element matching `selector` is fully shown, as `widgetShown` says. */
+async function waitForWidgetShown(
+  page: Page,
+  selector: string,
+  description: string,
+): Promise<void> {
+  try {
+    await page.waitForFunction(
+      `(() => { const elements = Array.from(document.querySelectorAll(${JSON.stringify(selector)})); return elements.length > 0 && elements.every((${widgetShown.toString()})); })()`,
+      undefined,
+      { timeout: STATE_TIMEOUT_MS },
+    );
+  } catch (error) {
+    throw new Error(
+      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for ${description} to be fully shown`,
+      { cause: error },
+    );
+  }
+}
+
+/** Waits until the hover widget is on screen, holds some text and is fully shown. */
 async function waitForHover(page: Page): Promise<void> {
   await waitForState(
     page.locator('.monaco-hover:not(.hidden)', { hasText: /\S/ }).first(),
     'the hover widget to show its text',
   );
+  await waitForWidgetShown(page, '.monaco-hover:not(.hidden)', 'the hover widget');
 }
 
 /** Waits until no hover widget is on screen. */
@@ -484,9 +516,7 @@ async function startNewRule(page: Page): Promise<void> {
     page.locator('.monaco-editor .view-lines').first(),
     'the editor text to be clickable',
   );
-  await page.keyboard.press('Control+End');
-  await page.keyboard.press('ArrowUp');
-  await page.keyboard.press('End');
+  await moveToLastRule(page);
   await page.keyboard.press('Enter');
 }
 
@@ -593,6 +623,7 @@ async function takePictures(page: Page): Promise<void> {
     page.locator('.action-widget .monaco-list-row').first(),
     'the quick fix list to show a fix',
   );
+  await waitForWidgetShown(page, '.action-widget', 'the quick fix list');
   await save('quick-fix.png', await page.screenshot({ type: 'png' }));
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+End');
@@ -606,7 +637,9 @@ async function takePictures(page: Page): Promise<void> {
   await page.mouse.move(field.x, field.y + 200);
 
   // completion.png and completion.gif: the list after self., one item picked.
-  const rulesBefore = await countEditorLines(page, '- rule:');
+  const lastRuleBefore = await readLastRuleLine();
+  await moveToLastRule(page);
+  await waitForCursorLineIs(page, lastRuleBefore);
   await startNewRule(page);
   await page.keyboard.type('- rule: ');
   await waitForCursorLine(page, '- rule: ');
@@ -621,6 +654,7 @@ async function takePictures(page: Page): Promise<void> {
       page.locator('.suggest-widget.visible .monaco-list-row').first(),
       'the completion list to show an item after self.',
     );
+    await waitForWidgetShown(page, '.suggest-widget.visible', 'the completion list');
     await holdFrame(recording, 700);
     await page.keyboard.press('ArrowDown');
     await holdFrame(recording, 500);
@@ -645,7 +679,8 @@ async function takePictures(page: Page): Promise<void> {
   for (let step = 0; step < 40; step += 1) {
     await page.keyboard.press('Control+z');
   }
-  await waitForEditorLineCount(page, '- rule:', rulesBefore);
+  await moveToLastRule(page);
+  await waitForCursorLineIs(page, lastRuleBefore);
 
   // colors.gif: a rule colored as it is typed, with no completion list in the way.
   await startNewRule(page);

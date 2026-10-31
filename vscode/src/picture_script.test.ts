@@ -54,4 +54,28 @@ describe('the picture script', () => {
       /type\('31'\);\s+await page\.keyboard\.press\('Enter'\);\s+await waitForQuickInputClosed\(page\);\s+await waitForEngine\(page\);/,
     );
   });
+
+  it('counts no editor lines, which depend on the scroll position', () => {
+    expect(SOURCE).not.toMatch(/waitForEditorLineCount|countEditorLines/);
+  });
+
+  it('waits after the undos for the last rule by the cursor line, not by a count', () => {
+    expect(SOURCE).toMatch(
+      /Control\+z[\s\S]*?moveToLastRule\(page\);\s+await waitForCursorLineIs\(page, lastRuleBefore\);/,
+    );
+  });
+
+  it('waits until a hover or a list is fully shown, with an error naming the widget', () => {
+    expect(SOURCE).toMatch(/\$\{widgetShown\.toString\(\)\}/);
+    expect(SOURCE).toMatch(/to be fully shown/);
+    expect(SOURCE).toMatch(
+      /async function waitForHover[\s\S]*?waitForWidgetShown\(page, '\.monaco-hover:not\(\.hidden\)'/,
+    );
+    expect(SOURCE).toMatch(
+      /waitForWidgetShown\(page, '\.action-widget'[^;]*;\s+await save\('quick-fix\.png'/,
+    );
+    expect(SOURCE).toMatch(
+      /waitForWidgetShown\(page, '\.suggest-widget\.visible'[\s\S]*?completionPicture = await page\.screenshot/,
+    );
+  });
 });

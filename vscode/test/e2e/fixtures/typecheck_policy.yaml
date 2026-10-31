@@ -1,0 +1,20 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: two-kinds
+spec:
+  paramKind:
+    apiVersion: v1
+    kind: ConfigMap
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['apps']
+        apiVersions: ['v1']
+        operations: ['CREATE', 'UPDATE']
+        resources: ['deployments']
+      - apiGroups: ['apps']
+        apiVersions: ['v1']
+        operations: ['CREATE', 'UPDATE']
+        resources: ['statefulsets']
+  validations:
+    - expression: params.dataa.size() > 0

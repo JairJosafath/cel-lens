@@ -41,6 +41,7 @@ import { spawnEngine } from '../../src/spawn_engine';
 const FIXTURES = fileURLToPath(new URL('fixtures/', import.meta.url));
 const EXTENSION_PATH = fileURLToPath(new URL('../../', import.meta.url));
 const ERROR = 1;
+const WARNING = 2;
 const DOCS_LINK =
   /^https:\/\/(kubernetes\.io\/docs|github\.com\/google\/cel-spec|pkg\.go\.dev\/github\.com\/google\/cel-go)([/#]|$)/;
 
@@ -274,6 +275,21 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
     });
 
     expect(await diagnosticsFor(uri, (list) => list.length === 0)).toEqual([]);
+  });
+
+  it('shows one warning per matched kind, starting with the kind, on a policy matching two kinds', async () => {
+    const { uri, text } = await open('typecheck_policy.yaml');
+
+    const found = await diagnosticsFor(uri, (list) => list.length > 0);
+
+    const warnings = found.filter((d) => d.severity === WARNING);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]?.message).toMatch(/^apps\/v1 Deployment: /);
+    expect(warnings[1]?.message).toMatch(/^apps\/v1 StatefulSet: /);
+    for (const warning of warnings) {
+      expect(warning).toMatchObject({ source: 'cel-lens' });
+      expect(warning.range.start.line).toBe(lineOf(text, '- expression:'));
+    }
   });
 
   it('reports broken YAML where it breaks and clears the error once the text is fixed', async () => {
