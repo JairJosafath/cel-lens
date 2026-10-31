@@ -1,0 +1,11 @@
+# The core-v tags published on github.com/JairJosafath/cel-lens.
+# A tag goes in only once it is really on the public repository; the
+# CHANGELOG.md version links are checked against this list. The newest
+# released section's own tag is accepted before it is listed.
+core-v0.14.0
+core-v0.15.0
+core-v0.17.2
+core-v0.19.0
+core-v0.20.0
+core-v0.20.1
+core-v0.21.0

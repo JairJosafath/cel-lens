@@ -42,6 +42,11 @@ make test          # the tests only: builds bin/cel-lens-core once, then go test
 builds the program once and the tests run it. `make test` is the quicker way to
 repeat it, since it builds `bin/cel-lens-core` once and hands it to the tests.
 
+`GO_PARALLEL` is how many packages Go builds and tests at the same time (`go build`
+and `go test`'s `-p`); it defaults to 2, which keeps the peak memory low on a small
+or busy machine. On a big machine raise it: `make check GO_PARALLEL=8`. The
+public-copy test's inner `go test` follows it.
+
 `make check` needs [golangci-lint](https://golangci-lint.run/welcome/install/)
 and gofumpt. **It fails on any warning**: `golangci-lint run` and `go vet` fail
 on every finding, so fix the code rather than silence the finding. A
@@ -80,7 +85,12 @@ repeat:
    `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`. The line
    names no issue number. A release adds a link line for its notes in the
    `core-v` form, `[0.20.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.19.0...core-v0.20.0`,
-   and `[Unreleased]` compares the newest `core-v` tag to `HEAD`.
+   and `[Unreleased]` compares the newest `core-v` tag to `HEAD`. A link names only
+   `core-v` tags listed in `testdata/public-core-tags.txt`, the tags really on the
+   public repository (the newest release's own tag is accepted before it is
+   listed); a version whose tag is not public has no link line, and a compare link
+   starts at the previous public tag. After a release's tag is published, add it to
+   that list, so the next release's compare link is checked against it.
 4. Run `make check`, commit with a Conventional Commit message (`feat:`, `fix:`,
    `test:`, `refactor:`, `docs:`) and open a pull request on the public
    repository.

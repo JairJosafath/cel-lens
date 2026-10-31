@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -194,7 +195,8 @@ func TestCopyBuildInputs(t *testing.T) {
 
 // TestChangelogHeadings checks that every released section of CHANGELOG.md has
 // a heading of the form "## [X.Y.Z] - YYYY-MM-DD" with a real calendar date,
-// that each has a "[X.Y.Z]:" link definition, and that "[Unreleased]:" compares
+// that each version whose core tag is public has a "[X.Y.Z]:" link definition and
+// every other version has none, and that "[Unreleased]:" compares
 // the newest release to HEAD.
 func TestChangelogHeadings(t *testing.T) {
 	t.Parallel()
@@ -202,7 +204,11 @@ func TestChangelogHeadings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range changelogProblems(string(data)) {
+	tags, err := os.ReadFile(publicTagsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range changelogProblems(string(data), publicTags(string(tags))) {
 		t.Error(p)
 	}
 }
@@ -212,21 +218,26 @@ func TestChangelogHeadings(t *testing.T) {
 func TestChangelogProblems(t *testing.T) {
 	t.Parallel()
 	const repo = changelogRepo
-	const good = "## [Unreleased]\n\n## [1.1.0] - 2026-01-02\n\n## [1.0.0] - 2026-01-01\n\n" +
-		"[Unreleased]: " + repo + "compare/core-v1.1.0...HEAD\n[1.1.0]: " + repo + "compare/core-v1.0.0...core-v1.1.0\n[1.0.0]: " + repo + "releases/tag/core-v1.0.0\n"
+	public := []string{"core-v0.14.0", "core-v1.0.0"}
+	const good = "## [Unreleased]\n\n## [1.1.0] - 2026-01-02\n\n## [1.0.0] - 2026-01-01\n\n## [0.14.0] - 2025-12-02\n\n## [0.13.0] - 2025-12-01\n\n" +
+		"[Unreleased]: " + repo + "compare/core-v1.1.0...HEAD\n[1.1.0]: " + repo + "compare/core-v1.0.0...core-v1.1.0\n[1.0.0]: " + repo + "compare/core-v0.14.0...core-v1.0.0\n[0.14.0]: " + repo + "releases/tag/core-v0.14.0\n"
 	tests := []struct {
 		name string
 		in   string
 		want int
 	}{
 		{"valid", good, 0},
+		{"link names a middle tag that is not public", strings.Replace(good, "core-v0.14.0...core-v1.0.0", "core-v0.13.0...core-v1.0.0", 1), 1},
 		{"missing version link", strings.Replace(good, "[1.1.0]: "+repo+"compare/core-v1.0.0...core-v1.1.0\n", "", 1), 1},
 		{"stale unreleased link", strings.Replace(good, "core-v1.1.0...HEAD", "core-v1.0.0...HEAD", 1), 1},
 		{"unreleased not to HEAD", strings.Replace(good, "core-v1.1.0...HEAD", "core-v1.1.0...core-v1.1.0", 1), 1},
 		{"missing unreleased link", strings.Replace(good, "[Unreleased]: "+repo+"compare/core-v1.1.0...HEAD\n", "", 1), 1},
 		{"copied compare link", strings.Replace(good, "core-v1.0.0...core-v1.1.0", "core-v0.9.0...core-v1.0.0", 1), 1},
 		{"compare ends at another version", strings.Replace(good, "core-v1.0.0...core-v1.1.0", "core-v1.0.0...core-v1.2.0", 1), 1},
-		{"oldest compares", strings.Replace(good, "releases/tag/core-v1.0.0", "compare/core-v0.9.0...core-v1.0.0", 1), 1},
+		{"oldest public version compares", strings.Replace(good, "releases/tag/core-v0.14.0", "compare/core-v0.13.0...core-v0.14.0", 1), 1},
+		{"older version has a link", good + "[0.13.0]: " + repo + "releases/tag/core-v0.13.0\n", 1},
+		{"older version has a compare link", good + "[0.13.0]: " + repo + "compare/core-v0.12.0...core-v0.13.0\n", 1},
+		{"newer version compares from an unlinked version", strings.Replace(good, "compare/core-v0.14.0...core-v1.0.0", "compare/core-v0.13.0...core-v1.0.0", 1), 1},
 		{"old relative link form", strings.Replace(good, repo+"compare/core-v1.0.0...core-v1.1.0", "../../compare/v1.0.0...v1.1.0", 1), 1},
 		{"link compares the wrong versions", strings.Replace(good, "core-v1.0.0...core-v1.1.0", "core-v0.9.0...core-v1.1.0", 1), 1},
 		{"issue reference", strings.Replace(good, "## [1.0.0] - 2026-01-01\n", "## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- A fix (#43).\n", 1), 1},
@@ -238,24 +249,58 @@ func TestChangelogProblems(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := changelogProblems(tt.in); len(got) != tt.want {
+			if got := changelogProblems(tt.in, public); len(got) != tt.want {
 				t.Errorf("changelogProblems(%s) = %q, want %d problems", tt.name, got, tt.want)
 			}
 		})
 	}
 }
 
+// TestChangelogProblemsMiddleTag checks that the rule is the list, not a version range:
+// a link naming a tag the list leaves out fails although older and newer tags are listed.
+func TestChangelogProblemsMiddleTag(t *testing.T) {
+	t.Parallel()
+	repo := changelogRepo
+	text := "## [Unreleased]\n\n## [0.20.0] - 2026-03-01\n\n## [0.19.0] - 2026-02-01\n\n## [0.14.0] - 2026-01-01\n\n" +
+		"[Unreleased]: " + repo + "compare/core-v0.20.0...HEAD\n" +
+		"[0.20.0]: " + repo + "compare/core-v0.19.0...core-v0.20.0\n" +
+		"[0.19.0]: " + repo + "compare/core-v0.14.0...core-v0.19.0\n" +
+		"[0.14.0]: " + repo + "releases/tag/core-v0.14.0\n"
+	got := changelogProblems(text, []string{"core-v0.14.0", "core-v0.20.0"})
+	if len(got) == 0 || !strings.Contains(got[0], "0.19.0") || !strings.Contains(got[0], "core-v0.19.0") {
+		t.Errorf("changelogProblems(list without core-v0.19.0) = %q, want a problem naming 0.19.0 and core-v0.19.0", got)
+	}
+}
+
+// publicTagsFile lists the core tags that are on the public repository.
+const publicTagsFile = "testdata/public-core-tags.txt"
+
+// publicTags returns the tags in the text of a tag list: one per line, blank lines and
+// lines starting with # skipped.
+func publicTags(text string) []string {
+	var tags []string
+	for line := range strings.SplitSeq(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			tags = append(tags, line)
+		}
+	}
+	return tags
+}
+
 // changelogRepo is the public repository the version links of CHANGELOG.md point into.
 const changelogRepo = "https://github.com/JairJosafath/cel-lens/"
 
-// changelogProblems returns one message for each problem in the changelog text:
-// a malformed heading or date, a released version without a link definition or whose link does not compare
-// the previous release to it (the oldest links to its release tag), or
+// changelogProblems returns one message for each problem in the changelog text,
+// given the core tags that are public (and, besides them, the newest release's own tag,
+// which is published after the release is prepared):
+// a malformed heading or date, a link that names a core tag that is neither public nor
+// the newest release's, a version with a public tag but no link definition or whose link does not compare
+// the previous version with a public tag to it (the first links to its release tag), or
 // an [Unreleased] link that does not compare the newest release to HEAD, or a
 // line with a #<digits> issue reference. It also
 // reports a repeated change-type heading, or one out of Keep a Changelog order,
 // in the [Unreleased] section and the newest release.
-func changelogProblems(text string) []string {
+func changelogProblems(text string, public []string) []string {
 	heading := regexp.MustCompile(`^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})$`)
 	link := regexp.MustCompile(`^\[([^\]]+)\]: (\S+)$`)
 	links := map[string]string{}
@@ -303,23 +348,37 @@ func changelogProblems(text string) []string {
 		if _, err := time.Parse(time.DateOnly, m[2]); err != nil {
 			problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: date %q of %s: %v", i+1, m[2], m[1], err))
 		}
-		if _, ok := links[m[1]]; !ok {
-			problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: no \"[%s]:\" link definition for the heading", i+1, m[1]))
-		}
 	}
 	if len(versions) == 0 {
 		return append(problems, "CHANGELOG.md has no released sections")
 	}
+	allowed := append(slices.Clone(public), "core-v"+versions[0])
+	linkable := func(v string) bool { return slices.Contains(allowed, "core-v"+v) }
+	tagRef := regexp.MustCompile(`core-v\d+\.\d+\.\d+`)
+	named := map[string]bool{} // links that name a tag that is not public
+	for _, name := range slices.Sorted(maps.Keys(links)) {
+		for _, tag := range tagRef.FindAllString(links[name], -1) {
+			if !slices.Contains(allowed, tag) {
+				named[name] = true
+				problems = append(problems, fmt.Sprintf("CHANGELOG.md: [%s]: %s names %s, which is not on the public repository (see %s)", name, links[name], tag, publicTagsFile))
+				break
+			}
+		}
+	}
 	for i, v := range versions {
 		got, ok := links[v]
+		if !linkable(v) {
+			continue
+		}
 		if !ok {
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md: no \"[%s]:\" link definition for the version, whose tag core-v%s is public", v, v))
 			continue
 		}
 		want := changelogRepo + "releases/tag/core-v" + v
-		if i+1 < len(versions) {
-			want = changelogRepo + "compare/core-v" + versions[i+1] + "...core-v" + v
+		if j := slices.IndexFunc(versions[i+1:], linkable); j >= 0 {
+			want = changelogRepo + "compare/core-v" + versions[i+1+j] + "...core-v" + v
 		}
-		if got != want {
+		if got != want && !named[v] {
 			problems = append(problems, fmt.Sprintf("CHANGELOG.md: [%s]: %s, want %s", v, got, want))
 		}
 	}

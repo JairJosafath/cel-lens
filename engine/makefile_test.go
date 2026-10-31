@@ -1,8 +1,10 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +31,7 @@ func TestCheckLightTarget(t *testing.T) {
 	if strings.Contains(light, "go test") {
 		t.Error("make check-light runs tests")
 	}
-	if !strings.Contains(dry("check"), "go test -race") {
+	if check := dry("check"); !strings.Contains(check, "go test") || !strings.Contains(check, "-race -count=1") {
 		t.Error("make check no longer runs the tests")
 	}
 	help, err := exec.Command("make", "help").CombinedOutput()
@@ -79,5 +81,43 @@ func TestInnerTimeoutBelowMakefileTimeout(t *testing.T) {
 	}
 	if innerTimeout >= outer {
 		t.Errorf("innerTimeout = %v, want below the Makefile's -timeout %v", innerTimeout, outer)
+	}
+}
+
+func TestMakefileParallelKnob(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	for _, c := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"default", nil, "-p 2 "},
+		{"raised", []string{"GO_PARALLEL=8"}, "-p 8 "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := exec.Command("make", append([]string{"-n", "test"}, c.args...)...) //nolint:gosec // fixed test arguments
+			// make check GO_PARALLEL=8 passes the override to this test as an exported variable and
+			// inside MAKEFLAGS; the default case must see neither.
+			cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
+				return strings.HasPrefix(kv, "GO_PARALLEL=") || strings.HasPrefix(kv, "MAKEFLAGS=") ||
+					strings.HasPrefix(kv, "MFLAGS=") || strings.HasPrefix(kv, "MAKELEVEL=")
+			})
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("make -n test: %v\n%s", err, out)
+			}
+			for _, line := range strings.Split(string(out), "\n") {
+				if (strings.Contains(line, "go build") || strings.Contains(line, "go test")) && !strings.Contains(line, c.want) {
+					t.Errorf("make -n test %v: %q lacks %q", c.args, line, c.want)
+				}
+			}
+			if !strings.Contains(string(out), "-race -count=1") {
+				t.Errorf("make -n test = %q, want -race -count=1 kept", out)
+			}
+		})
 	}
 }

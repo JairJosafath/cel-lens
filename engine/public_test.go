@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,23 @@ var factoryPaths = []string{
 
 // innerTimeout bounds the inner go test; it is shorter than the Makefile's 30m.
 const innerTimeout = 25 * time.Minute
+
+// parallelEnv names the variable through which the Makefile's GO_PARALLEL reaches
+// the tests; defaultParallel is used when it is unset or not a positive number.
+const (
+	parallelEnv     = "GO_PARALLEL"
+	defaultParallel = "2"
+)
+
+// innerTestArgs returns the arguments of the inner go test. It takes the same -p
+// limit and -trimpath as the Makefile's build and test, so the packages the outer
+// run compiled serve it from the build cache and it adds little memory beside them.
+func innerTestArgs(parallel string) []string {
+	if n, err := strconv.Atoi(parallel); err != nil || n < 1 {
+		parallel = defaultParallel
+	}
+	return []string{"test", "-p", parallel, "-trimpath", "-short", "-count=1", "-timeout", innerTimeout.String(), "."}
+}
 
 // trackedFiles returns the files git tracks in dir, as slash-separated paths.
 func trackedFiles(ctx context.Context, dir string) ([]string, error) {
@@ -127,7 +145,7 @@ func TestPublicSourceTestsPass(t *testing.T) {
 	if err := copyTracked(files, src, dst); err != nil {
 		t.Fatalf("copy %s: %v", src, err)
 	}
-	cmd := exec.CommandContext(t.Context(), "go", "test", "-short", "-count=1", "-timeout", innerTimeout.String(), ".") //nolint:gosec // fixed arguments
+	cmd := exec.CommandContext(t.Context(), "go", innerTestArgs(os.Getenv(parallelEnv))...) //nolint:gosec // arguments built from a validated number
 	cmd.Dir = dst
 	cmd.Env = append(os.Environ(), binEnv+"="+buildBinary(t))
 	out, err := cmd.CombinedOutput()
@@ -177,5 +195,26 @@ func TestNoFactoryPathOutsideRootTests(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInnerTestArgs(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, parallel, want string }{
+		{"unset", "", "2"},
+		{"eight", "8", "8"},
+		{"junk", "x", "2"},
+		{"zero", "0", "2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			args := innerTestArgs(c.parallel)
+			got := strings.Join(args, " ")
+			for _, want := range []string{"-p " + c.want + " ", "-trimpath", "-count=1"} {
+				if !strings.Contains(got+" ", want) {
+					t.Errorf("innerTestArgs(%q) = %q, want it to hold %q", c.parallel, got, want)
+				}
+			}
+		})
 	}
 }

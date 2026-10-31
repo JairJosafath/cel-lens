@@ -8,6 +8,11 @@ BINARY := cel-lens-core
 # make dist VERSION=v1.2.3
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
+# How many packages Go builds and tests at the same time (go's -p). A small
+# default keeps the peak memory low on a busy or small machine; a big machine
+# can raise it: make check GO_PARALLEL=8. The public-copy test reads it too.
+GO_PARALLEL ?= 2
+export GO_PARALLEL
 # Release platforms, as GOOS/GOARCH.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
@@ -43,7 +48,7 @@ lint: ## Lint with .golangci.yml, failing on any finding.
 	golangci-lint run
 
 test: build ## Build the engine once, then run the tests with the race detector, never from the cache.
-	CEL_LENS_BIN=$(CURDIR)/bin/$(BINARY) go test -race -count=1 -timeout 30m ./...
+	CEL_LENS_BIN=$(CURDIR)/bin/$(BINARY) go test -p $(GO_PARALLEL) -race -count=1 -timeout 30m ./...
 
 dyn-report: ## Print how many expressions of real policies meet dyn, and why.
 	@[ ! -f internal/assist/dynreport_test.go ] || (cd internal/assist && go test -count=1 -run '^TestDynReport$$')
@@ -58,7 +63,7 @@ test-dist: ## Run the release-build and go install tests, which go test skips.
 	CEL_LENS_DIST_TEST=1 go test -race -count=1 -timeout 30m -run '^(TestDist|TestGoInstallFromProxy)$$' .
 
 build: ## Build bin/cel-lens-core for this machine.
-	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) .
+	go build -p $(GO_PARALLEL) -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) .
 
 dist: ## Cross-compile the release binaries and checksums.txt into dist/.
 	rm -rf dist

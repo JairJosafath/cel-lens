@@ -5,7 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Versions before 0.14.0 were released before the public repository existed, and 0.15.1 and 0.17.1 were never tagged on it, so they have no link.
+
 ## [Unreleased]
+
+### Fixed
+
+- The version links of this file name only core tags that are on the public repository, checked against a list of them.
+- `make check` builds and tests two packages at a time by default (`GO_PARALLEL`, raise it on a big machine), so its peak memory is lower.
+
+## [0.21.1] - 2026-10-30
+
+### Fixed
+
+- The params cases of the truth set now hold the policy the owner sent to the API server, and no case carries a divergence note.
+- The version links of this file open only for versions the public repository has tags for.
 
 ## [0.21.0] - 2026-10-30
 
@@ -434,36 +448,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.1...HEAD
+[0.21.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.0...core-v0.21.1
 [0.21.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.20.1...core-v0.21.0
 [0.20.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.20.0...core-v0.20.1
 [0.20.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.19.0...core-v0.20.0
 [0.19.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.17.2...core-v0.19.0
-[0.17.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.17.1...core-v0.17.2
-[0.17.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.15.1...core-v0.17.1
-[0.15.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.15.0...core-v0.15.1
+[0.17.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.15.0...core-v0.17.2
 [0.15.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.14.0...core-v0.15.0
-[0.14.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.13.1...core-v0.14.0
-[0.13.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.13.0...core-v0.13.1
-[0.13.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.12.1...core-v0.13.0
-[0.12.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.12.0...core-v0.12.1
-[0.12.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.11.0...core-v0.12.0
-[0.11.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.10.0...core-v0.11.0
-[0.10.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.9.2...core-v0.10.0
-[0.9.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.9.1...core-v0.9.2
-[0.9.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.9.0...core-v0.9.1
-[0.9.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.8.0...core-v0.9.0
-[0.8.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.7.0...core-v0.8.0
-[0.7.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.6.1...core-v0.7.0
-[0.6.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.6.0...core-v0.6.1
-[0.6.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.5.1...core-v0.6.0
-[0.5.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.5.0...core-v0.5.1
-[0.5.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.4.1...core-v0.5.0
-[0.4.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.4.0...core-v0.4.1
-[0.4.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.3.0...core-v0.4.0
-[0.3.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.2.0...core-v0.3.0
-[0.2.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.1.3...core-v0.2.0
-[0.1.3]: https://github.com/JairJosafath/cel-lens/compare/core-v0.1.2...core-v0.1.3
-[0.1.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.1.1...core-v0.1.2
-[0.1.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.1.0...core-v0.1.1
-[0.1.0]: https://github.com/JairJosafath/cel-lens/releases/tag/core-v0.1.0
+[0.14.0]: https://github.com/JairJosafath/cel-lens/releases/tag/core-v0.14.0

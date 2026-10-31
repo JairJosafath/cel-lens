@@ -141,6 +141,45 @@ took 65 s (`internal/assist` 248 s, `pkg/check` 119 s). Compare future runs agai
 
 ## Runner timings
 
+### `make check` on a busy machine (cel-lens-core#119, resolving #118)
+
+Run 254, the full check of v0.21.1, was cancelled at the runner's 1-hour limit while
+`go build` (the first step of `make test`) waited on swap; nothing was wrong in the
+code. The Makefile now takes the number of packages Go builds and tests at once from
+`GO_PARALLEL` (default 2, passed as `-p`), where Go defaulted to the CPU count. The
+public-copy test's inner `go test` takes the same `-p` (it reads `GO_PARALLEL`, 2
+when unset) and `-trimpath`, so the outer run's cached packages serve it. `-race`,
+`-count=1`, `-short` on the inner run and every timeout are unchanged. I kept the
+root package inside the one `go test`; no separate step was needed.
+
+Why 2: with `-p 2` at most two race-instrumented test binaries are built and linked
+at once, instead of eight here and more on the runner. I did not measure 1, 3 or 4
+separately: the sandbox was itself loaded (swap full, 3 GB of it in use), so the wall
+times below are noisy, and the largest single process does not depend on `-p`.
+
+`/usr/bin/time` is not installed in the sandbox; I measured with Python's
+`resource.getrusage(RUSAGE_CHILDREN).ru_maxrss`, the largest resident set of any
+descendant, which is the figure `time -v` prints as Maximum resident set size. 8-core
+sandbox, 2026-10-30, full `make check`:
+
+| | `GO_PARALLEL` | wall time | largest process (max RSS) |
+|---|---|---|---|
+| before (`-p` = 8 CPUs) | none | 1314 s | 866,824 kB |
+| after | 2 | 392 s | 856,640 kB |
+
+Round 2 (#118): `make check GO_PARALLEL=8` failed. `make` exports `GO_PARALLEL`, and
+`TestMakefileParallelKnob/default` inherited it and expected `-p 2`. Removing only the
+environment variable was not enough: make also passes the override to children inside
+`MAKEFLAGS` (`-- GO_PARALLEL=8`). The test now removes `GO_PARALLEL`, `MAKEFLAGS`,
+`MFLAGS` and `MAKELEVEL` from the environment of its `make -n` calls. I still did not
+measure 1, 3 or 4: a cold-cache `make test GO_PARALLEL=1` ran over 20 minutes in the
+loaded sandbox, so the default stays 2.
+
+The wall time fell, but both runs shared a loaded machine, so do not read it as a
+speedup. The largest process is one linker or test binary and did not change; what
+`-p 2` lowers is how many of them are alive together, which this figure does not
+show. The runner's figure comes from the next release check.
+
 From run 140 (cel-lens-core#71), the `full` job of the push `release-check/v0.19.0`
 at `5b4c2e4`, green, 2026-10-30 03:55 to 04:08Z. It is the first green full check
 after #26. The owner read the figures on the runner. The tests used the binary that

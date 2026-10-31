@@ -225,7 +225,4 @@ breaks, as the language server shows it), 130 that the run was interrupted (Ctrl
 
 A case the engine does not yet answer as the API server does carries a
 `divergence` note saying how. The test then passes while the engine still differs,
-and fails when it agrees, so the note is removed. `vap-params-missing-field` and
-its two-kinds twin carry one: the engine types a ConfigMap's `params.data` as an
-open string map and reports nothing, where the API server reports
-`undefined field 'dataa'`.
+and fails when it agrees, so the note is removed.

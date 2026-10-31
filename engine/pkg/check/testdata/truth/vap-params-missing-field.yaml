@@ -1,6 +1,5 @@
 name: vap-params-missing-field
 version: v1.37.0
-divergence: the engine types ConfigMap params.data as an open string map and reports nothing; the API server reports undefined field 'dataa'
 policy: |
   apiVersion: admissionregistration.k8s.io/v1
   kind: ValidatingAdmissionPolicy
@@ -10,8 +9,8 @@ policy: |
     paramKind: {apiVersion: v1, kind: ConfigMap}
     matchConstraints:
       resourceRules:
-      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments], operations: [CREATE, UPDATE]}
     validations:
-      - expression: "params.data.dataa == 'x'"
+      - expression: "params.dataa.size() > 0"
 typeChecking:
-  - "apps/v1, Kind=Deployment: ERROR: <input>:1:12: undefined field 'dataa'"
+  - "apps/v1, Kind=Deployment: ERROR: <input>:1:7: undefined field 'dataa'"
