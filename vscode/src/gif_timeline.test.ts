@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { pickFrames, VirtualClock } from './gif_timeline.ts';
+import {
+  checkPlannedLength,
+  GIF_MAX_PLANNED_MS,
+  pickFrames,
+  VirtualClock,
+} from './gif_timeline.ts';
 
 const TICK = 100;
 
@@ -79,5 +84,22 @@ describe('pickFrames', () => {
   it('shows the first frame until one has arrived, and nothing without frames', () => {
     expect(pickFrames([{ at: 250 }], [300], TICK)).toEqual([0, 0, 0]);
     expect(pickFrames([], [300], TICK)).toEqual([]);
+  });
+});
+
+describe('checkPlannedLength', () => {
+  it('returns the sum of the holds below the limit', () => {
+    expect(checkPlannedLength('a.gif', [4000, 3999])).toBe(7999);
+  });
+
+  it('throws at exactly the limit, naming the GIF', () => {
+    expect(GIF_MAX_PLANNED_MS).toBe(8000);
+    expect(() => checkPlannedLength('colors.gif', [4000, 4000])).toThrow(
+      /^colors\.gif is planned to play 8000 ms, 8000 ms or more: shorten its holds\.$/,
+    );
+  });
+
+  it('throws above the limit', () => {
+    expect(() => checkPlannedLength('x.gif', [9000])).toThrow(/x\.gif/);
   });
 });

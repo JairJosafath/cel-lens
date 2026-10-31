@@ -29,15 +29,29 @@ describe('the picture script', () => {
   it('waits on a state only through waitForState, which has a timeout and names the state', () => {
     const rest = withoutFunction(SOURCE, 'waitForState');
     expect(rest).not.toMatch(/\.waitFor\(/);
-    expect(SOURCE).toMatch(/Gave up after .* waiting for \$\{description\}/);
+  });
+
+  it('builds every wait error in one helper that names the state and keeps the reason', () => {
+    expect(SOURCE.match(/Gave up after/g)).toHaveLength(1);
+    expect(withoutFunction(SOURCE, 'withTimeout')).not.toMatch(/\bcatch \(error\)/);
+    const start = SOURCE.indexOf('async function withTimeout(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toMatch(/Gave up after .* waiting for \$\{description\}: \$\{reason\}/);
+    expect(body).toMatch(/split\('\\n'\)\[0\]/);
+  });
+
+  it('gives the page load and every screenshot a timeout and a name', () => {
+    expect(SOURCE).not.toMatch(/await page\.goto\(/);
+    expect(
+      withoutFunction(withoutFunction(SOURCE, 'screenshotPage'), 'saveGaveUpPicture'),
+    ).not.toMatch(/\.screenshot\(/);
+    expect(SOURCE).toMatch(/goto\([\s\S]*?\{ timeout: ms \}/);
+    expect(SOURCE).toMatch(/screenshot\(\{ type: 'png', timeout: ms \}\)/);
   });
 
   it('clicks a locator only through clickWhenReady, which names the state', () => {
     const rest = withoutFunction(SOURCE, 'clickWhenReady');
     expect(rest).not.toMatch(/(?<!mouse)\.(click|dblclick|hover|fill|check|tap)\(/);
-    const start = SOURCE.indexOf('async function clickWhenReady(');
-    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
-    expect(body).toMatch(/Gave up after .* waiting for \$\{description\}/);
   });
 
   it('reads a locator only after waitForState has waited for it', () => {
@@ -75,7 +89,43 @@ describe('the picture script', () => {
       /waitForWidgetShown\(page, '\.action-widget'[^;]*;\s+await save\('quick-fix\.png'/,
     );
     expect(SOURCE).toMatch(
-      /waitForWidgetShown\(page, '\.suggest-widget\.visible'[\s\S]*?completionPicture = await page\.screenshot/,
+      /waitForWidgetShown\(page, '\.suggest-widget\.visible'[\s\S]*?completionPicture = await screenshotPage/,
+    );
+  });
+
+  it('closes the side bars only through hideSideBar, which waits for the command row or the bar hiding', () => {
+    const rest = withoutFunction(SOURCE, 'hideSideBar');
+    expect(rest.match(/View: Close Primary Side Bar/g)).toHaveLength(1);
+    expect(rest.match(/View: Hide Secondary Side Bar/g)).toHaveLength(1);
+    expect(rest).not.toMatch(/runCommand/);
+    const start = SOURCE.indexOf('async function hideSideBar(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toMatch(/the palette to open[\s\S]*?PALETTE_TIMEOUT_MS/);
+    expect(body).toMatch(
+      /the palette to list the command \$\{title\} or the \$\{barName\} to hide/,
+    );
+    expect(body).toMatch(/press\('Escape'\)[\s\S]*?hid by itself[\s\S]*?waitForQuickInputClosed/);
+  });
+
+  it('checks both side bars hidden at the end of prepare', () => {
+    const start = SOURCE.indexOf('async function prepare(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toMatch(
+      /expectSideBarHidden\(page, '\.part\.sidebar', 'primary side bar'\);\s+await expectSideBarHidden\(page, '\.part\.auxiliarybar', 'secondary side bar'\);\s*$/,
+    );
+  });
+
+  it('writes into images/ only through save(), and keeps the give-up picture under out/', () => {
+    expect(withoutFunction(SOURCE, 'save')).not.toMatch(/join\(IMAGES/);
+    expect(SOURCE.match(/join\(IMAGES, /g)).toHaveLength(1);
+    expect(SOURCE).toMatch(/const GAVE_UP_PICTURE = 'out\/pictures\/gave-up\.png'/);
+    const start = SOURCE.indexOf('async function saveGaveUpPicture(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).not.toMatch(/\bsave\(|IMAGES/);
+    expect(body).toMatch(/fullPage: true,\s+timeout: GAVE_UP_TIMEOUT_MS/);
+    expect(body).toMatch(/catch \{[\s\S]*?the screenshot failed/);
+    expect(SOURCE).toMatch(
+      /catch \(error: unknown\) \{\s+await saveGaveUpPicture\(page\);\s+throw error;/,
     );
   });
 });

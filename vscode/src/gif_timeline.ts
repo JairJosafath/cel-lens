@@ -67,3 +67,17 @@ export function pickFrames(
   }
   return picked;
 }
+
+/** A GIF whose planned length (the sum of its holds) reaches this is an error: the README GIFs stay short. */
+export const GIF_MAX_PLANNED_MS = 8000;
+
+/** The planned length of the GIF `name`: the sum of its `holds`; throws, naming the GIF, at `GIF_MAX_PLANNED_MS` or more. */
+export function checkPlannedLength(name: string, holds: readonly number[]): number {
+  const planned = holds.reduce((sum, ms) => sum + ms, 0);
+  if (planned >= GIF_MAX_PLANNED_MS) {
+    throw new Error(
+      `${name} is planned to play ${String(planned)} ms, ${String(GIF_MAX_PLANNED_MS)} ms or more: shorten its holds.`,
+    );
+  }
+  return planned;
+}

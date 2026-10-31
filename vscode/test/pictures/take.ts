@@ -9,7 +9,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { stdout } from 'node:process';
 
 import gifenc from 'gifenc';
@@ -19,7 +19,12 @@ import jpeg from 'jpeg-js';
 import { cursorLineText } from '../../src/cursor_line.ts';
 import { widgetShown } from '../../src/widget_shown.ts';
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
-import { pickFrames, VirtualClock, type StampedFrame } from '../../src/gif_timeline.ts';
+import {
+  checkPlannedLength,
+  pickFrames,
+  VirtualClock,
+  type StampedFrame,
+} from '../../src/gif_timeline.ts';
 
 const { GIFEncoder } = gifenc;
 
@@ -33,10 +38,13 @@ const GIF_COLORS = 48;
 const SCREENCAST_QUALITY = 90;
 const GIF_TICK_MS = 100;
 const GIF_TYPING_MS = 80;
-/** A GIF whose planned length (the sum of its holds) reaches this is an error: the README GIFs stay short. */
-const GIF_MAX_PLANNED_MS = 8000;
 /** How long a state the script waits for may take, on a slow machine. */
 const STATE_TIMEOUT_MS = 30_000;
+const WORKBENCH_TIMEOUT_MS = 60_000;
+const PALETTE_TIMEOUT_MS = 30_000;
+const GAVE_UP_TIMEOUT_MS = 5_000;
+/** Where the page is kept when the script stops; outside images/ and ignored by git. */
+const GAVE_UP_PICTURE = 'out/pictures/gave-up.png';
 
 const CRD = 'widget_crd.yaml';
 const POLICY = 'pod_policy.yaml';
@@ -271,12 +279,7 @@ class Recording {
    * whose palette colour changed since the one before; the rest is transparent and left in place, which keeps the file small. All frames are held in memory until encoded.
    */
   private encode(): Uint8Array {
-    const planned = this.holds.reduce((sum, ms) => sum + ms, 0);
-    if (planned >= GIF_MAX_PLANNED_MS) {
-      throw new Error(
-        `${this.name} is planned to play ${String(planned)} ms, ${String(GIF_MAX_PLANNED_MS)} ms or more: shorten its holds.`,
-      );
-    }
+    checkPlannedLength(this.name, this.holds);
     const raw: RawFrame[] = pickFrames(this.shots, this.holds, GIF_TICK_MS).map((shown) =>
       decode(this.shots[shown]?.picture ?? Buffer.alloc(0)),
     );
@@ -331,17 +334,17 @@ async function holdFrame(recording: Recording, ms: number): Promise<void> {
 }
 
 /**
- * Waits until `locator` is in `state`; fails with an error that names `description`,
- * the state waited for, when it is not there after `timeout` ms.
+ * Runs `action` with a `timeout` in ms; when it fails, throws an error that names `description`,
+ * the state waited for, and keeps Playwright's first-line reason. Every wait and action of the
+ * script goes through here.
  */
-async function waitForState(
-  locator: Locator,
+async function withTimeout(
   description: string,
-  state: 'visible' | 'hidden' = 'visible',
-  timeout = STATE_TIMEOUT_MS,
+  timeout: number,
+  action: (timeout: number) => Promise<void>,
 ): Promise<void> {
   try {
-    await locator.waitFor({ state, timeout });
+    await action(timeout);
   } catch (error) {
     const reason =
       error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
@@ -351,24 +354,46 @@ async function waitForState(
   }
 }
 
-/**
- * Clicks `locator` once it is on screen; fails with an error that names `description`, the state
- * waited for, when it is not clickable after `timeout` ms.
- */
+/** Waits until `locator` is in `state`, or fails naming `description`. */
+async function waitForState(
+  locator: Locator,
+  description: string,
+  state: 'visible' | 'hidden' = 'visible',
+  timeout = STATE_TIMEOUT_MS,
+): Promise<void> {
+  await withTimeout(description, timeout, (ms) => locator.waitFor({ state, timeout: ms }));
+}
+
+/** Clicks `locator` once it is on screen, or fails naming `description`. */
 async function clickWhenReady(
   locator: Locator,
   description: string,
   timeout = STATE_TIMEOUT_MS,
 ): Promise<void> {
-  try {
-    await locator.click({ timeout });
-  } catch (error) {
-    const reason =
-      error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
-    throw new Error(`Gave up after ${String(timeout)} ms waiting for ${description}: ${reason}`, {
-      cause: error,
-    });
+  await withTimeout(description, timeout, (ms) => locator.click({ timeout: ms }));
+}
+
+/** Waits until the page function `expression` is true, or fails naming `description`. */
+async function waitForExpression(
+  page: Page,
+  expression: string,
+  description: string,
+): Promise<void> {
+  await withTimeout(description, STATE_TIMEOUT_MS, async (ms) => {
+    await page.waitForFunction(expression, undefined, { timeout: ms });
+  });
+}
+
+/** Takes a PNG of the page, or fails naming `description`. */
+async function screenshotPage(page: Page, description: string): Promise<Buffer> {
+  let picture: Buffer | undefined;
+  await withTimeout(description, STATE_TIMEOUT_MS, async (ms) => {
+    picture = await page.screenshot({ type: 'png', timeout: ms });
+  });
+  if (picture === undefined) {
+    throw new Error(`No picture of ${description}.`);
   }
+  return picture;
 }
 
 /** Waits until a line of the active editor holds `text`. */
@@ -381,18 +406,11 @@ async function waitForEditorText(page: Page, text: string): Promise<void> {
 
 /** Waits until the line the cursor is on holds `text`, wherever the editor is scrolled. */
 async function waitForCursorLine(page: Page, text: string): Promise<void> {
-  try {
-    await page.waitForFunction(
-      `(${cursorLineText.toString()})(document)?.includes(${JSON.stringify(text)}) === true`,
-      undefined,
-      { timeout: STATE_TIMEOUT_MS },
-    );
-  } catch (error) {
-    throw new Error(
-      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for the cursor line to hold ${text}`,
-      { cause: error },
-    );
-  }
+  await waitForExpression(
+    page,
+    `(${cursorLineText.toString()})(document)?.includes(${JSON.stringify(text)}) === true`,
+    `the cursor line to hold ${text}`,
+  );
 }
 
 /** The line before the last of the CRD fixture: the line the cursor is on after moveToLastRule. */
@@ -414,18 +432,11 @@ async function moveToLastRule(page: Page): Promise<void> {
 
 /** Waits until the line the cursor is on is exactly `text`, wherever the editor is scrolled. */
 async function waitForCursorLineIs(page: Page, text: string): Promise<void> {
-  try {
-    await page.waitForFunction(
-      `(${cursorLineText.toString()})(document) === ${JSON.stringify(text)}`,
-      undefined,
-      { timeout: STATE_TIMEOUT_MS },
-    );
-  } catch (error) {
-    throw new Error(
-      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for the cursor line to be ${text}`,
-      { cause: error },
-    );
-  }
+  await waitForExpression(
+    page,
+    `(${cursorLineText.toString()})(document) === ${JSON.stringify(text)}`,
+    `the cursor line to be ${text}`,
+  );
 }
 
 /** Waits until the quick-open or palette list has gone after a choice. */
@@ -443,18 +454,11 @@ async function waitForWidgetShown(
   selector: string,
   description: string,
 ): Promise<void> {
-  try {
-    await page.waitForFunction(
-      `(() => { const elements = Array.from(document.querySelectorAll(${JSON.stringify(selector)})); return elements.length > 0 && elements.every((${widgetShown.toString()})); })()`,
-      undefined,
-      { timeout: STATE_TIMEOUT_MS },
-    );
-  } catch (error) {
-    throw new Error(
-      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for ${description} to be fully shown`,
-      { cause: error },
-    );
-  }
+  await waitForExpression(
+    page,
+    `(() => { const elements = Array.from(document.querySelectorAll(${JSON.stringify(selector)})); return elements.length > 0 && elements.every((${widgetShown.toString()})); })()`,
+    `${description} to be fully shown`,
+  );
 }
 
 /** Waits until the hover widget is on screen, holds some text and is fully shown. */
@@ -551,6 +555,28 @@ async function save(name: string, bytes: Uint8Array): Promise<void> {
   log(`wrote images/${name} (${String(bytes.length)} bytes)`);
 }
 
+/**
+ * Keeps a picture of the page when the script stops, and says where. Never writes through
+ * `save()` and never throws: the error that stopped the script stays the one reported.
+ */
+async function saveGaveUpPicture(page: Page): Promise<void> {
+  try {
+    const bytes = await page.screenshot({
+      type: 'png',
+      fullPage: true,
+      timeout: GAVE_UP_TIMEOUT_MS,
+    });
+    const target = join(ROOT, GAVE_UP_PICTURE);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, bytes);
+    process.stderr.write(`pictures: the page when the script stopped: ${GAVE_UP_PICTURE}\n`);
+  } catch {
+    process.stderr.write(
+      'pictures: no picture of the page when the script stopped: the screenshot failed\n',
+    );
+  }
+}
+
 /** Trusts the workspace, so its settings apply, and clears the screen down to the editor. */
 async function prepare(page: Page): Promise<void> {
   await clickWhenReady(
@@ -561,33 +587,60 @@ async function prepare(page: Page): Promise<void> {
   await waitForState(page.locator('.monaco-dialog-box'), 'the trust dialog to close', 'hidden');
   await page.keyboard.press('Control+k');
   await page.keyboard.press('Control+w');
-  // The palette hides a close command whose bar is already hidden, so run each only when its part is on screen.
-  if (await page.locator('.part.sidebar').isVisible()) {
-    await runCommand(page, 'View: Close Primary Side Bar');
-  }
-  if (await page.locator('.part.auxiliarybar').isVisible()) {
-    await runCommand(page, 'View: Hide Secondary Side Bar');
-  }
-  await expectSecondarySideBarHidden(page);
+  await hideSideBar(page, '.part.sidebar', 'View: Close Primary Side Bar', 'primary side bar');
+  await hideSideBar(
+    page,
+    '.part.auxiliarybar',
+    'View: Hide Secondary Side Bar',
+    'secondary side bar',
+  );
+  await expectSideBarHidden(page, '.part.sidebar', 'primary side bar');
+  await expectSideBarHidden(page, '.part.auxiliarybar', 'secondary side bar');
 }
 
-/** Runs a command through the command palette, by its title. */
-async function runCommand(page: Page, title: string): Promise<void> {
+/**
+ * Hides the side bar in `part` with the palette command `title`. Does nothing when the bar is off
+ * screen. On a busy machine the bar can hide by itself (its empty view container resolves) while the
+ * palette opens, and the palette then no longer lists the command; so it waits for the row or for the
+ * bar to go, whichever comes first.
+ */
+async function hideSideBar(
+  page: Page,
+  part: string,
+  title: string,
+  barName: string,
+): Promise<void> {
+  if (!(await page.locator(part).isVisible())) {
+    return;
+  }
   await page.keyboard.press('F1');
-  await page.keyboard.type(title);
   await waitForState(
-    page.locator('.quick-input-list .monaco-list-row', { hasText: title }).first(),
-    `the palette to list the command ${title}`,
+    page.locator('.quick-input-widget'),
+    'the palette to open',
+    'visible',
+    PALETTE_TIMEOUT_MS,
   );
-  await page.keyboard.press('Enter');
+  await page.keyboard.type(title);
+  await waitForExpression(
+    page,
+    `(() => { const bar = document.querySelector(${JSON.stringify(part)}); const box = bar?.getBoundingClientRect(); const hidden = box === undefined || box.width === 0 || box.height === 0; const listed = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row')).some((row) => row.textContent?.includes(${JSON.stringify(title)}) === true); return hidden || listed; })()`,
+    `the palette to list the command ${title} or the ${barName} to hide`,
+  );
+  const row = page.locator('.quick-input-list .monaco-list-row', { hasText: title }).first();
+  if (await row.isVisible()) {
+    await page.keyboard.press('Enter');
+  } else {
+    await page.keyboard.press('Escape');
+    log(`the ${barName} hid by itself before the palette listed ${title}`);
+  }
   await waitForQuickInputClosed(page);
 }
 
-/** Fails when the secondary side bar (the CHAT panel) is still on screen: no picture may show it. */
-async function expectSecondarySideBarHidden(page: Page): Promise<void> {
+/** Fails when the side bar in `part` is still on screen: no picture may show it. */
+async function expectSideBarHidden(page: Page, part: string, barName: string): Promise<void> {
   await waitForState(
-    page.locator('.part.auxiliarybar'),
-    'the secondary side bar to be off screen after workbench.action.closeAuxiliaryBar (no picture may show it)',
+    page.locator(part),
+    `the ${barName} to be off screen (no picture may show it)`,
     'hidden',
   );
 }
@@ -612,7 +665,7 @@ async function takePictures(page: Page): Promise<void> {
   await page.mouse.move(wrong.x - 20, wrong.y - 60);
   await page.mouse.move(wrong.x, wrong.y, { steps: 6 });
   await waitForHover(page);
-  await save('problems.png', await page.screenshot({ type: 'png' }));
+  await save('problems.png', await screenshotPage(page, 'the page to be captured'));
 
   // quick-fix.png: the fix offered on that problem.
   await page.mouse.move(wrong.x, wrong.y + 120);
@@ -624,7 +677,7 @@ async function takePictures(page: Page): Promise<void> {
     'the quick fix list to show a fix',
   );
   await waitForWidgetShown(page, '.action-widget', 'the quick fix list');
-  await save('quick-fix.png', await page.screenshot({ type: 'png' }));
+  await save('quick-fix.png', await screenshotPage(page, 'the page to be captured'));
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+End');
 
@@ -633,7 +686,7 @@ async function takePictures(page: Page): Promise<void> {
   await page.mouse.move(field.x - 20, field.y + 80);
   await page.mouse.move(field.x, field.y, { steps: 6 });
   await waitForHover(page);
-  await save('hover.png', await page.screenshot({ type: 'png' }));
+  await save('hover.png', await screenshotPage(page, 'the page to be captured'));
   await page.mouse.move(field.x, field.y + 200);
 
   // completion.png and completion.gif: the list after self., one item picked.
@@ -658,7 +711,7 @@ async function takePictures(page: Page): Promise<void> {
     await holdFrame(recording, 700);
     await page.keyboard.press('ArrowDown');
     await holdFrame(recording, 500);
-    completionPicture = await page.screenshot({ type: 'png' });
+    completionPicture = await screenshotPage(page, 'the page to be captured');
     await page.keyboard.press('ArrowDown');
     await holdFrame(recording, 500);
     await page.keyboard.press('Tab');
@@ -703,7 +756,7 @@ async function takePictures(page: Page): Promise<void> {
   await waitForEditorText(page, 'no-latest-tag');
   await page.keyboard.press('Control+End');
   await page.mouse.move(VIEWPORT.width - 5, VIEWPORT.height - 5);
-  await save('colors.png', await page.screenshot({ type: 'png' }));
+  await save('colors.png', await screenshotPage(page, 'the page to be captured'));
 }
 
 async function main(): Promise<void> {
@@ -765,14 +818,23 @@ async function main(): Promise<void> {
     const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
-      await page.goto(`${url}?folder=${encodeURIComponent(workspace)}`);
-      await waitForState(
-        page.locator('.monaco-workbench'),
-        'the workbench to load',
-        'visible',
-        60_000,
+      await withTimeout('the workbench page to load', WORKBENCH_TIMEOUT_MS, (ms) =>
+        page
+          .goto(`${url}?folder=${encodeURIComponent(workspace)}`, { timeout: ms })
+          .then(() => undefined),
       );
-      await takePictures(page);
+      try {
+        await waitForState(
+          page.locator('.monaco-workbench'),
+          'the workbench to load',
+          'visible',
+          WORKBENCH_TIMEOUT_MS,
+        );
+        await takePictures(page);
+      } catch (error: unknown) {
+        await saveGaveUpPicture(page);
+        throw error;
+      }
     } finally {
       await browser.close();
     }

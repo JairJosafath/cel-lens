@@ -6,6 +6,19 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-10-31
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.22.0, which changes only the engine's own tests, checks and changelog; nothing changes in what the editor shows.
+- Every wait in the picture script goes through one named-timeout helper; nothing changes in what the editor shows.
+- `docs/project-notes.md` mentions `clickWhenReady`, and a unit test covers the GIF planned-length guard through the pure timeline module; nothing changes in what the editor shows.
+
+### Fixed
+
+- The picture script no longer gives up when a side bar hides by itself before the palette lists its close command, and it still stops with an error naming the bar when one stays on screen.
+- When the picture script gives up it saves a screenshot of the page under `out/pictures/` and prints its path.
+
 ## [0.24.2] - 2026-10-31
 
 ### Changed
@@ -483,7 +496,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.2...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.3...HEAD
+[0.24.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.2...vscode-v0.24.3
 [0.24.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.1...vscode-v0.24.2
 [0.24.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.0...vscode-v0.24.1
 [0.24.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.23.0...vscode-v0.24.0
