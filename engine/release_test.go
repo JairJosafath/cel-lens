@@ -244,7 +244,9 @@ func TestChangelogProblems(t *testing.T) {
 		{"no releases", "## [Unreleased]\n", 1},
 		{"repeated heading in unreleased", "## [Unreleased]\n\n### Changed\n\n### Changed\n\n" + good[len("## [Unreleased]\n\n"):], 1},
 		{"headings out of order in newest release", strings.Replace(good, "## [1.1.0] - 2026-01-02\n", "## [1.1.0] - 2026-01-02\n\n### Fixed\n\n### Added\n", 1), 1},
-		{"older release may differ", strings.Replace(good, "## [1.0.0] - 2026-01-01\n", "## [1.0.0] - 2026-01-01\n\n### Fixed\n\n### Added\n", 1), 0},
+		{"headings out of order in third section", strings.Replace(good, "## [1.0.0] - 2026-01-01\n", "## [1.0.0] - 2026-01-01\n\n### Fixed\n\n### Added\n", 1), 1},
+		{"repeated heading in third section", strings.Replace(good, "## [1.0.0] - 2026-01-01\n", "## [1.0.0] - 2026-01-01\n\n### Added\n\n### Added\n", 1), 1},
+		{"non-standard heading in older release", strings.Replace(good, "## [0.14.0] - 2025-12-02\n", "## [0.14.0] - 2025-12-02\n\n### Tests\n", 1), 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -299,7 +301,7 @@ const changelogRepo = "https://github.com/JairJosafath/cel-lens/"
 // an [Unreleased] link that does not compare the newest release to HEAD, or a
 // line with a #<digits> issue reference. It also
 // reports a repeated change-type heading, or one out of Keep a Changelog order,
-// in the [Unreleased] section and the newest release.
+// in any section.
 func changelogProblems(text string, public []string) []string {
 	heading := regexp.MustCompile(`^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})$`)
 	link := regexp.MustCompile(`^\[([^\]]+)\]: (\S+)$`)
@@ -314,17 +316,15 @@ func changelogProblems(text string, public []string) []string {
 	var problems []string
 	var versions []string
 	order := []string{"Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"}
-	sections := 0 // sections seen so far; only the first two are checked
-	last := -1    // index in order of the previous change-type heading of this section
+	last := -1 // index in order of the previous change-type heading of this section
 	for i, line := range lines {
 		if issueRef.MatchString(line) {
 			problems = append(problems, fmt.Sprintf("CHANGELOG.md:%d: line has an issue reference, which names no public issue", i+1))
 		}
 		if strings.HasPrefix(line, "## [") {
-			sections++
 			last = -1
 		}
-		if name, ok := strings.CutPrefix(line, "### "); ok && sections <= 2 {
+		if name, ok := strings.CutPrefix(line, "### "); ok {
 			at := slices.Index(order, name)
 			switch {
 			case at < 0:

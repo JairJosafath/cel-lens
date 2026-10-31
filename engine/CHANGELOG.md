@@ -9,9 +9,19 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-31
+
+### Changed
+
+- Every section of this file, not only the newest two, is in Keep a Changelog order with standard headings, and a test checks it.
+- A test asserts that `make test-dist` keeps running both gated tests.
+- The non-root test guard catches factory paths that are split or joined.
+- The dist tests stay out of the public-copy inner run.
+
 ### Fixed
 
 - The version links of this file name only core tags that are on the public repository, checked against a list of them.
+- `trackedFiles` errors include git's own message.
 - `make check` builds and tests two packages at a time by default (`GO_PARALLEL`, raise it on a big machine), so its peak memory is lower.
 
 ## [0.21.1] - 2026-10-30
@@ -115,18 +125,18 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 - In a ValidatingAdmissionPolicy and a MutatingAdmissionPolicy, a `messageExpression` that does not give a string, a `matchConditions` or `validations` expression that does not give a bool, and an `auditAnnotations` `valueExpression` that gives neither a string nor null are reported on that expression in the API server's words (`must evaluate to bool but got int`), at every supported Kubernetes version. Like the API server, an expression of type `dyn`, such as `object.spec.replicas`, is not accepted either.
 
+### Changed
+
+- The test that no package holds mutable state also catches a package variable set by a call.
+- `TestChangelogHeadings` also checks the link definitions at the end of this file.
+- A test pins that no cost problem is reported on any expression of a ValidatingAdmissionPolicy or MutatingAdmissionPolicy at Kubernetes 1.33 to 1.37, in `cel-lens-core check` and the language server alike, as the API server makes no static cost check on policies; CRD rule cost checks are unchanged. No policy expression got a cost problem before, so nothing needed fixing.
+
 ### Fixed
 
 - A quick fix in a broken UTF-16 file uses the file's own line ending.
 - `Documents` stays under 300 ms when a bad character is near the end of the file.
 - A problem in a CEL rule written as a plain, "double-quoted" or 'single-quoted' YAML scalar over several lines, or with escapes (`\"`, `\\`, `\t`, `\u00e9`, a `\` at the line end) or a doubled `''`, is underlined where the API server points, such as `maxSiz` on the second line, not from the first character of the rule over all its lines. Each character of the folded rule is mapped back to its own line and column in the file, in `cel-lens-core check` and the language server alike; single-line rules and `|` and `>` block scalars keep their positions.
 - A file with a next line (U+0085), line separator (U+2028) or paragraph separator (U+2029) line end gets its problems underlined in the right place below it, as with a line feed, and a `---` between such line ends no longer costs a document one of its problems. Documents are cut where they were.
-
-### Changed
-
-- The test that no package holds mutable state also catches a package variable set by a call.
-- `TestChangelogHeadings` also checks the link definitions at the end of this file.
-- A test pins that no cost problem is reported on any expression of a ValidatingAdmissionPolicy or MutatingAdmissionPolicy at Kubernetes 1.33 to 1.37, in `cel-lens-core check` and the language server alike, as the API server makes no static cost check on policies; CRD rule cost checks are unchanged. No policy expression got a cost problem before, so nothing needed fixing.
 
 ## [0.15.0] - 2026-10-12
 
@@ -149,15 +159,15 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [0.13.1] - 2026-10-10
 
-### Fixed
-
-- A problem in a good document of a UTF-16 file is reported at its own line and column, not at the start of the rule or not at all, when a later document has a broken character.
-- Document separators are found at NEL, LS and PS line ends as well.
-
 ### Changed
 
 - CI compiles and tests Windows-only code, through the Standard change to `.gitea/workflows/check.yaml` and `Makefile`.
 - The `TestBadCharacter` subtests are independent of each other.
+
+### Fixed
+
+- A problem in a good document of a UTF-16 file is reported at its own line and column, not at the start of the rule or not at all, when a later document has a broken character.
+- Document separators are found at NEL, LS and PS line ends as well.
 
 ## [0.13.0] - 2026-10-10
 
@@ -170,13 +180,13 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [0.12.1] - 2026-10-10
 
-### Fixed
-
-- `go install` of the engine from the public repository works.
-
 ### Changed
 
 - The engine is licensed under Apache-2.0 and its module path is `github.com/JairJosafath/cel-lens/engine`; the README is the engine's page for contributors.
+
+### Fixed
+
+- `go install` of the engine from the public repository works.
 
 ## [0.12.0] - 2026-10-09
 
@@ -187,20 +197,22 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [0.11.0] - 2026-10-09
 
-### Fixed
-
-- Quick fixes detect CRLF line endings in UTF-16 files.
-
 ### Changed
 
 - Each CEL expression is parsed once for diagnostic spans.
 - `internal/assist` shares one string-literal scanner.
-
-### Tests
-
 - The unreadable-subfolder test runs as root too.
 
+### Fixed
+
+- Quick fixes detect CRLF line endings in UTF-16 files.
+
 ## [0.10.0] - 2026-10-09
+
+### Changed
+
+- Marked overloads for namespaced functions are tested beyond `optional`.
+- The LSP test helpers fail the running subtest.
 
 ### Fixed
 
@@ -208,53 +220,51 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - `procwatch` treats access-denied as alive on Windows.
 - The e2e binary directory is created with `os.MkdirTemp`.
 
-### Tests
-
-- Marked overloads for namespaced functions are tested beyond `optional`.
-- The LSP test helpers fail the running subtest.
-
 ## [0.9.2] - 2026-10-09
+
+### Changed
+
+- `firstBroken` is tested against every bad-character reason in `pkg/extract`.
 
 ### Fixed
 
 - UTF-16 YAML streams that hold several documents are checked.
 
-### Tests
-
-- `firstBroken` is tested against every bad-character reason in `pkg/extract`.
-
 ## [0.9.1] - 2026-10-09
 
-### Fixed
-
-- Hover marks the form of every optional call whose type can be told, including after `optMap`, `optFlatMap`, `or` and `value`, and for `optional.of` and `optional.none`.
-
-### Tests
+### Changed
 
 - `TestComplete` covers group receivers.
 - The language server test asserts the column of bad-character diagnostics.
 - The assist test covers bracket matching with stray closers and escaped quotes.
 
+### Fixed
+
+- Hover marks the form of every optional call whose type can be told, including after `optMap`, `optFlatMap`, `or` and `value`, and for `optional.of` and `optional.none`.
+
 ## [0.9.0] - 2026-10-09
+
+### Changed
+
+- The release workflow is updated by a Standard change.
+- `.gitea/workflows/check.yaml` and `.gitea/workflows/release.yaml` are updated by a Standard change.
+- Every yaml.v3 bad-character reason that `badChar` relies on is pinned.
+- `TestCheckMalformedYAML` asserts the message and column of every YAML diagnostic.
+- A fixture covers an aliased message in an `x-kubernetes-validation`.
+- The language server assist test pins the broken-YAML diagnostic.
 
 ### Fixed
 
 - CI and the release workflow keep Go's temporary build files in `.gotmp` in the job's workspace, not in the shared `/tmp`.
 - A quote after a verbatim tag with a comma in a flow collection is read as quoted.
 
+## [0.8.0] - 2026-10-09
+
 ### Changed
 
-- The release workflow is updated by a Standard change.
-- `.gitea/workflows/check.yaml` and `.gitea/workflows/release.yaml` are updated by a Standard change.
-
-### Tests
-
-- Every yaml.v3 bad-character reason that `badChar` relies on is pinned.
-- `TestCheckMalformedYAML` asserts the message and column of every YAML diagnostic.
-- A fixture covers an aliased message in an `x-kubernetes-validation`.
-- The language server assist test pins the broken-YAML diagnostic.
-
-## [0.8.0] - 2026-10-09
+- A file with a broken later document is tested end to end through the language server for assists.
+- A bad character is tested end to end through the language server.
+- `line.go` helpers share one string-literal scanner.
 
 ### Fixed
 
@@ -263,24 +273,12 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - `procwatch` lint findings on Windows are fixed.
 - `entry` checks context cancellation while following merge keys.
 
-### Tests
-
-- A file with a broken later document is tested end to end through the language server for assists.
-- A bad character is tested end to end through the language server.
-
-### Refactored
-
-- `line.go` helpers share one string-literal scanner.
-
 ## [0.7.0] - 2026-10-09
 
-### Tests
+### Changed
 
 - Fixtures cover aliases in `fieldPath`, `message` and flow-style validations.
 - Untyped-node costs are tested through `Check` with a whole CRD.
-
-### Docs
-
 - The other optional-value functions link to their cel-go sections.
 
 ## [0.6.1] - 2026-10-09
@@ -293,21 +291,18 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [0.6.0] - 2026-10-09
 
-### Fixed
-
-- Completion resolves a parenthesised receiver and a literal-aware receiver.
-- The doc comment of `yamlfield.Field.Node` is accurate.
-
-### Tests
+### Changed
 
 - Quick fixes from `codeAction` are tested against a different problem after `didChange`.
 - `Serve` is tested to stop on cancellation when a message is also ready.
 - The version-level root error texts are pinned.
 - `yamlfield.Tree.Remove` is unit-tested for alias values.
-
-### Documentation
-
 - CHANGELOG headings carry release dates.
+
+### Fixed
+
+- Completion resolves a parenthesised receiver and a literal-aware receiver.
+- The doc comment of `yamlfield.Field.Node` is accurate.
 
 ## [0.5.1] - 2026-10-09
 
@@ -322,6 +317,10 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [0.5.0] - 2026-10-09
 
+### Changed
+
+- Later documents are checked after a wrong-typed field.
+
 ### Fixed
 
 - A block scalar keeps its range when the anchor or tag and the header are split by a tab or a line break.
@@ -329,10 +328,6 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - CEL in the documents before a bad character is still checked.
 - An apostrophe inside a plain flow scalar keeps the wrong-type range at the closing bracket.
 - "Invalid Unicode character" errors are placed on the offending character.
-
-### Tests
-
-- Later documents are checked after a wrong-typed field.
 
 ## [0.4.1] - 2026-10-08
 
@@ -448,8 +443,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.1...HEAD
-[0.21.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.0...core-v0.21.1
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.22.0...HEAD
+[0.22.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.0...core-v0.22.0
 [0.21.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.20.1...core-v0.21.0
 [0.20.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.20.0...core-v0.20.1
 [0.20.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.19.0...core-v0.20.0

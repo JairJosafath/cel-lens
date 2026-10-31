@@ -121,3 +121,28 @@ func TestMakefileParallelKnob(t *testing.T) {
 		})
 	}
 }
+
+func TestTestDistTargetRunsGatedTests(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	out, err := exec.Command("make", "-n", "test-dist").CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n test-dist: %v\n%s", err, out)
+	}
+	m := regexp.MustCompile(`-run\s+'([^']*)'|-run\s+(\S+)`).FindStringSubmatch(string(out))
+	if m == nil {
+		t.Fatalf("make -n test-dist = %q, want a go test with -run", out)
+	}
+	pattern := m[1] + m[2]
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("make test-dist -run %q: %v", pattern, err)
+	}
+	for _, name := range []string{"TestDist", "TestGoInstallFromProxy"} {
+		if !re.MatchString(name) {
+			t.Errorf("make test-dist -run %q does not select %s", pattern, name)
+		}
+	}
+}

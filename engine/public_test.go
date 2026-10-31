@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,6 +50,11 @@ func trackedFiles(ctx context.Context, dir string) ([]string, error) {
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
+		if ee := new(exec.ExitError); errors.As(err, &ee) {
+			if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+				return nil, fmt.Errorf("git ls-files in %s: %w: %s", dir, err, msg)
+			}
+		}
 		return nil, fmt.Errorf("git ls-files in %s: %w", dir, err)
 	}
 	var files []string
@@ -113,6 +119,41 @@ func copyTracked(files []string, src, dst string) error {
 	return nil
 }
 
+// distEnv is the variable that turns on the tests that build and cross-compile
+// every dependency (make test-dist).
+const distEnv = "CEL_LENS_DIST_TEST"
+
+// innerEnv returns env for the inner run: binEnv set to bin, and distEnv
+// removed. The dist tests belong to the outer run; in the copy, which is not a
+// git work tree, TestDist cannot pass, and TestGoInstallFromProxy would build
+// every dependency again.
+func innerEnv(env []string, bin string) []string {
+	out := slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		return strings.HasPrefix(kv, distEnv+"=") || strings.HasPrefix(kv, binEnv+"=")
+	})
+	return append(out, binEnv+"="+bin)
+}
+
+func TestInnerEnvDropsDistTest(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{"dist set", []string{"A=1", distEnv + "=1"}, []string{"A=1", binEnv + "=/b"}},
+		{"dist unset", []string{"A=1"}, []string{"A=1", binEnv + "=/b"}},
+		{"bin replaced", []string{binEnv + "=/old", "A=1"}, []string{"A=1", binEnv + "=/b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := innerEnv(tc.env, "/b"); !slices.Equal(got, tc.want) {
+				t.Errorf("innerEnv(%q) = %q, want %q", tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestPublicSourceTestsPass proves a contributor's clone, which lacks the
 // factory's files, has a green go test of the root package, which holds every test that reads
 // the files the copy lacks. The copy holds only the files git tracks, so untracked
@@ -147,7 +188,7 @@ func TestPublicSourceTestsPass(t *testing.T) {
 	}
 	cmd := exec.CommandContext(t.Context(), "go", innerTestArgs(os.Getenv(parallelEnv))...) //nolint:gosec // arguments built from a validated number
 	cmd.Dir = dst
-	cmd.Env = append(os.Environ(), binEnv+"="+buildBinary(t))
+	cmd.Env = innerEnv(os.Environ(), buildBinary(t))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go test . in the public copy: %v\n%s", err, out)
@@ -157,7 +198,9 @@ func TestPublicSourceTestsPass(t *testing.T) {
 // TestNoFactoryPathOutsideRootTests keeps the promise TestPublicSourceTestsPass
 // relies on: only root-package tests may name the factory's files, because only
 // the root package's tests run in the copy that lacks them. It checks the string
-// literals of every other _test.go file, so a comment may still mention them.
+// literals of every other _test.go file, so a comment may still mention them. It
+// folds adjacent literals joined by + and the arguments of filepath.Join and
+// path.Join first, so a split or joined name is caught too.
 func TestNoFactoryPathOutsideRootTests(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -178,23 +221,120 @@ func TestNoFactoryPathOutsideRootTests(t *testing.T) {
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", p, err)
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			for _, name := range factoryPaths {
-				if strings.Contains(lit.Value, name) {
-					t.Errorf("%s names %q; only root-package tests may, as the public copy runs only those",
-						fset.Position(lit.Pos()), name)
-				}
-			}
-			return true
-		})
+		for _, h := range factoryNamings(fset, f) {
+			t.Errorf("%s names %q; only root-package tests may, as the public copy runs only those", h.pos, h.name)
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// naming is a place where a test names a factory path.
+type naming struct {
+	pos  token.Position
+	name string
+}
+
+// foldString returns the constant string e stands for: a string literal, a +
+// of foldable strings, or a filepath.Join or path.Join call whose arguments all fold.
+func foldString(e ast.Expr) (string, bool) {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		s, err := strconv.Unquote(e.Value)
+		return s, err == nil
+	case *ast.ParenExpr:
+		return foldString(e.X)
+	case *ast.BinaryExpr:
+		if e.Op != token.ADD {
+			return "", false
+		}
+		l, lok := foldString(e.X)
+		r, rok := foldString(e.Y)
+		return l + r, lok && rok
+	case *ast.CallExpr:
+		sel, ok := e.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return "", false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || sel.Sel.Name != "Join" || (pkg.Name != "filepath" && pkg.Name != "path") {
+			return "", false
+		}
+		parts := make([]string, len(e.Args))
+		for i, a := range e.Args {
+			p, ok := foldString(a)
+			if !ok {
+				return "", false
+			}
+			parts[i] = p
+		}
+		return path.Join(parts...), true
+	}
+	return "", false
+}
+
+// factoryNamings returns where f holds a constant string, folded as foldString
+// does, that contains a factory path. Each such expression is reported once.
+func factoryNamings(fset *token.FileSet, f *ast.File) []naming {
+	var found []naming
+	ast.Inspect(f, func(n ast.Node) bool {
+		e, ok := n.(ast.Expr)
+		if !ok {
+			return true
+		}
+		s, ok := foldString(e)
+		if !ok {
+			return true
+		}
+		for _, name := range factoryPaths {
+			if strings.Contains(s, name) {
+				found = append(found, naming{fset.Position(e.Pos()), name})
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func TestFactoryNamings(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, expr string
+		want       int
+	}{
+		{"whole literal", `".gitea"`, 1},
+		{"split literal", `".c4" + "factory.yaml"`, 1},
+		{"filepath.Join", `filepath.Join("docs", "agents")`, 1},
+		{"path.Join", `path.Join("docs", "agents", "x.md")`, 1},
+		{"join of split", `filepath.Join("a", ".c4"+"factory.yaml")`, 1},
+		{"unrelated", `filepath.Join("docs", "style")`, 0},
+		{"variable part", `filepath.Join("docs", dir)`, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "x_test.go", "package x\nvar _ = "+c.expr, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(factoryNamings(fset, f)); got != c.want {
+				t.Errorf("factoryNamings(%s) = %d namings, want %d", c.expr, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTrackedFilesNotARepository(t *testing.T) {
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(t.TempDir()))
+	_, err := trackedFiles(t.Context(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("trackedFiles(non-repository) error = %v, want it to mention %q", err, "not a git repository")
 	}
 }
 
