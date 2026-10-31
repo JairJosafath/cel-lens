@@ -80,6 +80,8 @@ Experimental:
 | `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off                                                      | The workspace scan runs only while the feature is on, at initialize or when the setting turns it on      |
 | `fitting-completion` | After a dot completion offers only what the receiver has, before a dot only the names of this kind of document, and hover says why a value is `dyn`. Off, completion and hover behave as in v0.17.1 | Built after v0.17.1 of the engine and not yet proven on real use                                         |
 
+Kyverno `ValidatingPolicy` documents are colored only with `kyverno` in `cel-lens.experimental`; off, they keep the plain YAML colors.
+
 ## Not supported yet
 
 - Dry runs of CEL against sample objects.

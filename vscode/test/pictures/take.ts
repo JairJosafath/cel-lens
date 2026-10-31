@@ -16,7 +16,9 @@ import gifenc from 'gifenc';
 import { chromium, type CDPSession, type Locator, type Page } from 'playwright';
 import jpeg from 'jpeg-js';
 
+import { cursorLineText } from '../../src/cursor_line.ts';
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
+import { pickFrames, VirtualClock, type StampedFrame } from '../../src/gif_timeline.ts';
 
 const { GIFEncoder } = gifenc;
 
@@ -29,7 +31,9 @@ const VIEWPORT = { width: 1100, height: 640 };
 const GIF_COLORS = 48;
 const SCREENCAST_QUALITY = 90;
 const GIF_TICK_MS = 100;
-const GIF_TYPING_MS = 20;
+const GIF_TYPING_MS = 80;
+/** A GIF whose planned length (the sum of its holds) reaches this is an error: the README GIFs stay short. */
+const GIF_MAX_PLANNED_MS = 8000;
 /** How long a state the script waits for may take, on a slow machine. */
 const STATE_TIMEOUT_MS = 30_000;
 
@@ -200,37 +204,40 @@ const STOP_WATCHING_FOR_LIST = `(() => {
   return window.celLensWatch.seen.suggest;
 })()`;
 
-/** A frame the browser painted, and when. */
-interface Shot {
-  readonly picture: Buffer;
-  readonly at: number;
-}
-
 /**
  * Watches a page as a GIF. The browser pushes a frame whenever the page repaints
  * (CDP screencast), so capturing never waits on the page while it types. The frames
- * are held raw until `stop()`, then sampled every `GIF_TICK_MS` and encoded.
+ * are stamped with the virtual time they arrived at (the clock advances only while
+ * `hold` runs, so the GIF plays the script's pacing whatever the machine took), held raw
+ * until `stop()`, then sampled every `GIF_TICK_MS` and encoded.
  */
 class Recording {
-  private readonly shots: Shot[] = [];
+  private readonly shots: StampedFrame<Buffer>[] = [];
+  private readonly clock = new VirtualClock();
+  private readonly holds: number[] = [];
 
   private readonly session: CDPSession;
-  private readonly page: Page;
+  readonly page: Page;
+  private readonly name: string;
 
-  private constructor(session: CDPSession, page: Page) {
+  private constructor(session: CDPSession, page: Page, name: string) {
+    this.name = name;
     this.session = session;
     this.page = page;
     session.on('Page.screencastFrame', (frame) => {
-      this.shots.push({ picture: Buffer.from(frame.data, 'base64'), at: Date.now() });
+      this.shots.push({
+        picture: Buffer.from(frame.data, 'base64'),
+        at: this.clock.stamp(Date.now()),
+      });
       void session.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {
         // The recording has stopped.
       });
     });
   }
 
-  static async start(page: Page): Promise<Recording> {
+  static async start(page: Page, name: string): Promise<Recording> {
     const session = await page.context().newCDPSession(page);
-    const recording = new Recording(session, page);
+    const recording = new Recording(session, page, name);
     await page.evaluate(WATCH_FOR_LIST);
     await session.send('Page.startScreencast', {
       format: 'jpeg',
@@ -240,29 +247,38 @@ class Recording {
     return recording;
   }
 
+  /** A pacing hold of `ms` begins: the GIF's clock advances by `ms` until `endHold`. */
+  beginHold(ms: number): void {
+    this.holds.push(ms);
+    this.clock.beginHold(ms, Date.now());
+  }
+
+  endHold(): void {
+    this.clock.endHold();
+  }
+
   /** Stops, and gives the GIF and whether a completion list was on screen meanwhile. */
   async stop(): Promise<{ gif: Uint8Array; listSeen: boolean }> {
-    const end = Date.now();
     await this.session.send('Page.stopScreencast');
     const listSeen: unknown = await this.page.evaluate(STOP_WATCHING_FOR_LIST);
     await this.session.detach();
-    return { gif: this.encode(end), listSeen: listSeen === true };
+    return { gif: this.encode(), listSeen: listSeen === true };
   }
 
   /**
    * One frame per tick, all quantized with one palette. A frame writes only the pixels
    * whose palette colour changed since the one before; the rest is transparent and left in place, which keeps the file small. All frames are held in memory until encoded.
    */
-  private encode(end: number): Uint8Array {
-    const first = this.shots[0]?.at ?? end;
-    const raw: RawFrame[] = [];
-    let shown = -1;
-    for (let tick = first; tick < end; tick += GIF_TICK_MS) {
-      while (shown + 1 < this.shots.length && (this.shots[shown + 1]?.at ?? end) <= tick) {
-        shown += 1;
-      }
-      raw.push(decode(this.shots[shown]?.picture ?? Buffer.alloc(0)));
+  private encode(): Uint8Array {
+    const planned = this.holds.reduce((sum, ms) => sum + ms, 0);
+    if (planned >= GIF_MAX_PLANNED_MS) {
+      throw new Error(
+        `${this.name} is planned to play ${String(planned)} ms, ${String(GIF_MAX_PLANNED_MS)} ms or more: shorten its holds.`,
+      );
     }
+    const raw: RawFrame[] = pickFrames(this.shots, this.holds, GIF_TICK_MS).map((shown) =>
+      decode(this.shots[shown]?.picture ?? Buffer.alloc(0)),
+    );
     if (raw.length === 0) {
       throw new Error('The recording has no frames: the page showed nothing to turn into a GIF.');
     }
@@ -284,14 +300,15 @@ class Recording {
   }
 }
 
-/** Records `action` as a GIF; `listAllowed` false makes a completion list on screen an error. */
+/** Records `action` as the GIF `name`; `listAllowed` false makes a completion list on screen an error. */
 async function record(
   page: Page,
+  name: string,
   listAllowed: boolean,
-  action: () => Promise<void>,
+  action: (recording: Recording) => Promise<void>,
 ): Promise<Uint8Array> {
-  const recording = await Recording.start(page);
-  await action();
+  const recording = await Recording.start(page, name);
+  await action(recording);
   const { gif, listSeen } = await recording.stop();
   if (listSeen && !listAllowed) {
     throw new Error('A completion list appeared while a recording that must not show one ran.');
@@ -303,8 +320,13 @@ async function record(
  * Holds the page for `ms` so a GIF keeps a frame on screen for that long. It paces
  * what the GIF shows and is not a wait for the editor: states are waited for with `waitForState`.
  */
-async function holdFrame(page: Page, ms: number): Promise<void> {
-  await page.waitForTimeout(ms);
+async function holdFrame(recording: Recording, ms: number): Promise<void> {
+  recording.beginHold(ms);
+  try {
+    await recording.page.waitForTimeout(ms);
+  } finally {
+    recording.endHold();
+  }
 }
 
 /**
@@ -319,6 +341,26 @@ async function waitForState(
 ): Promise<void> {
   try {
     await locator.waitFor({ state, timeout });
+  } catch (error) {
+    const reason =
+      error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
+    throw new Error(`Gave up after ${String(timeout)} ms waiting for ${description}: ${reason}`, {
+      cause: error,
+    });
+  }
+}
+
+/**
+ * Clicks `locator` once it is on screen; fails with an error that names `description`, the state
+ * waited for, when it is not clickable after `timeout` ms.
+ */
+async function clickWhenReady(
+  locator: Locator,
+  description: string,
+  timeout = STATE_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await locator.click({ timeout });
   } catch (error) {
     const reason =
       error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
@@ -354,6 +396,22 @@ async function waitForEditorLineCount(page: Page, text: string, count: number): 
   } catch (error) {
     throw new Error(
       `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for ${String(count)} editor lines with ${text}`,
+      { cause: error },
+    );
+  }
+}
+
+/** Waits until the line the cursor is on holds `text`, wherever the editor is scrolled. */
+async function waitForCursorLine(page: Page, text: string): Promise<void> {
+  try {
+    await page.waitForFunction(
+      `(${cursorLineText.toString()})(document)?.includes(${JSON.stringify(text)}) === true`,
+      undefined,
+      { timeout: STATE_TIMEOUT_MS },
+    );
+  } catch (error) {
+    throw new Error(
+      `Gave up after ${String(STATE_TIMEOUT_MS)} ms waiting for the cursor line to hold ${text}`,
       { cause: error },
     );
   }
@@ -408,16 +466,24 @@ async function openFile(page: Page, name: string): Promise<void> {
  * Types text into the focused editor, `delay` ms between characters. The delay paces
  * the typing a GIF shows; it is not a wait for the editor.
  */
-async function typeText(page: Page, text: string, delay: number): Promise<void> {
+async function typeText(
+  page: Page,
+  recording: Recording,
+  text: string,
+  delay: number,
+): Promise<void> {
   for (const character of text) {
     await page.keyboard.type(character);
-    await holdFrame(page, delay);
+    await holdFrame(recording, delay);
   }
 }
 
 /** Puts the cursor on a new line after the last rule, at the indent of the rules. */
 async function startNewRule(page: Page): Promise<void> {
-  await page.locator('.monaco-editor .view-lines').first().click();
+  await clickWhenReady(
+    page.locator('.monaco-editor .view-lines').first(),
+    'the editor text to be clickable',
+  );
   await page.keyboard.press('Control+End');
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('End');
@@ -427,6 +493,7 @@ async function startNewRule(page: Page): Promise<void> {
 /** The spot in the editor where `word` is on the line holding `line`. */
 async function pointAt(page: Page, line: string, word: string): Promise<{ x: number; y: number }> {
   const row = page.locator('.monaco-editor .view-line', { hasText: line }).first();
+  await waitForState(row, `the line with ${line} to be on screen`);
   const box = await row.locator('span').first().boundingBox();
   if (box === null) {
     throw new Error(`No line with ${line} is on screen.`);
@@ -456,7 +523,11 @@ async function save(name: string, bytes: Uint8Array): Promise<void> {
 
 /** Trusts the workspace, so its settings apply, and clears the screen down to the editor. */
 async function prepare(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Yes, I trust the authors' }).click({ timeout: 60_000 });
+  await clickWhenReady(
+    page.getByRole('button', { name: 'Yes, I trust the authors' }),
+    'the trust button to be clickable',
+    60_000,
+  );
   await waitForState(page.locator('.monaco-dialog-box'), 'the trust dialog to close', 'hidden');
   await page.keyboard.press('Control+k');
   await page.keyboard.press('Control+w');
@@ -497,6 +568,7 @@ async function takePictures(page: Page): Promise<void> {
   await page.keyboard.press('Control+g');
   await page.keyboard.type('31');
   await page.keyboard.press('Enter');
+  await waitForQuickInputClosed(page);
   await waitForEngine(page);
   await waitForState(
     page.locator('.monaco-editor .squiggly-error').first(),
@@ -537,31 +609,31 @@ async function takePictures(page: Page): Promise<void> {
   const rulesBefore = await countEditorLines(page, '- rule:');
   await startNewRule(page);
   await page.keyboard.type('- rule: ');
-  await waitForEditorLineCount(page, '- rule:', rulesBefore + 1);
+  await waitForCursorLine(page, '- rule: ');
   let completionPicture: Uint8Array | undefined;
-  const completion = await record(page, true, async () => {
-    await holdFrame(page, 300);
+  const completion = await record(page, 'completion.gif', true, async (recording) => {
+    await holdFrame(recording, 300);
     await page.keyboard.type('self');
-    await holdFrame(page, 200);
+    await holdFrame(recording, 200);
     await page.keyboard.type('.');
     await page.keyboard.press('Control+Space');
     await waitForState(
       page.locator('.suggest-widget.visible .monaco-list-row').first(),
       'the completion list to show an item after self.',
     );
-    await holdFrame(page, 700);
+    await holdFrame(recording, 700);
     await page.keyboard.press('ArrowDown');
-    await holdFrame(page, 500);
+    await holdFrame(recording, 500);
     completionPicture = await page.screenshot({ type: 'png' });
     await page.keyboard.press('ArrowDown');
-    await holdFrame(page, 500);
+    await holdFrame(recording, 500);
     await page.keyboard.press('Tab');
     await waitForState(
       page.locator('.suggest-widget').first(),
       'the completion list to close after the pick',
       'hidden',
     );
-    await holdFrame(page, 800);
+    await holdFrame(recording, 800);
   });
   await save('completion.gif', completion);
   if (completionPicture === undefined) {
@@ -578,11 +650,16 @@ async function takePictures(page: Page): Promise<void> {
   // colors.gif: a rule colored as it is typed, with no completion list in the way.
   await startNewRule(page);
   await page.keyboard.type('- rule: ');
-  await waitForEditorLineCount(page, '- rule:', rulesBefore + 1);
-  const colors = await record(page, false, async () => {
-    await holdFrame(page, 200);
-    await typeText(page, "self.name.startsWith('w') && self.replicas > 1", GIF_TYPING_MS);
-    await holdFrame(page, 600);
+  await waitForCursorLine(page, '- rule: ');
+  const colors = await record(page, 'colors.gif', false, async (recording) => {
+    await holdFrame(recording, 200);
+    await typeText(
+      page,
+      recording,
+      "self.name.startsWith('w') && self.replicas > 1",
+      GIF_TYPING_MS,
+    );
+    await holdFrame(recording, 600);
   });
   await save('colors.gif', colors);
 

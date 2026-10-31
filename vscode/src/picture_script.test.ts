@@ -21,7 +21,7 @@ describe('the picture script', () => {
 
   it('paces GIFs only through holdFrame, called from the recorded steps and typeText', () => {
     const lines = SOURCE.split('\n');
-    const callers = lines.filter((line) => line.includes('holdFrame(page'));
+    const callers = lines.filter((line) => line.includes('holdFrame(recording'));
     expect(callers.length).toBeGreaterThan(0);
     expect(SOURCE).toMatch(/not a wait for the editor/);
   });
@@ -30,5 +30,28 @@ describe('the picture script', () => {
     const rest = withoutFunction(SOURCE, 'waitForState');
     expect(rest).not.toMatch(/\.waitFor\(/);
     expect(SOURCE).toMatch(/Gave up after .* waiting for \$\{description\}/);
+  });
+
+  it('clicks a locator only through clickWhenReady, which names the state', () => {
+    const rest = withoutFunction(SOURCE, 'clickWhenReady');
+    expect(rest).not.toMatch(/(?<!mouse)\.(click|dblclick|hover|fill|check|tap)\(/);
+    const start = SOURCE.indexOf('async function clickWhenReady(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toMatch(/Gave up after .* waiting for \$\{description\}/);
+  });
+
+  it('reads a locator only after waitForState has waited for it', () => {
+    const rest = withoutFunction(SOURCE, 'pointAt');
+    expect(rest).not.toMatch(/\.(boundingBox|textContent|innerText|getAttribute)\(/);
+    const start = SOURCE.indexOf('async function pointAt(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body.indexOf('await waitForState(row')).toBeGreaterThanOrEqual(0);
+    expect(body.indexOf('await waitForState(row')).toBeLessThan(body.indexOf('.boundingBox('));
+  });
+
+  it('waits for the quick input to close after the go-to-line Enter, before the engine', () => {
+    expect(SOURCE).toMatch(
+      /type\('31'\);\s+await page\.keyboard\.press\('Enter'\);\s+await waitForQuickInputClosed\(page\);\s+await waitForEngine\(page\);/,
+    );
   });
 });

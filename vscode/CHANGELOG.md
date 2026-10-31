@@ -6,6 +6,18 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-10-30
+
+### Changed
+
+- The README says that Kyverno `ValidatingPolicy` documents are colored only with `kyverno` in `cel-lens.experimental`, and the `kyverno` description in Settings says it colors them. A test keeps the setting's feature names and its wording about colors in step with the README's experimental table.
+- `contributing.test.ts` reads each section of `CONTRIBUTING.md` through one shared helper.
+
+### Fixed
+
+- The picture script's wait for a line count no longer depends on scrolling, and its remaining Playwright action timeouts name the state they wait for.
+- A README GIF plays the same length on a slow machine as on a fast one: its clock is the pacing of the picture script, not the wall clock, and the script stops when a GIF is planned to play 8 seconds or more.
+
 ## [0.24.0] - 2026-10-30
 
 ### Changed
@@ -457,7 +469,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.1...HEAD
+[0.24.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.0...vscode-v0.24.1
 [0.24.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.23.0...vscode-v0.24.0
 [0.23.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.22.1...vscode-v0.23.0
 [0.22.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.22.0...vscode-v0.22.1

@@ -6,6 +6,17 @@ const CONTRIBUTING = readFileSync('CONTRIBUTING.md', 'utf8');
 const README = readFileSync('README.md', 'utf8');
 const ISSUES = 'https://github.com/JairJosafath/cel-lens/issues';
 
+/** The text of a CONTRIBUTING.md section, up to the next `## ` heading; fails the test when the heading is missing. */
+function section(heading: string, { flat = false }: { flat?: boolean } = {}): string {
+  const start = CONTRIBUTING.indexOf(`## ${heading}`);
+  if (start < 0) {
+    expect.fail(`CONTRIBUTING.md has no "## ${heading}" heading`);
+  }
+  const end = CONTRIBUTING.indexOf('\n## ', start + 1);
+  const text = CONTRIBUTING.slice(start, end < 0 ? undefined : end);
+  return flat ? text.replace(/\s+/g, ' ') : text;
+}
+
 describe('CONTRIBUTING.md', () => {
   it.each([
     'cel-lens-core',
@@ -32,18 +43,14 @@ describe('CONTRIBUTING.md', () => {
   });
 
   it('tells contributors to export CEL_LENS_ENGINE_DIR at the core-version.json tag before make check, naming the layout test', () => {
-    const start = CONTRIBUTING.indexOf('## Test');
-    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1)).replace(
-      /\s+/g,
-      ' ',
-    );
+    const body = section('Test', { flat: true });
 
-    expect(section).toContain('export CEL_LENS_ENGINE_DIR=');
-    expect(section).toContain('`cel-lens-core` checkout');
-    expect(section).toContain('`core-version.json`');
-    expect(section).toContain('Before `make check`');
-    expect(section).toContain('public-repo layout test');
-    expect(section).toContain('`src/public_repo.test.ts`');
+    expect(body).toContain('export CEL_LENS_ENGINE_DIR=');
+    expect(body).toContain('`cel-lens-core` checkout');
+    expect(body).toContain('`core-version.json`');
+    expect(body).toContain('Before `make check`');
+    expect(body).toContain('public-repo layout test');
+    expect(body).toContain('`src/public_repo.test.ts`');
   });
 
   it('says Kyverno ValidatingPolicy fields are colored only with kyverno in cel-lens.experimental', () => {
@@ -53,11 +60,10 @@ describe('CONTRIBUTING.md', () => {
   });
 
   it('puts retaking the pictures and committing images/ in the release steps', () => {
-    const start = CONTRIBUTING.indexOf('## Releases');
-    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
+    const body = section('Releases');
 
-    expect(section).toContain('npm run pictures');
-    expect(section).toContain('images/');
+    expect(body).toContain('npm run pictures');
+    expect(body).toContain('images/');
   });
 
   it.each([
@@ -67,17 +73,15 @@ describe('CONTRIBUTING.md', () => {
     ['check', '`make check`'],
     ['tagging', '`vX.Y.Z`'],
   ])('lists the %s step in the numbered release steps', (_name, text) => {
-    const start = CONTRIBUTING.indexOf('## Releases');
-    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
-    const steps = section.split('\n').filter((line) => /^\d+\. /.test(line));
+    const body = section('Releases');
+    const steps = body.split('\n').filter((line) => /^\d+\. /.test(line));
 
     expect(steps.some((line) => line.includes(text))).toBe(true);
   });
 
   it('numbers the release steps from 1 and tags last', () => {
-    const start = CONTRIBUTING.indexOf('## Releases');
-    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
-    const steps = section.split('\n').filter((line) => /^\d+\. /.test(line));
+    const body = section('Releases');
+    const steps = body.split('\n').filter((line) => /^\d+\. /.test(line));
     const numbers = steps.map((line) => Number(/^(\d+)\./.exec(line)?.[1]));
 
     expect(numbers).toEqual(steps.map((_line, i) => i + 1));
@@ -85,9 +89,8 @@ describe('CONTRIBUTING.md', () => {
   });
 
   it('tells release step 2 to use the vscode-v compare form and move the Unreleased link', () => {
-    const start = CONTRIBUTING.indexOf('## Releases');
-    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1));
-    const step = section.split('\n').find((line) => line.startsWith('2. ')) ?? '';
+    const body = section('Releases');
+    const step = body.split('\n').find((line) => line.startsWith('2. ')) ?? '';
 
     expect(step).toContain('`vscode-v` form');
     expect(step).toContain('compare/vscode-v<previous>...vscode-vX.Y.Z');
@@ -96,14 +99,8 @@ describe('CONTRIBUTING.md', () => {
   });
 
   it('says in Send a change that a CHANGELOG line names no issue number', () => {
-    const start = CONTRIBUTING.indexOf('## Send a change');
-    const section = CONTRIBUTING.slice(start, CONTRIBUTING.indexOf('\n## ', start + 1)).replace(
-      /\s+/g,
-      ' ',
-    );
-
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(section).toContain('a CHANGELOG line names no issue number');
+    const body = section('Send a change', { flat: true });
+    expect(body).toContain('a CHANGELOG line names no issue number');
   });
 
   it('names no factory image or devcontainer', () => {
@@ -114,10 +111,10 @@ describe('CONTRIBUTING.md', () => {
 describe('README.md Contributing section', () => {
   it('is the last section and links the guide and the issues page', () => {
     const headings = README.split('\n').filter((line) => line.startsWith('## '));
-    const section = README.slice(README.lastIndexOf('## Contributing'));
+    const readmeSection = README.slice(README.lastIndexOf('## Contributing'));
 
     expect(headings.at(-1)).toBe('## Contributing');
-    expect(section).toContain('(CONTRIBUTING.md)');
-    expect(section).toContain(ISSUES);
+    expect(readmeSection).toContain('(CONTRIBUTING.md)');
+    expect(readmeSection).toContain(ISSUES);
   });
 });
