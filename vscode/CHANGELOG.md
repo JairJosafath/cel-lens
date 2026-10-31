@@ -6,6 +6,18 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-31
+
+### Added
+
+- `npm run links` fetches every link in `CHANGELOG.md` and `README.md` and fails on a dead one; the release steps run it before tagging.
+
+### Changed
+
+- The picture script waits for the light bulb and asks again when the quick fix list comes back empty.
+- The `kyverno` row of the README says the extension colors Kyverno documents with the feature on and not with it off.
+- `CONTRIBUTING.md` gives a sparse clone of the public monorepo at `core-v<version>` for `CEL_LENS_ENGINE_DIR`, pointing the variable at its `engine/` folder, and documents the variable in one section.
+
 ## [0.24.3] - 2026-10-31
 
 ### Changed
@@ -496,7 +508,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.3...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.25.0...HEAD
+[0.25.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.3...vscode-v0.25.0
 [0.24.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.2...vscode-v0.24.3
 [0.24.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.1...vscode-v0.24.2
 [0.24.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.0...vscode-v0.24.1

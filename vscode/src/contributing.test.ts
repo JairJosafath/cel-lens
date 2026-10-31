@@ -53,6 +53,15 @@ describe('CONTRIBUTING.md', () => {
     expect(body).toContain('`src/public_repo.test.ts`');
   });
 
+  it('clones the public monorepo at core-v<version> for CEL_LENS_ENGINE_DIR and documents the variable in one section', () => {
+    const body = section('Test', { flat: true });
+
+    expect(body).toContain('https://github.com/JairJosafath/cel-lens.git');
+    expect(body).toContain('"core-$(node -p');
+    expect(body).toContain('export CEL_LENS_ENGINE_DIR="$PWD/../cel-lens-engine/engine"');
+    expect(CONTRIBUTING.match(/export CEL_LENS_ENGINE_DIR=/g)).toHaveLength(1);
+  });
+
   it('says Kyverno ValidatingPolicy fields are colored only with kyverno in cel-lens.experimental', () => {
     const flat = CONTRIBUTING.replace(/\s+/g, ' ');
 

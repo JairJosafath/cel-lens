@@ -34,13 +34,18 @@ While you work, `npx vitest` re-runs the unit tests. Put logic in modules that d
 
 ### Check the layout test against a real engine
 
-Before `make check`, export `CEL_LENS_ENGINE_DIR` to a `cel-lens-core` checkout at the tag named in `core-version.json`:
+Before `make check`, export `CEL_LENS_ENGINE_DIR` to the `engine/` folder of a `cel-lens-core` checkout at the tag named in `core-version.json`. The engine lives in the public monorepo, under `engine/`, at the tag `core-v<version>`. A sparse clone fetches only that folder; run this from this repository's root:
 
 ```sh
-git clone --branch "$(node -p "require('./core-version.json').version")" <url of the cel-lens-core repository> ../cel-lens-core
-export CEL_LENS_ENGINE_DIR="$PWD/../cel-lens-core"
+git clone --depth 1 --filter=blob:none --sparse \
+  --branch "core-$(node -p "require('./core-version.json').version")" \
+  https://github.com/JairJosafath/cel-lens.git ../cel-lens-engine
+git -C ../cel-lens-engine sparse-checkout set engine
+export CEL_LENS_ENGINE_DIR="$PWD/../cel-lens-engine/engine"
 make check
 ```
+
+(A full clone works too; point the variable at its `engine/` folder.)
 
 The public-repo layout test (`src/public_repo.test.ts`) builds `engine/` from that checkout, so a link to a file the engine lacks fails on your machine. Without the variable, `engine/` is an empty tree, the test passes on such a link, and only CI reports it.
 
@@ -234,10 +239,7 @@ other access: the default engine source is the public releases page. To fetch fr
 another releases page (a mirror, say), set `CEL_LENS_CORE_RELEASES_URL` to its
 URL; files are then read from `<URL>/download/<version>/` (`src/core_releases.ts`).
 
-To run the stricter layout check locally, set `CEL_LENS_ENGINE_DIR` to a checkout of the
-engine's source (the `cel-lens-core` repository at the pinned version). The layout test in
-`src/public_repo.test.ts` then builds `engine/` from that checkout, so a link to a file the
-engine lacks fails. Without it, `engine/` is an empty tree and those links are not checked.
+To run the stricter layout check locally, see "Check the layout test against a real engine" above for `CEL_LENS_ENGINE_DIR`.
 
 To release, follow these steps in order:
 
@@ -245,7 +247,8 @@ To release, follow these steps in order:
 2. Move the "Unreleased" entries of `CHANGELOG.md` under a new heading for the version and date, add the version's link line at the end in the `vscode-v` form (`[X.Y.Z]: https://github.com/JairJosafath/cel-lens/compare/vscode-v<previous>...vscode-vX.Y.Z`; versions older than the oldest public tag, `vscode-v0.14.0`, have no link line), and move the `[Unreleased]` link to compare `vscode-vX.Y.Z` to `HEAD`.
 3. Retake the pictures so the store page matches the release: run `npm run pictures` (see "Retake the pictures" above) and commit the changed files in `images/`.
 4. Run `make check`; it must pass before you tag, and never release a red commit.
-5. Tag the commit `vX.Y.Z` (the `version` in `package.json` with a `v` in front; the release workflow refuses any other tag) and push the tag; the release workflow attaches `dist/` to the release.
+5. Run `npm run links`: it fetches every link in `CHANGELOG.md` and `README.md` and exits non-zero on any response that is not 2xx or 3xx. Fix a dead link before you tag. It needs a network, so `make check` does not run it.
+6. Tag the commit `vX.Y.Z` (the `version` in `package.json` with a `v` in front; the release workflow refuses any other tag) and push the tag; the release workflow attaches `dist/` to the release.
 
 The **Open Releases Page** button, shown when the engine is too old, opens
 <https://github.com/JairJosafath/cel-lens/releases> (`RELEASES_PAGE_URL`). Engine

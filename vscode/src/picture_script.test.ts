@@ -128,4 +128,20 @@ describe('the picture script', () => {
       /catch \(error: unknown\) \{\s+await saveGaveUpPicture\(page\);\s+throw error;/,
     );
   });
+
+  it('waits for the light bulb, then asks for the quick fix within the one named timeout', () => {
+    expect(SOURCE).toMatch(
+      /page\.mouse\.click\(wrong\.x, wrong\.y\);\s+await waitForLightBulbOnCursorLine\(page\);\s+await askForQuickFix\(page\);/,
+    );
+    expect(SOURCE).toMatch(
+      /withTimeout\('the quick fix list to show a fix', STATE_TIMEOUT_MS, \(ms\) =>\s+askUntilFixListed\(/,
+    );
+    expect(SOURCE).toMatch(/askForFixes: \(\) => page\.keyboard\.press\('Control\+\.'\)/);
+    expect(SOURCE).toMatch(/dismiss: \(\) => page\.keyboard\.press\('Escape'\)/);
+    const start = SOURCE.indexOf('async function waitForLightBulbOnCursorLine(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toMatch(/widgetShown\.toString\(\)/);
+    expect(body).toMatch(/\.lightBulbWidget/);
+    expect(body).toMatch(/the light bulb to be fully shown on the cursor line/);
+  });
 });

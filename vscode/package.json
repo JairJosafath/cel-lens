@@ -2,7 +2,7 @@
   "name": "cel-lens-vscode",
   "displayName": "cel-lens for VS Code",
   "description": "CEL errors, hover and completion inside Kubernetes YAML.",
-  "version": "0.24.3",
+  "version": "0.25.0",
   "publisher": "cel-lens",
   "repository": {
     "type": "git",
@@ -171,6 +171,7 @@
     "bench": "esbuild src/*.bench.ts --bundle --platform=node --format=esm --alias:vscode=./test/vscode.ts --outdir=out/bench --out-extension:.js=.mjs --log-level=warning && for f in out/bench/*.mjs; do node --expose-gc $f || exit 1; done",
     "profile": "esbuild src/cel_tokens.profile.ts --bundle --platform=node --format=esm --outdir=out/profile --out-extension:.js=.mjs --log-level=warning && node --expose-gc --cpu-prof --cpu-prof-dir=out/profile out/profile/cel_tokens.profile.mjs",
     "engine": "node src/dist.ts install",
+    "links": "node src/check_links.ts",
     "pictures": "node test/pictures/take.ts",
     "e2e": "npm run engine && vitest run --config vitest.e2e.config.mts"
   },

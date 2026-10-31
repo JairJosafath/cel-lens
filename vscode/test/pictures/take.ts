@@ -13,10 +13,11 @@ import { dirname, join, resolve } from 'node:path';
 import { stdout } from 'node:process';
 
 import gifenc from 'gifenc';
-import { chromium, type CDPSession, type Locator, type Page } from 'playwright';
+import { chromium, errors, type CDPSession, type Locator, type Page } from 'playwright';
 import jpeg from 'jpeg-js';
 
 import { cursorLineText } from '../../src/cursor_line.ts';
+import { askUntilFixListed } from '../../src/quick_fix_retry.ts';
 import { widgetShown } from '../../src/widget_shown.ts';
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
 import {
@@ -461,6 +462,45 @@ async function waitForWidgetShown(
   );
 }
 
+/** Waits until the light bulb is fully shown on the cursor's line, so a quick fix request finds the fix. */
+async function waitForLightBulbOnCursorLine(page: Page): Promise<void> {
+  await waitForExpression(
+    page,
+    `(() => { const shown = ${widgetShown.toString()}; const cursor = document.querySelector('.monaco-editor .cursors-layer .cursor')?.getBoundingClientRect(); return cursor !== undefined && Array.from(document.querySelectorAll('.monaco-editor .lightBulbWidget')).some((bulb) => { const box = bulb.getBoundingClientRect(); const middle = box.top + box.height / 2; return shown(bulb) && middle >= cursor.top && middle <= cursor.bottom; }); })()`,
+    'the light bulb to be fully shown on the cursor line',
+  );
+}
+
+/**
+ * Presses Ctrl+. and waits for a fully shown quick fix row; when the editor answers "No code
+ * actions available", presses Escape and asks again. All asks share the step's one timeout.
+ */
+async function askForQuickFix(page: Page): Promise<void> {
+  const answer = `(() => { if (Array.from(document.querySelectorAll('.action-widget .monaco-list-row')).length > 0) { return 'fix'; } return Array.from(document.querySelectorAll('.monaco-editor .monaco-editor-overlaymessage:not(.fadeOut)')).some((message) => message.textContent?.includes('No code actions available') === true) ? 'empty' : false; })()`;
+  await withTimeout('the quick fix list to show a fix', STATE_TIMEOUT_MS, (ms) =>
+    askUntilFixListed(
+      {
+        askForFixes: () => page.keyboard.press('Control+.'),
+        waitForAnswer: async (timeout) => {
+          const found = await page
+            .waitForFunction(answer, undefined, { timeout })
+            .then((handle) => handle.jsonValue())
+            .catch((error: unknown) => {
+              if (error instanceof errors.TimeoutError) {
+                return 'none';
+              }
+              throw error;
+            });
+          return found === 'fix' || found === 'empty' ? found : 'none';
+        },
+        dismiss: () => page.keyboard.press('Escape'),
+      },
+      ms,
+      Date.now,
+    ),
+  );
+}
+
 /** Waits until the hover widget is on screen, holds some text and is fully shown. */
 async function waitForHover(page: Page): Promise<void> {
   await waitForState(
@@ -671,11 +711,8 @@ async function takePictures(page: Page): Promise<void> {
   await page.mouse.move(wrong.x, wrong.y + 120);
   await waitForNoHover(page);
   await page.mouse.click(wrong.x, wrong.y);
-  await page.keyboard.press('Control+.');
-  await waitForState(
-    page.locator('.action-widget .monaco-list-row').first(),
-    'the quick fix list to show a fix',
-  );
+  await waitForLightBulbOnCursorLine(page);
+  await askForQuickFix(page);
   await waitForWidgetShown(page, '.action-widget', 'the quick fix list');
   await save('quick-fix.png', await screenshotPage(page, 'the page to be captured'));
   await page.keyboard.press('Escape');

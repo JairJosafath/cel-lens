@@ -63,6 +63,12 @@ describe('compareExperimentalRows', () => {
       [],
     ],
     [
+      'an on and off color note added to the engine text',
+      new Map([['alpha', 'Does a. On, the extension colors it; off, it does not']]),
+      base,
+      [],
+    ],
+    [
       'a note in other words added to the engine text',
       new Map([['alpha', 'Does a. Off, it gets no hover']]),
       base,
