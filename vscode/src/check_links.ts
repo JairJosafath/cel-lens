@@ -25,6 +25,17 @@ export function extractLinks(markdown: string): string[] {
   return [...new Set(links)];
 }
 
+/** The error's message, with its cause's message after it: Node puts the DNS or TLS reason there. */
+function describeFailure(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  if (error.cause === undefined) {
+    return error.message;
+  }
+  return `${error.message}: ${describeFailure(error.cause)}`;
+}
+
 /** Fetches each link once; a status below 400 passes, anything else or a failed request does not. */
 export async function checkLinks(urls: readonly string[], fetcher: Fetcher): Promise<LinkResult[]> {
   return Promise.all(
@@ -33,7 +44,7 @@ export async function checkLinks(urls: readonly string[], fetcher: Fetcher): Pro
         const { status } = await fetcher(url);
         return { url, outcome: status, ok: status >= 200 && status < 400 };
       } catch (error) {
-        return { url, outcome: error instanceof Error ? error.message : String(error), ok: false };
+        return { url, outcome: describeFailure(error), ok: false };
       }
     }),
   );

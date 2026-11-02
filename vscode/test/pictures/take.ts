@@ -18,6 +18,14 @@ import jpeg from 'jpeg-js';
 
 import { cursorLineText } from '../../src/cursor_line.ts';
 import { askUntilFixListed } from '../../src/quick_fix_retry.ts';
+import {
+  COLORS_HOLD_AFTER_MS,
+  COLORS_HOLD_BEFORE_MS,
+  COLORS_TYPED_TEXT,
+  COMPLETION_HOLDS_MS,
+  GIF_TYPING_MS,
+} from '../../src/gif_plans.ts';
+import { partHidden } from '../../src/part_hidden.ts';
 import { widgetShown } from '../../src/widget_shown.ts';
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
 import {
@@ -38,7 +46,6 @@ const VIEWPORT = { width: 1100, height: 640 };
 const GIF_COLORS = 48;
 const SCREENCAST_QUALITY = 90;
 const GIF_TICK_MS = 100;
-const GIF_TYPING_MS = 80;
 /** How long a state the script waits for may take, on a slow machine. */
 const STATE_TIMEOUT_MS = 30_000;
 const WORKBENCH_TIMEOUT_MS = 60_000;
@@ -339,13 +346,13 @@ async function holdFrame(recording: Recording, ms: number): Promise<void> {
  * the state waited for, and keeps Playwright's first-line reason. Every wait and action of the
  * script goes through here.
  */
-async function withTimeout(
+async function withTimeout<T>(
   description: string,
   timeout: number,
-  action: (timeout: number) => Promise<void>,
-): Promise<void> {
+  action: (timeout: number) => Promise<T>,
+): Promise<T> {
   try {
-    await action(timeout);
+    return await action(timeout);
   } catch (error) {
     const reason =
       error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
@@ -385,16 +392,11 @@ async function waitForExpression(
   });
 }
 
-/** Takes a PNG of the page, or fails naming `description`. */
-async function screenshotPage(page: Page, description: string): Promise<Buffer> {
-  let picture: Buffer | undefined;
-  await withTimeout(description, STATE_TIMEOUT_MS, async (ms) => {
-    picture = await page.screenshot({ type: 'png', timeout: ms });
-  });
-  if (picture === undefined) {
-    throw new Error(`No picture of ${description}.`);
-  }
-  return picture;
+/** Takes a PNG of the page, or fails naming the picture `file`, such as `problems.png`. */
+async function screenshotPage(page: Page, file: string): Promise<Buffer> {
+  return withTimeout(`${file} to be taken`, STATE_TIMEOUT_MS, (ms) =>
+    page.screenshot({ type: 'png', timeout: ms }),
+  );
 }
 
 /** Waits until a line of the active editor holds `text`. */
@@ -610,9 +612,13 @@ async function saveGaveUpPicture(page: Page): Promise<void> {
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, bytes);
     process.stderr.write(`pictures: the page when the script stopped: ${GAVE_UP_PICTURE}\n`);
-  } catch {
+  } catch (failure: unknown) {
+    const reason =
+      failure instanceof Error
+        ? (failure.message.split('\n')[0] ?? failure.message)
+        : String(failure);
     process.stderr.write(
-      'pictures: no picture of the page when the script stopped: the screenshot failed\n',
+      `pictures: no picture of the page when the script stopped: the screenshot failed: ${reason}\n`,
     );
   }
 }
@@ -663,7 +669,7 @@ async function hideSideBar(
   await page.keyboard.type(title);
   await waitForExpression(
     page,
-    `(() => { const bar = document.querySelector(${JSON.stringify(part)}); const box = bar?.getBoundingClientRect(); const hidden = box === undefined || box.width === 0 || box.height === 0; const listed = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row')).some((row) => row.textContent?.includes(${JSON.stringify(title)}) === true); return hidden || listed; })()`,
+    `(() => { const hidden = (${partHidden.toString()})(document.querySelector(${JSON.stringify(part)})); const listed = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row')).some((row) => row.textContent?.includes(${JSON.stringify(title)}) === true); return hidden || listed; })()`,
     `the palette to list the command ${title} or the ${barName} to hide`,
   );
   const row = page.locator('.quick-input-list .monaco-list-row', { hasText: title }).first();
@@ -678,10 +684,10 @@ async function hideSideBar(
 
 /** Fails when the side bar in `part` is still on screen: no picture may show it. */
 async function expectSideBarHidden(page: Page, part: string, barName: string): Promise<void> {
-  await waitForState(
-    page.locator(part),
+  await waitForExpression(
+    page,
+    `(${partHidden.toString()})(document.querySelector(${JSON.stringify(part)}))`,
     `the ${barName} to be off screen (no picture may show it)`,
-    'hidden',
   );
 }
 
@@ -705,7 +711,7 @@ async function takePictures(page: Page): Promise<void> {
   await page.mouse.move(wrong.x - 20, wrong.y - 60);
   await page.mouse.move(wrong.x, wrong.y, { steps: 6 });
   await waitForHover(page);
-  await save('problems.png', await screenshotPage(page, 'the page to be captured'));
+  await save('problems.png', await screenshotPage(page, 'problems.png'));
 
   // quick-fix.png: the fix offered on that problem.
   await page.mouse.move(wrong.x, wrong.y + 120);
@@ -714,7 +720,7 @@ async function takePictures(page: Page): Promise<void> {
   await waitForLightBulbOnCursorLine(page);
   await askForQuickFix(page);
   await waitForWidgetShown(page, '.action-widget', 'the quick fix list');
-  await save('quick-fix.png', await screenshotPage(page, 'the page to be captured'));
+  await save('quick-fix.png', await screenshotPage(page, 'quick-fix.png'));
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+End');
 
@@ -723,7 +729,7 @@ async function takePictures(page: Page): Promise<void> {
   await page.mouse.move(field.x - 20, field.y + 80);
   await page.mouse.move(field.x, field.y, { steps: 6 });
   await waitForHover(page);
-  await save('hover.png', await screenshotPage(page, 'the page to be captured'));
+  await save('hover.png', await screenshotPage(page, 'hover.png'));
   await page.mouse.move(field.x, field.y + 200);
 
   // completion.png and completion.gif: the list after self., one item picked.
@@ -735,9 +741,9 @@ async function takePictures(page: Page): Promise<void> {
   await waitForCursorLine(page, '- rule: ');
   let completionPicture: Uint8Array | undefined;
   const completion = await record(page, 'completion.gif', true, async (recording) => {
-    await holdFrame(recording, 300);
+    await holdFrame(recording, COMPLETION_HOLDS_MS.start);
     await page.keyboard.type('self');
-    await holdFrame(recording, 200);
+    await holdFrame(recording, COMPLETION_HOLDS_MS.afterSelf);
     await page.keyboard.type('.');
     await page.keyboard.press('Control+Space');
     await waitForState(
@@ -745,19 +751,19 @@ async function takePictures(page: Page): Promise<void> {
       'the completion list to show an item after self.',
     );
     await waitForWidgetShown(page, '.suggest-widget.visible', 'the completion list');
-    await holdFrame(recording, 700);
+    await holdFrame(recording, COMPLETION_HOLDS_MS.listShown);
     await page.keyboard.press('ArrowDown');
-    await holdFrame(recording, 500);
-    completionPicture = await screenshotPage(page, 'the page to be captured');
+    await holdFrame(recording, COMPLETION_HOLDS_MS.firstPick);
+    completionPicture = await screenshotPage(page, 'completion.png');
     await page.keyboard.press('ArrowDown');
-    await holdFrame(recording, 500);
+    await holdFrame(recording, COMPLETION_HOLDS_MS.secondPick);
     await page.keyboard.press('Tab');
     await waitForState(
       page.locator('.suggest-widget').first(),
       'the completion list to close after the pick',
       'hidden',
     );
-    await holdFrame(recording, 800);
+    await holdFrame(recording, COMPLETION_HOLDS_MS.afterTab);
   });
   await save('completion.gif', completion);
   if (completionPicture === undefined) {
@@ -777,14 +783,9 @@ async function takePictures(page: Page): Promise<void> {
   await page.keyboard.type('- rule: ');
   await waitForCursorLine(page, '- rule: ');
   const colors = await record(page, 'colors.gif', false, async (recording) => {
-    await holdFrame(recording, 200);
-    await typeText(
-      page,
-      recording,
-      "self.name.startsWith('w') && self.replicas > 1",
-      GIF_TYPING_MS,
-    );
-    await holdFrame(recording, 600);
+    await holdFrame(recording, COLORS_HOLD_BEFORE_MS);
+    await typeText(page, recording, COLORS_TYPED_TEXT, GIF_TYPING_MS);
+    await holdFrame(recording, COLORS_HOLD_AFTER_MS);
   });
   await save('colors.gif', colors);
 
@@ -793,7 +794,7 @@ async function takePictures(page: Page): Promise<void> {
   await waitForEditorText(page, 'no-latest-tag');
   await page.keyboard.press('Control+End');
   await page.mouse.move(VIEWPORT.width - 5, VIEWPORT.height - 5);
-  await save('colors.png', await screenshotPage(page, 'the page to be captured'));
+  await save('colors.png', await screenshotPage(page, 'colors.png'));
 }
 
 async function main(): Promise<void> {
@@ -856,9 +857,7 @@ async function main(): Promise<void> {
     try {
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       await withTimeout('the workbench page to load', WORKBENCH_TIMEOUT_MS, (ms) =>
-        page
-          .goto(`${url}?folder=${encodeURIComponent(workspace)}`, { timeout: ms })
-          .then(() => undefined),
+        page.goto(`${url}?folder=${encodeURIComponent(workspace)}`, { timeout: ms }),
       );
       try {
         await waitForState(

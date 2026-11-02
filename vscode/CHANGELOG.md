@@ -6,6 +6,15 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-02
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.23.0: the engine scans the workspace for CRDs in the background, and forgets the CRDs of a deleted or renamed folder, so a policy no longer keeps a warning from a CRD that is gone.
+- `npm run links` shows the network reason (such as `getaddrinfo ENOTFOUND`) after `fetch failed` on the FAIL line of an unreachable host.
+- The picture script treats an element hidden by an ancestor as not rendered, shares one page function for "part is off screen", names the reason when its give-up screenshot fails, and names each screenshot by its picture file. A unit test pins the planned lengths of `colors.gif` and `completion.gif`.
+- An end-to-end test checks that `object` is typed from each matched kind.
+
 ## [0.25.0] - 2026-10-31
 
 ### Added
@@ -508,7 +517,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.25.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.26.0...HEAD
+[0.26.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.25.0...vscode-v0.26.0
 [0.25.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.3...vscode-v0.25.0
 [0.24.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.2...vscode-v0.24.3
 [0.24.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.1...vscode-v0.24.2

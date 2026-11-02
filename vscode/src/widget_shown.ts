@@ -10,15 +10,19 @@ export interface WidgetElement {
   readonly ownerDocument: {
     readonly defaultView: { getComputedStyle: (element: WidgetElement) => WidgetStyle } | null;
   };
+  checkVisibility: () => boolean;
   getAnimations: (options: { subtree: boolean }) => readonly { readonly playState: string }[];
 }
 
 /**
- * Whether a widget is fully shown: rendered (not `display: none` or `visibility: hidden`), its
+ * Whether a widget is fully shown: rendered (no `display: none` on it or an ancestor, and not `visibility: hidden`), its
  * computed opacity is 1, and none of its animations or transitions, nor those of its subtree, is
  * still running. It runs inside the page, so it uses nothing outside itself.
  */
 export function widgetShown(element: WidgetElement): boolean {
+  if (!element.checkVisibility()) {
+    return false;
+  }
   const view = element.ownerDocument.defaultView;
   if (view === null) {
     return false;

@@ -46,6 +46,20 @@ describe('checkLinks', () => {
       { url: 'https://a.example', outcome: 'getaddrinfo ENOTFOUND', ok: false },
     ]);
   });
+
+  it.each([
+    [
+      'an Error cause',
+      new Error('getaddrinfo ENOTFOUND a.example'),
+      'getaddrinfo ENOTFOUND a.example',
+    ],
+    ['a text cause', 'certificate has expired', 'certificate has expired'],
+  ])('appends %s to the outer message', async (_name, cause, reason) => {
+    const fetcher: Fetcher = () => Promise.reject(new TypeError('fetch failed', { cause }));
+    expect(await checkLinks(['https://a.example'], fetcher)).toEqual([
+      { url: 'https://a.example', outcome: `fetch failed: ${reason}`, ok: false },
+    ]);
+  });
 });
 
 describe('the release steps', () => {

@@ -6,11 +6,16 @@ import { widgetShown, type WidgetElement, type WidgetStyle } from './widget_show
 
 const SHOWN: WidgetStyle = { display: 'block', visibility: 'visible', opacity: '1' };
 
-function widget(style: Partial<WidgetStyle>, playStates: readonly string[]): WidgetElement {
+function widget(
+  style: Partial<WidgetStyle>,
+  playStates: readonly string[],
+  rendered = true,
+): WidgetElement {
   const element: WidgetElement = {
     ownerDocument: {
       defaultView: { getComputedStyle: () => ({ ...SHOWN, ...style }) },
     },
+    checkVisibility: () => rendered,
     getAnimations: () => playStates.map((playState) => ({ playState })),
   };
   return element;
@@ -48,9 +53,14 @@ describe('widgetShown', () => {
     expect(widgetShown(widget(style, states))).toBe(shown);
   });
 
+  it('is false for an element hidden by an ancestor with display none', () => {
+    expect(widgetShown(widget({}, [], false))).toBe(false);
+  });
+
   it('is false for an element without a window', () => {
     const detached: WidgetElement = {
       ownerDocument: { defaultView: null },
+      checkVisibility: () => true,
       getAnimations: () => [],
     };
     expect(widgetShown(detached)).toBe(false);
@@ -64,5 +74,6 @@ describe('widgetShown', () => {
     const standalone = evaluated as typeof widgetShown;
     expect(standalone(widget({}, ['finished']))).toBe(true);
     expect(standalone(widget({ opacity: '0.5' }, []))).toBe(false);
+    expect(standalone(widget({}, [], false))).toBe(false);
   });
 });

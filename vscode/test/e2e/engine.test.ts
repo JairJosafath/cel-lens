@@ -292,6 +292,21 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
     }
   });
 
+  it('types object from each matched kind: a Deployment-only field warns only for the StatefulSet', async () => {
+    const { uri, text } = await open('per_kind_object_policy.yaml');
+
+    const found = await diagnosticsFor(uri, (list) => list.length > 0);
+
+    const warnings = found.filter((d) => d.severity === WARNING);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toMatch(/^apps\/v1 StatefulSet: /);
+    expect(warnings[0]).toMatchObject({ source: 'cel-lens' });
+    expect(warnings[0]?.range.start.line).toBe(lineOf(text, '- expression:'));
+    expect(found.map((d) => d.message)).not.toContainEqual(
+      expect.stringMatching(/^apps\/v1 Deployment: /),
+    );
+  });
+
   it('reports broken YAML where it breaks and clears the error once the text is fixed', async () => {
     const { uri, text } = await open('broken_yaml.txt');
 

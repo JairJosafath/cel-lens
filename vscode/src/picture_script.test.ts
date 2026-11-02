@@ -6,7 +6,7 @@ const SOURCE = readFileSync(`${__dirname}/../test/pictures/take.ts`, 'utf8');
 
 /** The source with the body of the named function cut out. */
 function withoutFunction(source: string, name: string): string {
-  const start = source.indexOf(`async function ${name}(`);
+  const start = source.search(new RegExp(`async function ${name}(<T>)?\\(`));
   expect(start).toBeGreaterThanOrEqual(0);
   const end = source.indexOf('\n}\n', start);
   return source.slice(0, start) + source.slice(end + 3);
@@ -31,10 +31,28 @@ describe('the picture script', () => {
     expect(rest).not.toMatch(/\.waitFor\(/);
   });
 
+  it('waits on a page function only through waitForExpression, which has a timeout and names it', () => {
+    const rest = withoutFunction(withoutFunction(SOURCE, 'waitForExpression'), 'askForQuickFix');
+    expect(rest).not.toMatch(/\.waitForFunction\(/);
+  });
+
+  it('names each screenshot by its picture file and has no second error for a missing picture', () => {
+    expect(SOURCE).not.toMatch(/No picture of/);
+    expect(SOURCE).not.toMatch(/the page to be captured/);
+    const files = [...SOURCE.matchAll(/screenshotPage\(page, '([^']+)'\)/g)].map((m) => m[1]);
+    expect(files).toEqual([
+      'problems.png',
+      'quick-fix.png',
+      'hover.png',
+      'completion.png',
+      'colors.png',
+    ]);
+  });
+
   it('builds every wait error in one helper that names the state and keeps the reason', () => {
     expect(SOURCE.match(/Gave up after/g)).toHaveLength(1);
     expect(withoutFunction(SOURCE, 'withTimeout')).not.toMatch(/\bcatch \(error\)/);
-    const start = SOURCE.indexOf('async function withTimeout(');
+    const start = SOURCE.indexOf('async function withTimeout<T>(');
     const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
     expect(body).toMatch(/Gave up after .* waiting for \$\{description\}: \$\{reason\}/);
     expect(body).toMatch(/split\('\\n'\)\[0\]/);
@@ -107,6 +125,21 @@ describe('the picture script', () => {
     expect(body).toMatch(/press\('Escape'\)[\s\S]*?hid by itself[\s\S]*?waitForQuickInputClosed/);
   });
 
+  it('decides that a side bar is off screen in one function, partHidden, for both waits', () => {
+    expect(SOURCE).toMatch(/import \{ partHidden \} from '\.\.\/\.\.\/src\/part_hidden\.ts'/);
+    const hide = SOURCE.slice(
+      SOURCE.indexOf('async function hideSideBar('),
+      SOURCE.indexOf('async function expectSideBarHidden('),
+    );
+    const expectHidden = SOURCE.slice(
+      SOURCE.indexOf('async function expectSideBarHidden('),
+      SOURCE.indexOf('async function takePictures('),
+    );
+    expect(hide).toMatch(/\$\{partHidden\.toString\(\)\}/);
+    expect(expectHidden).toMatch(/\$\{partHidden\.toString\(\)\}/);
+    expect(SOURCE).not.toMatch(/box\.width === 0/);
+  });
+
   it('checks both side bars hidden at the end of prepare', () => {
     const start = SOURCE.indexOf('async function prepare(');
     const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
@@ -123,7 +156,9 @@ describe('the picture script', () => {
     const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
     expect(body).not.toMatch(/\bsave\(|IMAGES/);
     expect(body).toMatch(/fullPage: true,\s+timeout: GAVE_UP_TIMEOUT_MS/);
-    expect(body).toMatch(/catch \{[\s\S]*?the screenshot failed/);
+    expect(body).toMatch(
+      /catch \(failure: unknown\) \{[\s\S]*?failure\.message\.split\('\\n'\)\[0\][\s\S]*?the screenshot failed: \$\{reason\}/,
+    );
     expect(SOURCE).toMatch(
       /catch \(error: unknown\) \{\s+await saveGaveUpPicture\(page\);\s+throw error;/,
     );
