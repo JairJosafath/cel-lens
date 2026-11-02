@@ -132,7 +132,8 @@ type checker does:
   `node_modules`, up to 20,000 files of up to 1 MiB) and in the open documents;
   `cel-lens-core check` reads the CRDs among the files and folders it checks, so
   name the CRD's file or folder too. When a CRD is added, edited, closed or
-  deleted, the open policies are checked again without restarting the server;
+  deleted (a deleted or renamed folder too: every CRD file below it is
+  forgotten), the open policies are checked again without restarting the server;
   for files that change on disk, the editor must send
   `workspace/didChangeWatchedFiles`, which the server asks for when the client
   allows it. These events are followed only while `crd-typed-policies` is on,

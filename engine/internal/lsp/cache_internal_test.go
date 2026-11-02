@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -13,6 +14,7 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -231,5 +233,209 @@ func TestCodeActionAfterCancelledPublish(t *testing.T) {
 	}
 	if got := codeActions(t, ss); len(got) == 0 || checks != 2 {
 		t.Errorf("codeAction after a cancelled publish = %d actions, %d checks, want fixes and 2 checks", len(got), checks)
+	}
+}
+
+// TestScanDoesNotBlockSession checks that a request sent while the workspace
+// scan runs is answered before the scan ends, that the open documents are
+// checked again when it ends, and that cancelling the session stops the scan.
+func TestScanDoesNotBlockSession(t *testing.T) {
+	t.Parallel()
+	const crd = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: g\n  names: {kind: K}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema: {type: object}\n"
+	for _, tc := range []struct {
+		name    string
+		release bool // let the scan end instead of cancelling the session
+	}{
+		{"scan ends", true},
+		{"session cancelled", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			started, release := make(chan struct{}), make(chan struct{})
+			serverIn, clientOut := io.Pipe()
+			clientIn, serverOut := io.Pipe()
+			ss := newSession(t)
+			ss.conn = jsonrpc.NewConn(serverIn, serverOut)
+			ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) {
+				close(started)
+				select {
+				case <-release:
+					dst.Set(ctx, "file:///ws/crd.yaml", []byte(crd))
+				case <-ctx.Done():
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			served := make(chan error, 1)
+			go func() { served <- ss.serve(ctx, serverIn) }()
+			t.Cleanup(func() { _ = clientOut.Close(); _ = serverOut.Close() })
+
+			c := jsonrpc.NewConn(clientIn, clientOut)
+			if err := c.Request("1", "initialize", map[string]any{
+				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+				"workspaceFolders":      []map[string]any{{"uri": "file:///ws"}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			readMessage(t, c) // the initialize result
+			<-started
+			if err := c.Notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": cacheURI, "version": 1, "text": widget(t)}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Request("2", "textDocument/hover", map[string]any{"textDocument": map[string]any{"uri": cacheURI}, "position": map[string]any{}}); err != nil {
+				t.Fatal(err)
+			}
+			// The hover is answered while the scan is blocked, after the
+			// diagnostics of the open document.
+			readUntil(t, c, func(m jsonrpc.Message) bool { return string(m.ID) == `"2"` })
+			if !tc.release {
+				cancel()
+				if err := <-served; !errors.Is(err, context.Canceled) {
+					t.Errorf("serve = %v, want context.Canceled", err)
+				}
+				return
+			}
+			close(release)
+			// The scan found a CRD, so the open document is checked again.
+			readUntil(t, c, func(m jsonrpc.Message) bool { return m.Method == "textDocument/publishDiagnostics" })
+		})
+	}
+}
+
+func readMessage(t *testing.T, c *jsonrpc.Conn) jsonrpc.Message {
+	t.Helper()
+	m, err := c.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// readUntil reads messages until one satisfies match.
+func readUntil(t *testing.T, c *jsonrpc.Conn, match func(jsonrpc.Message) bool) {
+	t.Helper()
+	for {
+		if match(readMessage(t, c)) {
+			return
+		}
+	}
+}
+
+const scanCRD = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: g\n  names: {kind: K}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema: {type: object}\n"
+
+// TestScanSkipsFilesChangedDuringScan checks that a CRD file deleted or
+// edited while the scan ran is not brought back by the scan's result.
+func TestScanSkipsFilesChangedDuringScan(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		typ  int
+	}{
+		{"deleted", fileDeleted},
+		{"edited", fileChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "crd.yaml")
+			if err := os.WriteFile(path, []byte("kind: ConfigMap\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ss := newSession(t)
+			ss.features = feature.Of(feature.CRDTypedPolicies)
+			release := make(chan struct{})
+			ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) {
+				<-release
+				dst.Set(ctx, path, []byte(scanCRD))
+			}
+			ss.startScan(context.Background())
+			params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": "file://" + path, "type": tc.typ}}})
+			if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			found := <-ss.scan.done
+			ss.scan = nil
+			if err := ss.finishScan(context.Background(), found); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
+				t.Error("Schema(g/v1, K) after the file changed during the scan = found, want not found")
+			}
+		})
+	}
+}
+
+// TestRescanRefreshesEditedCRD checks that a second scan replaces the schema
+// an earlier scan recorded for a file edited on disk in between, and that an
+// open document keeps the text of the editor.
+func TestRescanRefreshesEditedCRD(t *testing.T) {
+	t.Parallel()
+	const edited = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: g\n  names: {kind: K2}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema: {type: object}\n"
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	disk := scanCRD
+	ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) {
+		dst.Set(ctx, "/ws/crd.yaml", []byte(disk))
+		dst.Set(ctx, "/ws/open.yaml", []byte(disk))
+	}
+	ctx := context.Background()
+	ss.docs["file:///ws/open.yaml"] = &document{text: []byte(scanCRD), crds: &ss.crds}
+	ss.crds.Set(ctx, "/ws/open.yaml", []byte(scanCRD))
+	for range 2 {
+		ss.startScan(ctx)
+		found := <-ss.scan.done
+		ss.scan = nil
+		if err := ss.finishScan(ctx, found); err != nil {
+			t.Fatal(err)
+		}
+		disk = edited
+	}
+	if _, ok := ss.crds.Schema("g/v1", "K2"); !ok {
+		t.Error("Schema(g/v1, K2) after the rescan = not found, want the edited file")
+	}
+	if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
+		t.Error("Schema(g/v1, K) after the rescan = not found, want the open document's text")
+	}
+}
+
+// TestFinishScanAfterFeatureOff checks that a scan ending after the feature
+// was turned off does not check the open documents again.
+func TestFinishScanAfterFeatureOff(t *testing.T) {
+	t.Parallel()
+	ss := newSession(t)
+	var found check.CRDs
+	found.Set(context.Background(), "/ws/crd.yaml", []byte(scanCRD))
+	if err := ss.finishScan(context.Background(), &found); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
+		t.Error("Schema(g/v1, K) = not found, want the scan's CRD recorded")
+	}
+}
+
+// TestShutdownStopsScan checks that the shutdown request cancels the scan and
+// waits for it, so nothing runs or publishes after shutdown.
+func TestShutdownStopsScan(t *testing.T) {
+	t.Parallel()
+	started, stopped := make(chan struct{}), make(chan struct{})
+	ss := newSession(t)
+	ss.init = true
+	ss.scanner = func(ctx context.Context, _ []string, _ *check.CRDs) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+	}
+	ss.startScan(context.Background())
+	<-started
+	if err := ss.handle(context.Background(), jsonrpc.Message{ID: json.RawMessage(`1`), Method: "shutdown"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Error("scan still running after shutdown, want it stopped")
+	}
+	if ss.scan != nil {
+		t.Error("session keeps the scan after shutdown, want none")
 	}
 }

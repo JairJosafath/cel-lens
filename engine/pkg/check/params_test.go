@@ -250,3 +250,70 @@ func TestCRDsSet(t *testing.T) {
 		t.Error("nil set has Widget")
 	}
 }
+
+func TestCRDsFill(t *testing.T) {
+	t.Parallel()
+	const crd = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: g\n  names: {kind: K}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema: {type: object}\n"
+	ctx := context.Background()
+	var from check.CRDs
+	from.Set(ctx, "a.yaml", []byte(crd))
+	const stale = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: g\n  names: {kind: Old}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema: {type: object}\n"
+	for _, tc := range []struct {
+		name  string
+		setup func(c *check.CRDs)
+		from  *check.CRDs
+		added bool
+	}{
+		{"empty set", func(*check.CRDs) {}, &from, true},
+		{"nil from", func(*check.CRDs) {}, nil, false},
+		{"file already set the same", func(c *check.CRDs) { c.Set(ctx, "a.yaml", []byte(crd)) }, &from, false},
+		{"file set to an older schema", func(c *check.CRDs) { c.Set(ctx, "a.yaml", []byte(stale)) }, &from, true},
+		{"file kept while tracking", func(c *check.CRDs) { c.Set(ctx, "a.yaml", []byte(stale)); c.Track(); c.Keep("a.yaml") }, &from, false},
+		{"file forgotten while tracking", func(c *check.CRDs) { c.Track(); c.Forget("a.yaml") }, &from, false},
+		{"tracking ended", func(c *check.CRDs) { c.Track(); c.Forget("a.yaml"); c.Untrack() }, &from, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var c check.CRDs
+			tc.setup(&c)
+			if got := c.Fill(tc.from); got != tc.added {
+				t.Errorf("Fill = %v, want %v", got, tc.added)
+			}
+			if tc.name == "file set to an older schema" {
+				if _, ok := c.Schema("g/v1", "K"); !ok {
+					t.Error("Schema(g/v1, K) after Fill = not found, want the new schema")
+				}
+			}
+		})
+	}
+}
+
+func TestCRDsForgetUnder(t *testing.T) {
+	t.Parallel()
+	keep := func(f string) bool { return f == "/ws/crds/open.yaml" }
+	for _, dir := range []string{"/ws/crds/", "/ws/crds"} {
+		t.Run(dir, func(t *testing.T) {
+			t.Parallel()
+			var c check.CRDs
+			for _, f := range []string{"/ws/crds/a.yaml", "/ws/crds/deep/b.yaml", "/ws/crds/open.yaml", "/ws/crds-old/x.yaml"} {
+				c.Set(context.Background(), f, []byte(widgetCRD))
+			}
+			if !c.ForgetUnder(dir, keep) {
+				t.Errorf("ForgetUnder(%q) = false, want true", dir)
+			}
+			if c.ForgetUnder(dir, keep) {
+				t.Errorf("ForgetUnder(%q) again = true, want false", dir)
+			}
+			for _, f := range []string{"/ws/crds/a.yaml", "/ws/crds/deep/b.yaml"} {
+				if c.Forget(f) {
+					t.Errorf("%s was still recorded after ForgetUnder(%q)", f, dir)
+				}
+			}
+			for _, f := range []string{"/ws/crds/open.yaml", "/ws/crds-old/x.yaml"} {
+				if !c.Forget(f) {
+					t.Errorf("%s was forgotten by ForgetUnder(%q), want kept (kept file or sibling folder)", f, dir)
+				}
+			}
+		})
+	}
+}

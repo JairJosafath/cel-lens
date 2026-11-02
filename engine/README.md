@@ -113,7 +113,7 @@ Experimental:
 | Name | What it does | Why it is experimental |
 |---|---|---|
 | `kyverno` | Checks, hover and completion for Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`). Off, these documents are parsed but get no diagnostic, hover or completion | Compiled with Kyverno's compiler but never run against Kyverno's engine; `namespaceObject` is still `dyn` in hover; only `ValidatingPolicy` is read |
-| `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off | A CRD in a neighbouring `---` document of the same file still types it (`docs/type-sources.md`). The workspace scan runs only while the feature is on: at `initialize`, or when `didChangeConfiguration` turns it on, and it blocks the session until it ends |
+| `crd-typed-policies` | Types `params` of a custom resource from a CustomResourceDefinition found in the workspace. Off, it is `dyn` and hover says the feature is off | A CRD in a neighbouring `---` document of the same file still types it (`docs/type-sources.md`). The workspace scan runs only while the feature is on: at `initialize`, or when `didChangeConfiguration` turns it on, and it runs in the background, so the session stays responsive; the open documents are checked again when it ends |
 | `fitting-completion` | After a dot completion offers only what the receiver has, before a dot only the names of this kind of document, and hover says why a value is `dyn`. Off, completion and hover behave as in v0.17.1 | Built after v0.17.1 and not yet proven on real use |
 
 How the types of `object`, `params` and the policy variables are found is in

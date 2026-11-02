@@ -274,6 +274,55 @@ func TestChangelogProblemsMiddleTag(t *testing.T) {
 	}
 }
 
+// missingPublicTags returns the core tags in the output of git ls-remote --tags that
+// the list lacks, in order.
+func missingPublicTags(lsRemote string, listed []string) []string {
+	var missing []string
+	for line := range strings.SplitSeq(lsRemote, "\n") {
+		_, ref, ok := strings.Cut(strings.TrimSpace(line), "\trefs/tags/")
+		if !ok || !strings.HasPrefix(ref, "core-v") || strings.HasSuffix(ref, "^{}") {
+			continue
+		}
+		if !slices.Contains(listed, ref) && !slices.Contains(missing, ref) {
+			missing = append(missing, ref)
+		}
+	}
+	return missing
+}
+
+// TestMissingPublicTags checks that missingPublicTags names each core tag the list lacks
+// and ignores listed tags, other tags and peeled refs.
+func TestMissingPublicTags(t *testing.T) {
+	t.Parallel()
+	out := "aaa\trefs/tags/core-v0.21.0\nbbb\trefs/tags/core-v0.21.1\nccc\trefs/tags/core-v0.22.0\n" +
+		"ddd\trefs/tags/core-v0.22.0^{}\neee\trefs/tags/vscode/v0.25.0\n"
+	got := missingPublicTags(out, []string{"core-v0.21.0"})
+	if want := []string{"core-v0.21.1", "core-v0.22.0"}; !slices.Equal(got, want) {
+		t.Errorf("missingPublicTags(...) = %q, want %q", got, want)
+	}
+}
+
+// TestPublicTagsListed fails naming each core-v tag of the public repository that
+// testdata/public-core-tags.txt lacks. It skips when github.com can't be reached, so an
+// offline go test ./... still passes; release steps run it on a networked runner before a
+// release is prepared (see docs/project-notes.md).
+func TestPublicTagsListed(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(publicTagsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "ls-remote", "--tags", changelogRepo).Output()
+	if err != nil {
+		t.Skipf("github.com can't be reached, so the public tags are not compared: %v", err)
+	}
+	for _, tag := range missingPublicTags(string(out), publicTags(string(data))) {
+		t.Errorf("%s is a tag of %s but %s lacks it; add it, then link its version in CHANGELOG.md", tag, changelogRepo, publicTagsFile)
+	}
+}
+
 // publicTagsFile lists the core tags that are on the public repository.
 const publicTagsFile = "testdata/public-core-tags.txt"
 

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
@@ -24,8 +25,13 @@ const (
 	registerWatchersID = "cel-lens-watch-yaml"
 )
 
-// File change types of workspace/didChangeWatchedFiles.
-const fileDeleted = 3
+// File change types of workspace/didChangeWatchedFiles, and the watch kind
+// that selects deletions.
+const (
+	fileChanged = 2
+	fileDeleted = 3
+	watchDelete = 4
+)
 
 var windowsDrive = regexp.MustCompile(`^/[A-Za-z]:`)
 
@@ -86,11 +92,67 @@ func (p initializeParams) folders() []string {
 	return out
 }
 
-// scanWorkspace reads the YAML files below the workspace folders into the
-// session's CRDs, skipping hidden folders and node_modules, files over
+// scan is a workspace scan running in its own goroutine.
+type scan struct {
+	cancel context.CancelFunc
+	// done delivers the CRDs found, once, when the goroutine ends.
+	done chan *check.CRDs
+}
+
+// startScan scans the workspace folders in a goroutine, unless a scan is
+// already running. The message loop receives its result on ss.scan.done, and
+// stopScan stops it.
+func (ss *session) startScan(ctx context.Context) {
+	if ss.scan != nil {
+		return
+	}
+	run := scanWorkspace
+	if ss.scanner != nil {
+		run = ss.scanner
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	sc := &scan{cancel: cancel, done: make(chan *check.CRDs, 1)}
+	ss.scan = sc
+	ss.crds.Track()
+	for uri := range ss.docs {
+		ss.crds.Keep(crdKey(uri))
+	}
+	folders := slices.Clone(ss.folders)
+	go func() {
+		var found check.CRDs
+		run(ctx, folders, &found)
+		sc.done <- &found
+	}()
+}
+
+// stopScan cancels the scan in progress and waits for it to end.
+func (ss *session) stopScan() {
+	if ss.scan == nil {
+		return
+	}
+	ss.scan.cancel()
+	<-ss.scan.done
+	ss.scan = nil
+	ss.crds.Untrack()
+}
+
+// finishScan records the CRDs the scan found, replacing those it had for the
+// same files, except those of open documents and of files that changed during
+// the scan, which win, and checks the open documents again when that changed anything and
+// crd-typed-policies is still on. A file the session read, changed or forgot
+// during the scan is not taken from the scan.
+func (ss *session) finishScan(ctx context.Context, found *check.CRDs) error {
+	if ctx.Err() != nil || !ss.crds.Fill(found) || !ss.features.Has(feature.CRDTypedPolicies) {
+		return ctx.Err()
+	}
+	return ss.publishAll(ctx, "")
+}
+
+// scanWorkspace reads the YAML files below the workspace folders into dst,
+// skipping hidden folders and node_modules, files over
 // maxWorkspaceFileSize and files past maxWorkspaceFiles. A folder or file that
 // cannot be read is skipped. It stops when ctx is cancelled.
-func (ss *session) scanWorkspace(ctx context.Context, folders []string) {
+func scanWorkspace(ctx context.Context, folders []string, dst *check.CRDs) {
 	seen := 0
 	for _, dir := range folders {
 		root := os.DirFS(dir)
@@ -120,7 +182,7 @@ func (ss *session) scanWorkspace(ctx context.Context, folders []string) {
 			}
 			path := filepath.Join(dir, filepath.FromSlash(rel))
 			if data, err := os.ReadFile(path); err == nil {
-				ss.crds.Set(ctx, crdKey(pathURI(path)), data)
+				dst.Set(ctx, crdKey(pathURI(path)), data)
 			}
 			return nil
 		})
@@ -142,8 +204,10 @@ func pathURI(path string) string {
 }
 
 // registerWatchers asks the client, if it can, to send
-// workspace/didChangeWatchedFiles for YAML files, so CRDs that change on disk
-// without being open are followed.
+// workspace/didChangeWatchedFiles for YAML files, and for every deletion, so
+// CRDs that change on disk without being open are followed. A client reports a
+// removed folder as one event for the folder, which only a pattern that matches
+// folders sees.
 func (ss *session) registerWatchers() error {
 	if !ss.watchFiles {
 		return nil
@@ -153,7 +217,10 @@ func (ss *session) registerWatchers() error {
 			"id":     registerWatchersID,
 			"method": "workspace/didChangeWatchedFiles",
 			"registerOptions": map[string]any{
-				"watchers": []map[string]any{{"globPattern": "**/*.{yaml,yml}"}},
+				"watchers": []map[string]any{
+					{"globPattern": "**/*.{yaml,yml}"},
+					{"globPattern": "**", "kind": watchDelete},
+				},
 			},
 		}},
 	})
@@ -164,8 +231,8 @@ func (ss *session) registerWatchers() error {
 // is open keeps the text of the editor. While crd-typed-policies is off it reads
 // nothing and publishes nothing: the CRDs are not used, and turning the feature
 // on scans the whole workspace, which finds what changed meanwhile. It still
-// forgets deleted files, a cheap step, so the scan never sees a CRD whose file
-// is gone.
+// forgets deleted files and every file below a deleted folder, a cheap step, so
+// the scan never sees a CRD whose file is gone.
 func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMessage) error {
 	on := ss.features.Has(feature.CRDTypedPolicies)
 	var p struct {
@@ -179,12 +246,18 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 	}
 	changed := false
 	for _, c := range p.Changes {
-		if _, open := ss.docs[c.URI]; open || !isYAML(crdKey(c.URI)) {
+		if _, open := ss.docs[c.URI]; open {
 			continue
 		}
 		if c.Type == fileDeleted {
-			changed = ss.crds.Forget(crdKey(c.URI)) || changed
-		} else if on {
+			// A client sends one event for a removed folder, not one per file.
+			if _, file := diskPath(c.URI); file {
+				changed = ss.crds.ForgetUnder(crdKey(c.URI), ss.isOpenKey) || changed
+			}
+			if isYAML(crdKey(c.URI)) {
+				changed = ss.crds.Forget(crdKey(c.URI)) || changed
+			}
+		} else if on && isYAML(crdKey(c.URI)) {
 			changed = ss.readFromDisk(ctx, c.URI) || changed
 		}
 	}
@@ -192,6 +265,17 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		return nil
 	}
 	return ss.publishAll(ctx, "")
+}
+
+// isOpenKey reports whether the CRDs entry file is an open document, whose
+// text the editor owns.
+func (ss *session) isOpenKey(file string) bool {
+	for uri := range ss.docs {
+		if crdKey(uri) == file {
+			return true
+		}
+	}
+	return false
 }
 
 // readFromDisk records the CRDs of the file at uri as it is on disk, and

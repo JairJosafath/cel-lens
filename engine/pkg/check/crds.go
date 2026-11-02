@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
@@ -18,6 +19,8 @@ import (
 // not safe for concurrent use while it changes; Check only reads it.
 type CRDs struct {
 	files map[string][]crdKind
+	// touched are the files Set or Forget changed since Track, nil when not tracking.
+	touched map[string]bool
 }
 
 // crdKind is one version of one custom resource kind.
@@ -33,6 +36,9 @@ type crdKind struct {
 // CustomResourceDefinition, forgets the file. It reports whether the schemas of
 // the set changed. A cancelled ctx leaves the set as it was and reports false.
 func (c *CRDs) Set(ctx context.Context, file string, data []byte) bool {
+	if c.touched != nil {
+		c.touched[file] = true
+	}
 	var found []crdKind
 	if bytes.Contains(data, []byte("CustomResourceDefinition")) {
 		docs, _, err := extract.Documents(ctx, file, data)
@@ -60,12 +66,74 @@ func (c *CRDs) Set(ctx context.Context, file string, data []byte) bool {
 	return true
 }
 
+// Track starts recording the files that Set, Forget or Keep touch, until Fill
+// or Untrack. Fill skips them, so a file that changed or went away while from
+// was being read is not brought back.
+func (c *CRDs) Track() {
+	c.touched = map[string]bool{}
+}
+
+// Keep marks file as touched for the tracking Track started, so Fill leaves
+// what c has for it, such as the text of an open document. It does nothing
+// when not tracking.
+func (c *CRDs) Keep(file string) {
+	if c.touched != nil {
+		c.touched[file] = true
+	}
+}
+
+// Untrack stops the recording Track started, without a Fill.
+func (c *CRDs) Untrack() {
+	c.touched = nil
+}
+
+// Fill records the files of from that c did not touch since Track, replacing
+// what c has for them, ends the tracking, and reports whether that changed
+// the schemas of c. A file Set, Forgotten or Kept after Track wins over from.
+// A nil from changes nothing.
+func (c *CRDs) Fill(from *CRDs) bool {
+	touched := c.touched
+	c.touched = nil
+	if from == nil {
+		return false
+	}
+	added := false
+	for f, kinds := range from.files {
+		if touched[f] || reflect.DeepEqual(c.files[f], kinds) {
+			continue
+		}
+		if c.files == nil {
+			c.files = map[string][]crdKind{}
+		}
+		c.files[f] = kinds
+		added = true
+	}
+	return added
+}
+
 // Forget drops what the set recorded for file. It reports whether the schemas
 // of the set changed.
 func (c *CRDs) Forget(file string) bool {
+	if c.touched != nil {
+		c.touched[file] = true
+	}
 	_, had := c.files[file]
 	delete(c.files, file)
 	return had
+}
+
+// ForgetUnder drops what the set recorded for every file whose name is below
+// dir, a slash-separated path, except those for which keep reports true. It
+// reports whether the schemas of the set changed.
+func (c *CRDs) ForgetUnder(dir string, keep func(file string) bool) bool {
+	prefix := strings.TrimSuffix(dir, "/") + "/"
+	changed := false
+	for file := range c.files {
+		if strings.HasPrefix(file, prefix) && !keep(file) {
+			changed = c.Forget(file) || changed
+		}
+	}
+	return changed
 }
 
 // Schema returns the OpenAPI schema, as YAML decodes it, of the custom

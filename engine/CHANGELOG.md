@@ -9,6 +9,19 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-02
+
+### Changed
+
+- The workspace scan for CRDs that `crd-typed-policies` starts runs in the background, so the language server answers requests while it runs, and checks the open documents again when it ends.
+- A test runs `check` on the embedded CRD and pins the README's sample output.
+- A test derives the README's Kubernetes version range from `pkg/kubeversion`, so the two cannot differ.
+
+### Fixed
+
+- The link of version 0.21.1 is back in this file, and 0.22.0 compares from it, so each compare link opens on the public repository.
+- Deleting or renaming a folder makes the language server forget the CRDs read from files below it, so a policy no longer keeps a warning from a CRD that is gone. The server now also asks the client to report deletions of folders.
+
 ## [0.22.0] - 2026-10-31
 
 ### Changed
@@ -443,8 +456,10 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.22.0...HEAD
-[0.22.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.0...core-v0.22.0
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.23.0...HEAD
+[0.23.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.22.0...core-v0.23.0
+[0.22.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.1...core-v0.22.0
+[0.21.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.0...core-v0.21.1
 [0.21.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.20.1...core-v0.21.0
 [0.20.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.20.0...core-v0.20.1
 [0.20.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.19.0...core-v0.20.0

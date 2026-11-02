@@ -58,12 +58,16 @@ type session struct {
 	// crd-typed-policies is on.
 	folders []string
 	// checker finds the problems of a document; nil means check.Check.
-	checker  func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Diagnostic, error)
+	checker func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Diagnostic, error)
+	// scanner reads the CRDs of the folders into dst; nil means scanWorkspace.
+	scanner func(ctx context.Context, folders []string, dst *check.CRDs)
+	// scan is the workspace scan in progress, nil when there is none.
+	scan     *scan
 	init     bool
 	shutdown bool
 }
 
-// document is an open file. The server is single-threaded, so the cached
+// document is an open file. Only the message loop uses it, so the cached
 // fields need no lock.
 type document struct {
 	version int
@@ -138,13 +142,29 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 		return err
 	}
 	ss := &session{conn: jsonrpc.NewConn(in, out), assist: a, kube: kubeversion.Default(), version: s.Version, docs: map[string]*document{}}
+	return ss.serve(ctx, in)
+}
+
+// serve is the message loop of Serve.
+func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	msgs, stop := readMessages(ss.conn, in)
 	defer stop()
+	defer ss.stopScan()
 	for {
 		var r readResult
+		var scanned <-chan *check.CRDs
+		if ss.scan != nil {
+			scanned = ss.scan.done
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case found := <-scanned:
+			ss.scan = nil
+			if err := ss.finishScan(ctx, found); err != nil {
+				return err
+			}
+			continue
 		case r = <-msgs:
 		}
 		if ctx.Err() != nil {
@@ -234,6 +254,7 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		return reply(nil, &rpcError{jsonrpc.CodeNotInitialized, "the server is not initialized"})
 	case msg.Method == "shutdown":
 		ss.shutdown = true
+		ss.stopScan()
 		return reply(nil, nil)
 	case ss.shutdown:
 		return reply(nil, &rpcError{jsonrpc.CodeInvalidRequest, "the server is shut down"})
@@ -292,7 +313,7 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
 	ss.folders = p.folders()
 	if ss.features.Has(feature.CRDTypedPolicies) {
-		ss.scanWorkspace(ctx, ss.folders)
+		ss.startScan(ctx)
 	}
 	return ss.warn(problems)
 }
@@ -371,7 +392,8 @@ func (ss *session) warn(problems []message) error {
 
 // didChangeConfiguration applies a new kubernetesVersion and experimental list
 // and checks the open documents again when either changed. Turning on
-// crd-typed-policies scans the workspace for CRDs first.
+// crd-typed-policies starts a scan of the workspace for CRDs in the
+// background; the open documents are checked again when it ends.
 func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		Settings *kubeOptions `json:"settings"`
@@ -385,7 +407,7 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 		return err
 	}
 	if !wasOn && ss.features.Has(feature.CRDTypedPolicies) {
-		ss.scanWorkspace(ctx, ss.folders)
+		ss.startScan(ctx)
 	}
 	if err := ss.warn(problems); err != nil || !changed {
 		return err

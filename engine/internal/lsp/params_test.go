@@ -167,7 +167,12 @@ func TestParamsFromWorkspaceCRD(t *testing.T) {
 	initializeIn(t, c, dir, map[string]any{})
 	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
 	c.openURI(policyURI, policy)
+	// The workspace scan runs in the background: the first check may come
+	// before it ends, and the check when it ends follows.
 	diags := c.nextDiagnostics()
+	for len(diags) == 0 {
+		diags = c.nextDiagnostics()
+	}
 	if len(diags) != 1 || diags[0].Severity != 2 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplica'" {
 		t.Fatalf("diagnostics = %+v, want one warning: apps/v1 Deployment: undefined field 'maxReplica'", diags)
 	}
@@ -241,6 +246,9 @@ func TestEnablingFeatureScansAndRechecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	enableCRDTypedPolicies(c)
+	// The change of setting re-checks the documents at once; the scan, which
+	// runs in the background, re-checks them again when it ends.
+	c.nextDiagnostics()
 	diags := c.nextDiagnostics()
 	if len(diags) != 1 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplica'" {
 		t.Errorf("diagnostics after turning the feature on = %+v, want the warning from the CRD written after initialize", diags)
@@ -336,8 +344,8 @@ func TestWatchersRegistered(t *testing.T) {
 		if m.Method != "client/registerCapability" {
 			continue
 		}
-		if !strings.Contains(string(m.Params), "workspace/didChangeWatchedFiles") || !strings.Contains(string(m.Params), "**/*.{yaml,yml}") {
-			t.Errorf("registerCapability params = %s, want watchers for YAML files", m.Params)
+		if !strings.Contains(string(m.Params), "workspace/didChangeWatchedFiles") || !strings.Contains(string(m.Params), "**/*.{yaml,yml}") || !strings.Contains(string(m.Params), `"globPattern":"**","kind":4`) {
+			t.Errorf("registerCapability params = %s, want watchers for YAML files and for deletions of anything", m.Params)
 		}
 		return
 	}
@@ -369,6 +377,9 @@ func TestWatchedFilesIgnoredWhileFeatureOff(t *testing.T) {
 		t.Fatalf("diagnostics after the edit was undone = %+v, want none", diags)
 	}
 	enableCRDTypedPolicies(c)
+	// The change of setting re-checks the documents at once; the scan, which
+	// runs in the background, re-checks them again when it ends.
+	c.nextDiagnostics()
 	diags := c.nextDiagnostics()
 	if len(diags) != 1 || diags[0].Message != "apps/v1 Deployment: undefined field 'maxReplica'" {
 		t.Errorf("diagnostics after turning the feature on = %+v, want the warning from the CRD written while it was off", diags)
@@ -389,6 +400,9 @@ func TestDeletedCRDForgottenWhileFeatureOff(t *testing.T) {
 		t.Fatalf("diagnostics with crd-typed-policies off = %+v, want none", diags)
 	}
 	enableCRDTypedPolicies(c)
+	// The change of setting re-checks the documents at once; the scan, which
+	// runs in the background, re-checks them again when it ends.
+	c.nextDiagnostics()
 	if diags := c.nextDiagnostics(); len(diags) != 1 {
 		t.Fatalf("diagnostics with the feature on = %+v, want the warning", diags)
 	}
@@ -403,5 +417,68 @@ func TestDeletedCRDForgottenWhileFeatureOff(t *testing.T) {
 	enableCRDTypedPolicies(c)
 	if diags := c.nextDiagnostics(); len(diags) != 0 {
 		t.Errorf("diagnostics after turning the feature on = %+v, want none: the CRD file was deleted", diags)
+	}
+}
+
+func TestDeletedFolderForgetsItsCRDs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "crds")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "crd.yaml"), []byte(widgetCRDText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := scanSession(t, dir)
+	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
+	c.openURI(policyURI, policy)
+	c.nextDiagnostics()
+	enableCRDTypedPolicies(c)
+	// The change of setting re-checks the documents at once; the scan, which
+	// runs in the background, re-checks them again when it ends.
+	c.nextDiagnostics()
+	if diags := c.nextDiagnostics(); len(diags) != 1 {
+		t.Fatalf("diagnostics with the CRD = %+v, want the warning", diags)
+	}
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	c.notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{{"uri": "file://" + filepath.ToSlash(sub), "type": 3}}})
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Errorf("diagnostics after the folder was deleted = %+v, want none", diags)
+	}
+}
+
+func TestDeletedFolderForgottenWhileFeatureOff(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "crds")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "crd.yaml"), []byte(widgetCRDText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := scanSession(t, dir)
+	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
+	c.openURI(policyURI, policy)
+	c.nextDiagnostics()
+	enableCRDTypedPolicies(c)
+	c.nextDiagnostics()
+	if diags := c.nextDiagnostics(); len(diags) != 1 {
+		t.Fatalf("diagnostics with the feature on = %+v, want the warning", diags)
+	}
+	c.notify("workspace/didChangeConfiguration", map[string]any{"settings": map[string]any{"experimental": []string{}}})
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Fatalf("diagnostics after turning the feature off = %+v, want none", diags)
+	}
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	c.notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{{"uri": "file://" + filepath.ToSlash(sub), "type": 3}}})
+	enableCRDTypedPolicies(c)
+	if diags := c.nextDiagnostics(); len(diags) != 0 {
+		t.Errorf("diagnostics after turning the feature on = %+v, want none: the folder was deleted", diags)
 	}
 }
