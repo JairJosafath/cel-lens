@@ -6,6 +6,17 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.27.3] - 2026-11-02
+
+### Changed
+
+- The picture script guards its waits against a zero timeout at the source.
+
+### Fixed
+
+- A test checks that every hold name in `take.ts` resolves to an import from `src/gif_plans.ts`.
+- `experimentalReasons` and `descriptionReason` are unit-tested in `experimental_table.test.ts`.
+
 ## [0.27.2] - 2026-11-02
 
 ### Changed
@@ -553,7 +564,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.2...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.3...HEAD
+[0.27.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.2...vscode-v0.27.3
 [0.27.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.1...vscode-v0.27.2
 [0.27.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.0...vscode-v0.27.1
 [0.27.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.26.0...vscode-v0.27.0

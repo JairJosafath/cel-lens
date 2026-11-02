@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { compareExperimentalRows, experimentalRows } from './experimental_table';
+import {
+  compareExperimentalRows,
+  descriptionReason,
+  experimentalReasons,
+  experimentalRows,
+} from './experimental_table';
 
 const README = [
   '## Features',
@@ -30,6 +35,30 @@ describe('experimentalRows', () => {
       ['alpha', 'Does a'],
       ['beta', 'Does b'],
     ]);
+  });
+});
+
+describe('experimentalReasons', () => {
+  it('reads the third cell of each Experimental row and nothing from other sections', () => {
+    expect([...experimentalReasons(README)]).toEqual([
+      ['alpha', 'because'],
+      ['beta', 'later'],
+    ]);
+  });
+});
+
+describe('descriptionReason', () => {
+  it.each([
+    ['a description without the marker', 'Gives typed variables', undefined],
+    ['an empty description', '', undefined],
+    [
+      'the marker with a reason',
+      'It is experimental because the scan is slow.',
+      'the scan is slow.',
+    ],
+    ['the marker after other text', 'Types. It is experimental because x', 'x'],
+  ])('reads %s', (_label, description, expected) => {
+    expect(descriptionReason(description)).toBe(expected);
   });
 });
 

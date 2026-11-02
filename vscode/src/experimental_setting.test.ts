@@ -106,21 +106,23 @@ describe('the cel-lens.experimental setting against the README', () => {
     [
       'the v0.27.0 crd-typed-policies wording',
       "the workspace scan blocks the engine's start while it runs.",
+      'The workspace scan runs only while the feature is on, at initialize or when the setting turns it on',
       false,
     ],
     [
       'the README wording',
       'The workspace scan runs only while the feature is on, at initialize or when the setting turns it on',
+      'The workspace scan runs only while the feature is on, at initialize or when the setting turns it on',
       true,
     ],
-    ['case, backticks and a final period', 'only `ValidatingPolicy` is read.', true],
-  ])('compares reasons: %s', (_label, description, expected) => {
-    expect(
-      sameReason(
-        description,
-        'The workspace scan runs only while the feature is on, at initialize or when the setting turns it on',
-      ) || sameReason(description, 'Only ValidatingPolicy is read'),
-    ).toBe(expected);
+    [
+      'case, backticks and a final period',
+      'only `ValidatingPolicy` is read.',
+      'Only ValidatingPolicy is read',
+      true,
+    ],
+  ])('compares reasons: %s', (_label, description, row, expected) => {
+    expect(sameReason(description, row)).toBe(expected);
   });
 
   it.each([

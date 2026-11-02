@@ -349,7 +349,8 @@ function firstMessageLine(error: unknown): string {
 
 /**
  * Runs `action` with a `timeout` in ms; when it fails, throws an error that names `description`,
- * the state waited for, and keeps Playwright's first-line reason. Every wait and action of the
+ * the state waited for, and keeps Playwright's first-line reason; it rejects a `timeout` of 0 or
+ * less before calling Playwright, which reads 0 as no timeout. Every wait and action of the
  * script goes through here.
  */
 async function withTimeout<T>(
@@ -357,6 +358,10 @@ async function withTimeout<T>(
   timeout: number,
   action: (timeout: number) => Promise<T>,
 ): Promise<T> {
+  // A timeout of 0 means no timeout in Playwright, so a spent deadline never reaches it.
+  if (timeout <= 0) {
+    throw new Error(`Gave up waiting for ${description}: no time was left (${String(timeout)} ms)`);
+  }
   try {
     return await action(timeout);
   } catch (error) {

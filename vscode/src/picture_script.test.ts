@@ -40,7 +40,108 @@ function inlineHolds(source: string): string[] {
   return found;
 }
 
+/** The names `source` imports from `../../src/gif_plans.ts`. */
+function plannedNames(file: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const statement of file.statements) {
+    if (
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text === '../../src/gif_plans.ts' &&
+      statement.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      for (const element of statement.importClause.namedBindings.elements) {
+        names.add(element.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+/** The name at the root of an identifier or a property access, or undefined for any other expression. */
+function rootName(expression: ts.Expression): string | undefined {
+  if (ts.isIdentifier(expression)) {
+    return expression.text;
+  }
+  return ts.isPropertyAccessExpression(expression) ? rootName(expression.expression) : undefined;
+}
+
+/** Whether `name` is a parameter of a function around `node`, which its callers must then fill from gif_plans. */
+function isEnclosingParameter(node: ts.Node, name: string): boolean {
+  return (
+    ts.findAncestor(
+      node,
+      (ancestor) =>
+        ts.isFunctionLike(ancestor) &&
+        ancestor.parameters.some((parameter) => parameter.name.getText() === name),
+    ) !== undefined
+  );
+}
+
+/** The hold names of `holdFrame` and `typeText` calls that are neither imported from gif_plans nor a parameter. */
+function unplannedHolds(source: string): string[] {
+  const file = ts.createSourceFile('take.ts', source, ts.ScriptTarget.Latest, true);
+  const planned = plannedNames(file);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const argument = node.arguments[HOLD_ARGUMENT.get(node.expression.text) ?? -1];
+      const name = argument === undefined ? undefined : rootName(argument);
+      if (name !== undefined && !planned.has(name) && !isEnclosingParameter(node, name)) {
+        found.push(name);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+/** The `Math.max(…, 0)` calls in the source: a floor of 0 turns a spent deadline into "no timeout" in Playwright. */
+function zeroFloors(source: string): string[] {
+  const file = ts.createSourceFile('take.ts', source, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(file) === 'Math.max' &&
+      node.arguments.some((argument) => argument.getText(file) === '0')
+    ) {
+      found.push(node.getText(file));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
 describe('the picture script', () => {
+  it.each([
+    [
+      'a floored timeout in waitForFunction',
+      'page.waitForFunction(e, undefined, { timeout: Math.max(deadline - now(), 0) });',
+    ],
+    [
+      'a floored timeout in waitForState',
+      'await waitForState(locator, "x", "visible", Math.max(0, left));',
+    ],
+  ])('finds %s', (_name, source) => {
+    expect(zeroFloors(source)).toHaveLength(1);
+  });
+
+  it('passes no Math.max(…, 0) value as a Playwright timeout', () => {
+    expect(zeroFloors(SOURCE)).toEqual([]);
+  });
+
+  it('rejects a timeout of 0 or less in withTimeout before calling Playwright', () => {
+    const start = SOURCE.indexOf('async function withTimeout');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    const guard = body.indexOf('timeout <= 0');
+    expect(guard).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(body.indexOf('action(timeout)'));
+  });
+
   it.each([
     ['holdFrame(recording, 400)', 1],
     ['holdFrame(recording, 1_000)', 1],
@@ -59,6 +160,25 @@ describe('the picture script', () => {
 
   it('takes every hold from src/gif_plans.ts, never from a number in the script', () => {
     expect(inlineHolds(SOURCE)).toEqual([]);
+  });
+
+  it.each([
+    ["import { SLOW_MS } from '../../src/gif_plans.ts';\nholdFrame(recording, SLOW_MS);", 0],
+    ["import { HOLDS } from '../../src/gif_plans.ts';\nholdFrame(recording, HOLDS.start);", 0],
+    ['const SLOW = 500;\nholdFrame(recording, SLOW);', 1],
+    [
+      "import { A } from '../../src/gif_plans.ts';\nconst SLOW = 5;\ntypeText(page, recording, A, SLOW);",
+      1,
+    ],
+    ['const HOLDS = { a: 1 };\nholdFrame(recording, HOLDS.a);', 1],
+    ["import { SLOW } from './other.ts';\nholdFrame(recording, SLOW);", 1],
+    ['async function typeText(a, b, c, delay) {\n await holdFrame(b, delay);\n}', 0],
+  ])('finds the holds not from gif_plans in %j: %i', (source, count) => {
+    expect(unplannedHolds(source)).toHaveLength(count);
+  });
+
+  it('imports every hold name from src/gif_plans.ts, never declares one in the script', () => {
+    expect(unplannedHolds(SOURCE)).toEqual([]);
   });
 
   it('has no fixed pause outside the helper that paces the GIFs', () => {
