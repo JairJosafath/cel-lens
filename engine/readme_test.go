@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -126,4 +127,83 @@ func TestReadmeKubeVersions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// helpFlag is one flag of the flag package's usage listing.
+type helpFlag struct {
+	def    string
+	hasDef bool
+}
+
+var (
+	helpFlagLine = regexp.MustCompile(`^ {2}-(\S+)`)
+	helpDefault  = regexp.MustCompile(`\(default "([^"]*)"\)`)
+	helpExit     = regexp.MustCompile(`(?s)Exit (\d+):.*?interrupted\.`)
+	number       = regexp.MustCompile(`\d+`)
+)
+
+// TestReadmeCheckFlags compares the flag names and defaults of the README's
+// Flags table, and the exit codes of its exit-code paragraph, with the output
+// of the built binary's check --help.
+func TestReadmeCheckFlags(t *testing.T) {
+	data, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(data)
+
+	cmd := exec.CommandContext(t.Context(), buildBinary(t), "check", "--help") //nolint:gosec // bin is the binary make test built
+	out, _ := cmd.CombinedOutput()
+	help := string(out)
+
+	helpFlags := map[string]*helpFlag{}
+	var last *helpFlag
+	for line := range strings.SplitSeq(help, "\n") {
+		if m := helpFlagLine.FindStringSubmatch(line); m != nil {
+			last = &helpFlag{}
+			helpFlags[m[1]] = last
+		} else if m := helpDefault.FindStringSubmatch(line); m != nil && last != nil {
+			last.def, last.hasDef = m[1], true
+		}
+	}
+	if len(helpFlags) == 0 {
+		t.Fatalf("check --help lists no flags:\n%s", help)
+	}
+
+	rows := map[string]string{}
+	for line := range strings.SplitSeq(readme, "\n") {
+		if cell, _, ok := strings.Cut(strings.TrimPrefix(line, "| `--"), "`"); ok && strings.HasPrefix(line, "| `--") {
+			rows[strings.Fields(cell)[0]] = line
+		}
+	}
+
+	for flagName, f := range helpFlags {
+		t.Run("flag "+flagName, func(t *testing.T) {
+			row, ok := rows[flagName]
+			if !ok {
+				t.Fatalf("README.md Flags table has no row for --%s, which check --help lists", flagName)
+			}
+			if f.hasDef && f.def != "" && !strings.Contains(row, "the default is "+f.def) {
+				t.Errorf("README.md row of --%s = %q, want it to contain %q", flagName, row, "the default is "+f.def)
+			}
+		})
+	}
+	for flagName := range rows {
+		if _, ok := helpFlags[flagName]; !ok {
+			t.Errorf("README.md Flags table lists --%s, which check --help does not", flagName)
+		}
+	}
+
+	t.Run("exit codes", func(t *testing.T) {
+		m := helpExit.FindString(help)
+		_, para, ok := strings.Cut(readme, "\nExit code ")
+		if m == "" || !ok {
+			t.Fatalf("exit codes missing: help has %q, README.md has paragraph %v", m, ok)
+		}
+		para, _, _ = strings.Cut(para, "Results go to")
+		want := strings.Join(number.FindAllString(m, -1), ",")
+		if got := strings.Join(number.FindAllString(para, -1), ","); got != want {
+			t.Errorf("README.md exit codes = %s, check --help says %s", got, want)
+		}
+	})
 }

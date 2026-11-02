@@ -256,13 +256,14 @@ func TestScanDoesNotBlockSession(t *testing.T) {
 			clientIn, serverOut := io.Pipe()
 			ss := newSession(t)
 			ss.conn = jsonrpc.NewConn(serverIn, serverOut)
-			ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) {
+			ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) []message {
 				close(started)
 				select {
 				case <-release:
 					dst.Set(ctx, "file:///ws/crd.yaml", []byte(crd))
 				case <-ctx.Done():
 				}
+				return nil
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -343,9 +344,10 @@ func TestScanSkipsFilesChangedDuringScan(t *testing.T) {
 			ss := newSession(t)
 			ss.features = feature.Of(feature.CRDTypedPolicies)
 			release := make(chan struct{})
-			ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) {
+			ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) []message {
 				<-release
 				dst.Set(ctx, path, []byte(scanCRD))
+				return nil
 			}
 			ss.startScan(context.Background())
 			params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": "file://" + path, "type": tc.typ}}})
@@ -374,9 +376,10 @@ func TestRescanRefreshesEditedCRD(t *testing.T) {
 	ss := newSession(t)
 	ss.features = feature.Of(feature.CRDTypedPolicies)
 	disk := scanCRD
-	ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) {
+	ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) []message {
 		dst.Set(ctx, "/ws/crd.yaml", []byte(disk))
 		dst.Set(ctx, "/ws/open.yaml", []byte(disk))
+		return nil
 	}
 	ctx := context.Background()
 	ss.docs["file:///ws/open.yaml"] = &document{text: []byte(scanCRD), crds: &ss.crds}
@@ -420,10 +423,11 @@ func TestShutdownStopsScan(t *testing.T) {
 	started, stopped := make(chan struct{}), make(chan struct{})
 	ss := newSession(t)
 	ss.init = true
-	ss.scanner = func(ctx context.Context, _ []string, _ *check.CRDs) {
+	ss.scanner = func(ctx context.Context, _ []string, _ *check.CRDs) []message {
 		close(started)
 		<-ctx.Done()
 		close(stopped)
+		return nil
 	}
 	ss.startScan(context.Background())
 	<-started
@@ -437,5 +441,79 @@ func TestShutdownStopsScan(t *testing.T) {
 	}
 	if ss.scan != nil {
 		t.Error("session keeps the scan after shutdown, want none")
+	}
+}
+
+// TestRescanForgetsDeletedCRDFile checks that a rescan drops the CRD of a file
+// that left the scanned folder, and keeps a file outside the folders.
+// The cap case (a scan that leaves files out) is TestCRDsFillScanForgets.
+func TestRescanForgetsDeletedCRDFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	gone := filepath.Join(dir, "gone.yaml")
+	kept := filepath.Join(dir, "kept.yaml")
+	for _, f := range []string{gone, kept} {
+		if err := os.WriteFile(f, []byte(scanCRD), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.folders = []string{dir}
+	ctx := context.Background()
+	ss.crds.Set(ctx, "/elsewhere/other.yaml", []byte(scanCRD))
+	rescan := func() {
+		ss.startScan(ctx)
+		found := <-ss.scan.done
+		ss.scan = nil
+		if err := ss.finishScan(ctx, found); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rescan()
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	rescan()
+	if ss.crds.Forget(crdKey(pathURI(gone))) {
+		t.Error("a rescan kept the CRD of a deleted file")
+	}
+	if !ss.crds.Forget(crdKey(pathURI(kept))) {
+		t.Error("a rescan forgot a file that is still there")
+	}
+	if !ss.crds.Forget("/elsewhere/other.yaml") {
+		t.Error("a rescan forgot a file outside the scanned folders")
+	}
+}
+
+// TestRescanKeepsFilesPastCap checks that a rescan which hits the file cap
+// does not forget a CRD of a file it left out.
+func TestRescanKeepsFilesPastCap(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	scanned := filepath.Join(dir, "a.yaml")
+	pastCap := filepath.Join(dir, "b.yaml")
+	for _, f := range []string{scanned, pastCap} {
+		if err := os.WriteFile(f, []byte(scanCRD), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.folders = []string{dir}
+	ss.fileCap = 1
+	ctx := context.Background()
+	ss.crds.Set(ctx, crdKey(pathURI(pastCap)), []byte(scanCRD))
+	ss.startScan(ctx)
+	found := <-ss.scan.done
+	ss.scan = nil
+	if err := ss.finishScan(ctx, found); err != nil {
+		t.Fatal(err)
+	}
+	if !ss.crds.Forget(crdKey(pathURI(pastCap))) {
+		t.Error("a rescan over the file cap forgot a file it did not scan")
+	}
+	if !ss.crds.Forget(crdKey(pathURI(scanned))) {
+		t.Error("a rescan did not record the file within the cap")
 	}
 }

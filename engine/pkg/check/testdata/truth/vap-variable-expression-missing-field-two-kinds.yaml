@@ -1,0 +1,18 @@
+name: vap-variable-expression-missing-field-two-kinds
+version: v1.37.0
+policy: |
+  apiVersion: admissionregistration.k8s.io/v1
+  kind: ValidatingAdmissionPolicy
+  metadata:
+    name: demo
+  spec:
+    matchConstraints:
+      resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments], operations: [CREATE, UPDATE]}
+      - {apiGroups: [apps], apiVersions: [v1], resources: [statefulsets], operations: [CREATE, UPDATE]}
+    variables:
+      - name: containers
+        expression: "object.spec.template.spec.containerz"
+    validations:
+      - expression: "variables.containers.size() > 0"
+typeChecking: []

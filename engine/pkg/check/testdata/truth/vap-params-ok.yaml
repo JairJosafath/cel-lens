@@ -1,0 +1,15 @@
+name: vap-params-ok
+version: v1.37.0
+policy: |
+  apiVersion: admissionregistration.k8s.io/v1
+  kind: ValidatingAdmissionPolicy
+  metadata:
+    name: demo
+  spec:
+    paramKind: {apiVersion: v1, kind: ConfigMap}
+    matchConstraints:
+      resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments], operations: [CREATE, UPDATE]}
+    validations:
+      - expression: "params.data.size() > 0 && params.metadata.name != ''"
+typeChecking: []

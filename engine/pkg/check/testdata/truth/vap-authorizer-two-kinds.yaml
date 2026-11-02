@@ -1,0 +1,17 @@
+name: vap-authorizer-two-kinds
+version: v1.37.0
+policy: |
+  apiVersion: admissionregistration.k8s.io/v1
+  kind: ValidatingAdmissionPolicy
+  metadata:
+    name: demo
+  spec:
+    matchConstraints:
+      resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments], operations: [CREATE, UPDATE]}
+      - {apiGroups: [apps], apiVersions: [v1], resources: [statefulsets], operations: [CREATE, UPDATE]}
+    validations:
+      - expression: "authorizer.requestResource.check('get').allowed()"
+typeChecking:
+  - "apps/v1, Kind=Deployment: ERROR: <input>:1:11: unexpected failed resolution of 'kubernetes.authorization.Authorizer'"
+  - "apps/v1, Kind=StatefulSet: ERROR: <input>:1:11: unexpected failed resolution of 'kubernetes.authorization.Authorizer'"

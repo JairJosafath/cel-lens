@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -97,6 +98,8 @@ type scan struct {
 	cancel context.CancelFunc
 	// done delivers the CRDs found, once, when the goroutine ends.
 	done chan *check.CRDs
+	// notes are what the scan has to tell the user; set before done delivers.
+	notes []message
 }
 
 // startScan scans the workspace folders in a goroutine, unless a scan is
@@ -106,7 +109,13 @@ func (ss *session) startScan(ctx context.Context) {
 	if ss.scan != nil {
 		return
 	}
-	run := scanWorkspace
+	limit := ss.fileCap
+	if limit <= 0 {
+		limit = maxWorkspaceFiles
+	}
+	run := func(ctx context.Context, folders []string, dst *check.CRDs) []message {
+		return scanWorkspace(ctx, folders, limit, dst)
+	}
 	if ss.scanner != nil {
 		run = ss.scanner
 	}
@@ -120,7 +129,7 @@ func (ss *session) startScan(ctx context.Context) {
 	folders := slices.Clone(ss.folders)
 	go func() {
 		var found check.CRDs
-		run(ctx, folders, &found)
+		sc.notes = run(ctx, folders, &found)
 		sc.done <- &found
 	}()
 }
@@ -150,10 +159,21 @@ func (ss *session) finishScan(ctx context.Context, found *check.CRDs) error {
 
 // scanWorkspace reads the YAML files below the workspace folders into dst,
 // skipping hidden folders and node_modules, files over
-// maxWorkspaceFileSize and files past maxWorkspaceFiles. A folder or file that
-// cannot be read is skipped. It stops when ctx is cancelled.
-func scanWorkspace(ctx context.Context, folders []string, dst *check.CRDs) {
+// maxWorkspaceFileSize and files past limit. A folder or file that
+// cannot be read is skipped. It lists the files it found in dst, which tells
+// Fill to forget the others below the folders, unless it left files out.
+// It stops when ctx is cancelled. It returns what the user should be told: one
+// warning when the scan stopped at limit, and a log message for each file
+// skipped for its size.
+func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.CRDs) []message {
+	var notes []message
+	capped := false
 	seen := 0
+	roots := make([]string, len(folders))
+	for i, dir := range folders {
+		roots[i] = crdKey(pathURI(dir))
+	}
+	dst.ScanRoots(roots)
 	for _, dir := range folders {
 		root := os.DirFS(dir)
 		_ = fs.WalkDir(root, ".", func(rel string, d fs.DirEntry, err error) error {
@@ -161,6 +181,7 @@ func scanWorkspace(ctx context.Context, folders []string, dst *check.CRDs) {
 				return ctx.Err()
 			}
 			if err != nil {
+				dst.Incomplete()
 				return fs.SkipDir // skip what cannot be read
 			}
 			if d.IsDir() {
@@ -173,20 +194,33 @@ func scanWorkspace(ctx context.Context, folders []string, dst *check.CRDs) {
 				return nil
 			}
 			seen++
-			if seen > maxWorkspaceFiles {
+			if seen > limit {
+				dst.Incomplete()
+				if !capped {
+					capped = true
+					notes = append(notes, message{typ: messageWarning, text: fmt.Sprintf(
+						"cel-lens stopped scanning the workspace for CustomResourceDefinitions after %d YAML files; CRDs in the files left out are not known, so a params type may stay dyn", limit)})
+				}
 				return fs.SkipAll
 			}
+			path := filepath.Join(dir, filepath.FromSlash(rel))
+			dst.List(crdKey(pathURI(path)))
 			info, err := d.Info()
-			if err != nil || info.Size() > maxWorkspaceFileSize {
+			if err == nil && info.Size() > maxWorkspaceFileSize {
+				notes = append(notes, message{typ: messageWarning, log: true, text: fmt.Sprintf(
+					"cel-lens skipped %s while scanning for CustomResourceDefinitions: it is %d bytes, over the limit of %d bytes", path, info.Size(), maxWorkspaceFileSize)})
+				return nil
+			}
+			if err != nil {
 				return nil //nolint:nilerr // a file that cannot be read is skipped
 			}
-			path := filepath.Join(dir, filepath.FromSlash(rel))
 			if data, err := os.ReadFile(path); err == nil {
 				dst.Set(ctx, crdKey(pathURI(path)), data)
 			}
 			return nil
 		})
 	}
+	return notes
 }
 
 func isYAML(name string) bool {

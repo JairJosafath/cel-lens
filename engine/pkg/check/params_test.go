@@ -317,3 +317,33 @@ func TestCRDsForgetUnder(t *testing.T) {
 		})
 	}
 }
+
+func TestCRDsFillScanForgets(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		incomplete bool
+		want       bool
+	}{
+		{"complete scan", false, false},
+		{"incomplete scan", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var c check.CRDs
+			c.Set(ctx, "/ws/a/gone.yaml", []byte(widgetCRD))
+			var from check.CRDs
+			from.ScanRoots([]string{"/ws"})
+			if tc.incomplete {
+				from.Incomplete()
+			}
+			if got := c.Fill(&from); got == tc.want {
+				t.Errorf("Fill = %v, want %v", got, !tc.want)
+			}
+			if got := c.Forget("/ws/a/gone.yaml"); got != tc.want {
+				t.Errorf("file still recorded after Fill = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

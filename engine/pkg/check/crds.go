@@ -21,6 +21,11 @@ type CRDs struct {
 	files map[string][]crdKind
 	// touched are the files Set or Forget changed since Track, nil when not tracking.
 	touched map[string]bool
+	// roots, listed and partial describe a scan, for Fill: the folders it read,
+	// the files it found there, and whether it left some out.
+	roots   []string
+	listed  map[string]bool
+	partial bool
 }
 
 // crdKind is one version of one custom resource kind.
@@ -87,10 +92,34 @@ func (c *CRDs) Untrack() {
 	c.touched = nil
 }
 
+// ScanRoots makes c the result of a scan of the folders root, slash-separated
+// paths, for Fill: Fill then drops the files below them that the scan did not
+// list. List names a file the scan found, and Incomplete says it could not list
+// everything, which stops Fill from dropping anything.
+func (c *CRDs) ScanRoots(roots []string) {
+	c.roots = roots
+	c.listed = map[string]bool{}
+}
+
+// List records that the scan found file, whether or not it could read it.
+func (c *CRDs) List(file string) {
+	if c.listed != nil {
+		c.listed[file] = true
+	}
+}
+
+// Incomplete records that the scan did not list every file below its folders,
+// because it hit a limit or could not read a folder.
+func (c *CRDs) Incomplete() {
+	c.partial = true
+}
+
 // Fill records the files of from that c did not touch since Track, replacing
 // what c has for them, ends the tracking, and reports whether that changed
 // the schemas of c. A file Set, Forgotten or Kept after Track wins over from.
-// A nil from changes nothing.
+// When from is the result of a complete scan (see ScanRoots), Fill also drops
+// the files of c below the scanned folders that the scan did not list, except
+// those touched since Track. A nil from changes nothing.
 func (c *CRDs) Fill(from *CRDs) bool {
 	touched := c.touched
 	c.touched = nil
@@ -98,6 +127,20 @@ func (c *CRDs) Fill(from *CRDs) bool {
 		return false
 	}
 	added := false
+	if from.listed != nil && !from.partial {
+		for f := range c.files {
+			if touched[f] || from.listed[f] {
+				continue
+			}
+			for _, root := range from.roots {
+				if strings.HasPrefix(f, strings.TrimSuffix(root, "/")+"/") {
+					delete(c.files, f)
+					added = true
+					break
+				}
+			}
+		}
+	}
 	for f, kinds := range from.files {
 		if touched[f] || reflect.DeepEqual(c.files[f], kinds) {
 			continue

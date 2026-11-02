@@ -1,0 +1,14 @@
+name: vap-typed-ok
+version: v1.37.0
+policy: |
+  apiVersion: admissionregistration.k8s.io/v1
+  kind: ValidatingAdmissionPolicy
+  metadata:
+    name: demo
+  spec:
+    matchConstraints:
+      resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments], operations: [CREATE, UPDATE]}
+    validations:
+      - expression: "object.spec.replicas <= 5 && object.metadata.name != ''"
+typeChecking: []

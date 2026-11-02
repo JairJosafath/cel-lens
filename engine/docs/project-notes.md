@@ -12,11 +12,10 @@ The check before a release tag is these `make` targets, in this order:
 CI's `full` job of `.gitea/workflows/check.yaml` runs all four on a push to a
 `release-check/**` branch.
 
-`TestPublicTagsListed` (`release_test.go`) is part of step 1: it runs `git ls-remote --tags`
-on the public repository and fails naming each `core-v` tag that `testdata/public-core-tags.txt`
-lacks. It skips, saying why, when github.com can't be reached, so offline runs pass. Run
-`go test -run TestPublicTagsListed -v .` with network access before a release is prepared, and
-add the new tags to the list.
+`scripts/public-tags.sh` is a release step outside `make check`: it needs the network, runs
+`git ls-remote --tags` on the public repository and lists each tag in
+`testdata/public-core-tags.txt` that is not public and each public `core-v` tag the list lacks.
+Run it before a release is prepared and after its tag is published, and add the new tag to the list.
 
 ## v0.17.2: release
 

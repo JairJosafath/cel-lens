@@ -91,6 +91,11 @@ repeat:
    listed); a version whose tag is not public has no link line, and a compare link
    starts at the previous public tag. After a release's tag is published, add it to
    that list, so the next release's compare link is checked against it.
+   Before a release is prepared, and again after its tag is published, run
+   `scripts/public-tags.sh` with network access: it lists each tag in the file
+   that is not on the public repository and each public `core-v` tag the file
+   lacks, and exits 1 when they differ. It is not part of `make check` or
+   `go test`, which stay offline.
 4. Run `make check`, commit with a Conventional Commit message (`feat:`, `fix:`,
    `test:`, `refactor:`, `docs:`) and open a pull request on the public
    repository.

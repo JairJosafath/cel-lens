@@ -59,8 +59,11 @@ type session struct {
 	folders []string
 	// checker finds the problems of a document; nil means check.Check.
 	checker func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Diagnostic, error)
-	// scanner reads the CRDs of the folders into dst; nil means scanWorkspace.
-	scanner func(ctx context.Context, folders []string, dst *check.CRDs)
+	// scanner reads the CRDs of the folders into dst and returns what to tell the
+	// user; nil means scanWorkspace.
+	scanner func(ctx context.Context, folders []string, dst *check.CRDs) []message
+	// fileCap is the most files a scan reads; 0 means maxWorkspaceFiles.
+	fileCap int
 	// scan is the workspace scan in progress, nil when there is none.
 	scan     *scan
 	init     bool
@@ -160,7 +163,11 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case found := <-scanned:
+			notes := ss.scan.notes
 			ss.scan = nil
+			if err := ss.warn(notes); err != nil {
+				return err
+			}
 			if err := ss.finishScan(ctx, found); err != nil {
 				return err
 			}

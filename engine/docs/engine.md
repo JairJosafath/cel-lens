@@ -129,7 +129,9 @@ type checker does:
 - A custom resource (`{apiVersion: example.com/v1, kind: Widget}`): the schema
   of the named version in a CustomResourceDefinition. The language server reads
   the CRDs in the workspace folders (YAML files, skipping hidden folders and
-  `node_modules`, up to 20,000 files of up to 1 MiB) and in the open documents;
+  `node_modules`, up to 20,000 files of up to 1 MiB; when the scan stops at the file cap the
+  client gets one warning, and each file skipped for its size is named in a log
+  message) and in the open documents;
   `cel-lens-core check` reads the CRDs among the files and folders it checks, so
   name the CRD's file or folder too. When a CRD is added, edited, closed or
   deleted (a deleted or renamed folder too: every CRD file below it is
@@ -198,11 +200,26 @@ and a ValidatingPolicy with another `evaluation.mode` than `Kubernetes` or
 The answers the API server recorded in `status.typeChecking` live in
 `pkg/check/testdata/truth/`, one YAML file per case: its `name`, the Kubernetes
 `version` the answer came from (`v1.37.0`), the `policy` document as it was sent
-to the API server, and the `typeChecking` lines as the API server wrote them.
+to the API server, the `typeChecking` lines as the API server wrote them, and, only for a case
+the engine does not yet answer the same way, `divergence` and `engine`.
 `TestTruthSet` runs `check.Check` on each policy at that version and compares the
 warnings with the lines: each line must match exactly one warning, whose message
 is `<group/version> <Kind>: <message>`, and there must be as many warnings as
 lines. The position after `<input>:` is kept for the record and not compared.
+An answer with no line is `typeChecking: []`. When the API server returns several
+`ERROR` entries for one kind, they stay in that kind's one answer, in the order
+returned, each after the first on a new line of the same string (`\n` in a quoted
+scalar): `"apps/v1, Kind=Deployment: ERROR: <input>:1:12: ...\nERROR: <input>:1:36: ..."`.
+The test counts each entry as one line.
+
+A case the engine does not yet answer as the API server does carries two more
+fields: `divergence`, a note saying how the engine differs, and `engine`, the
+warnings (full messages) the engine gives today, in order. The test then passes
+while the engine's warnings equal `engine`, and fails when they agree with the
+API server (remove both fields) or change in any other way (a new prefix or
+wording: review it, then record the new answer). When the API server reports an error
+the engine misses, the engine gives no warnings and the case records `engine: []`. A
+`divergence` without `engine` (absent, not empty), or an `engine` without `divergence`, fails.
 
 To add a case, record the policy and the `status.typeChecking` lines from a real
 cluster, name the Kubernetes version it ran, and drop the file in the folder.
@@ -223,7 +240,3 @@ prints an array of `{file, start, end, severity, message}` instead (with `fixes`
 means no errors, 1 that errors were found, 2 a usage or read error (a missing
 path, malformed YAML, which is also printed as a problem at the line where it
 breaks, as the language server shows it), 130 that the run was interrupted (Ctrl-C). Unreadable paths do not stop the others being checked.
-
-A case the engine does not yet answer as the API server does carries a
-`divergence` note saying how. The test then passes while the engine still differs,
-and fails when it agrees, so the note is removed.

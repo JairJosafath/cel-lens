@@ -9,6 +9,23 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-02
+
+### Added
+
+- The language server tells the client when the workspace scan for CRDs stops at its file cap (one warning) or skips a file over the size limit (a log message naming the file and the limit), so a params type that stays `dyn` has a visible reason.
+
+### Changed
+
+- A divergence note pins the engine's current answer too, not only the API server's.
+- The release check compares `testdata/public-core-tags.txt` with the tags of the public repository.
+- A test pins the README's flag table and exit-code paragraph against `check --help`.
+- The truth set of recorded API-server answers now holds 13 cases, the owner's nine other `status.typeChecking` recordings added to the four it had. A case with no line is `typeChecking: []`, and an answer with several errors for one kind keeps them in one string.
+
+### Fixed
+
+- A rescan of the workspace forgets the CRDs of files it no longer finds below the scanned folders, so a CRD file deleted while `crd-typed-policies` was off stops typing policy params on a client without file watching. Files past the workspace file cap are left alone.
+
 ## [0.23.0] - 2026-11-02
 
 ### Changed
@@ -456,7 +473,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.23.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...HEAD
+[0.24.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.23.0...core-v0.24.0
 [0.23.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.22.0...core-v0.23.0
 [0.22.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.1...core-v0.22.0
 [0.21.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.0...core-v0.21.1
