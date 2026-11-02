@@ -8,12 +8,14 @@ function fakeEditor(
   last: QuickFixAnswer,
   step: number,
   goes = true,
+  askStep = 0,
 ) {
   const log: string[] = [];
   let clock = 0;
   let asked = 0;
   const editor: QuickFixEditor = {
     askForFixes: () => {
+      clock += askStep;
       log.push('Control+.');
       return Promise.resolve();
     },
@@ -60,8 +62,22 @@ describe('askUntilFixListed', () => {
 
   it('gives up without pressing again when the empty answer never goes away', async () => {
     const { editor, log, now } = fakeEditor([], 'empty', 10, false);
-    await expect(askUntilFixListed(editor, 100, now)).rejects.toThrow(/no fix/);
+    await expect(askUntilFixListed(editor, 100, now)).rejects.toThrow(
+      'the editor listed no fix: the empty answer stayed after Escape',
+    );
     expect(log).toEqual(['Control+.', 'wait 100', 'Escape', 'gone 90']);
+  });
+
+  it('gives up without waiting for the empty answer when no time is left after Escape', async () => {
+    const { editor, log, now } = fakeEditor([], 'empty', 100);
+    await expect(askUntilFixListed(editor, 100, now)).rejects.toThrow(/empty answer stayed/);
+    expect(log).toEqual(['Control+.', 'wait 100', 'Escape']);
+  });
+
+  it('gives up without a wait when the clock passes the deadline between ask and wait', async () => {
+    const { editor, log, now } = fakeEditor([], 'fix', 10, true, 100);
+    await expect(askUntilFixListed(editor, 100, now)).rejects.toThrow(/no fix/);
+    expect(log).toEqual(['Control+.']);
   });
 
   it('fails when a wait runs out with neither answer', async () => {

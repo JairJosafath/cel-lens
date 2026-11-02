@@ -1,5 +1,5 @@
-/** The rows of the "Experimental" table of a README: feature name to its "What it does" cell. */
-export function experimentalRows(readme: string): Map<string, string> {
+/** The rows of the "Experimental" table of a README: feature name to the cell at `column`. */
+function experimentalColumn(readme: string, column: 1 | 2): Map<string, string> {
   const rows = new Map<string, string>();
   let inSection = false;
   for (const line of readme.split('\n')) {
@@ -16,16 +16,48 @@ export function experimentalRows(readme: string): Map<string, string> {
       .replace(/^\||\|\s*$/g, '')
       .split('|')
       .map((cell) => cell.trim());
-    const [name, whatItDoes] = cells;
-    if (name === undefined || whatItDoes === undefined) {
+    const name = cells[0];
+    const cell = cells[column];
+    if (name === undefined || cell === undefined) {
       continue;
     }
     if (name === 'Name' || /^:?-+:?$/.test(name)) {
       continue;
     }
-    rows.set(name.replace(/`/g, ''), whatItDoes);
+    rows.set(name.replace(/`/g, ''), cell);
   }
   return rows;
+}
+
+/** The rows of the "Experimental" table of a README: feature name to its "What it does" cell. */
+export function experimentalRows(readme: string): Map<string, string> {
+  return experimentalColumn(readme, 1);
+}
+
+/** The rows of the "Experimental" table of a README: feature name to its "Why it is experimental" cell. */
+export function experimentalReasons(readme: string): Map<string, string> {
+  return experimentalColumn(readme, 2);
+}
+
+const REASON_MARKER = 'experimental because ';
+
+/** The reason a setting description gives: the text after "experimental because". */
+export function descriptionReason(description: string): string | undefined {
+  const at = description.indexOf(REASON_MARKER);
+  return at < 0 ? undefined : description.slice(at + REASON_MARKER.length);
+}
+
+function normalizeReason(text: string): string {
+  return text
+    .replace(/`/g, '')
+    .replace(/\.\s*$/, '')
+    .trim()
+    .toLowerCase();
+}
+
+/** Whether two reasons are the same words, allowing only case, backticks and a trailing period to differ. */
+export function sameReason(description: string, row: string): boolean {
+  return normalizeReason(description) === normalizeReason(row);
 }
 
 /** A word about colors, in any form the READMEs and the setting use. */

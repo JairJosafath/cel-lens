@@ -6,6 +6,20 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-11-02
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.24.0: the engine warns once when the workspace scan for CRDs stops at its file cap, and logs a message naming a file it skips for size, so a params type that stays `dyn` has a visible reason.
+- The picture script builds the `partHidden` page expression in one helper, and `withTimeout`'s doc comment is back above it.
+- The picture script's retry loops treat a zero remaining time as the deadline.
+
+### Fixed
+
+- The `crd-typed-policies` description no longer says the workspace scan blocks the engine's start; it gives the README's reason, as do the `kyverno` and `fitting-completion` descriptions.
+- The picture script gives up at once when the empty answer's wait has no time left, and says the message stayed.
+- The numeric-hold check in `picture_script.test.ts` no longer trips on comma-bearing text or arithmetic.
+
 ## [0.27.1] - 2026-11-02
 
 ### Added
@@ -539,7 +553,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.1...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.2...HEAD
+[0.27.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.1...vscode-v0.27.2
 [0.27.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.0...vscode-v0.27.1
 [0.27.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.26.0...vscode-v0.27.0
 [0.26.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.25.0...vscode-v0.26.0

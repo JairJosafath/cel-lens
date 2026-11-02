@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const SOURCE = readFileSync(`${__dirname}/../test/pictures/take.ts`, 'utf8');
@@ -12,27 +13,52 @@ function withoutFunction(source: string, name: string): string {
   return source.slice(0, start) + source.slice(end + 3);
 }
 
-/** The hold arguments of `holdFrame` and `typeText` calls that are numeric literals. */
-function numericHolds(source: string): string[] {
-  const holdFrame = /holdFrame\(\s*[^,()]+,\s*\d[\w.]*/g;
-  const typeTextDelay = /typeText\(\s*[^,]+,[^,]+,[^,]+,\s*\d[\w.]*/g;
-  return [...(source.match(holdFrame) ?? []), ...(source.match(typeTextDelay) ?? [])];
+/** The hold argument of a call: the second of `holdFrame`, the fourth of `typeText`. */
+const HOLD_ARGUMENT = new Map([
+  ['holdFrame', 1],
+  ['typeText', 3],
+]);
+
+/** The hold arguments of `holdFrame` and `typeText` calls that are not a plain name from gif_plans. */
+function inlineHolds(source: string): string[] {
+  const file = ts.createSourceFile('take.ts', source, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const argument = node.arguments[HOLD_ARGUMENT.get(node.expression.text) ?? -1];
+      if (
+        argument !== undefined &&
+        !ts.isIdentifier(argument) &&
+        !ts.isPropertyAccessExpression(argument)
+      ) {
+        found.push(argument.getText(file));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
 }
 
 describe('the picture script', () => {
   it.each([
     ['holdFrame(recording, 400)', 1],
     ['holdFrame(recording, 1_000)', 1],
+    ['holdFrame(recording, GIF_TYPING_MS * 2)', 1],
     ['typeText(page, recording, TEXT, 50)', 1],
+    ["typeText(page, recording, 'a, b', 50)", 1],
     ['typeText(\n page,\n recording,\n TEXT,\n 50,\n)', 1],
+    ['typeText(page, recording, TEXT, GIF_TYPING_MS + 1)', 1],
     ['holdFrame(recording, COLORS_HOLD_AFTER_MS)', 0],
+    ['holdFrame(recording, COMPLETION_HOLDS_MS.start)', 0],
     ['typeText(page, recording, TEXT, GIF_TYPING_MS)', 0],
-  ])('finds the numeric holds in %j: %i', (source, count) => {
-    expect(numericHolds(source)).toHaveLength(count);
+    ["typeText(page, recording, 'a, b', GIF_TYPING_MS)", 0],
+  ])('finds the inline holds in %j: %i', (source, count) => {
+    expect(inlineHolds(source)).toHaveLength(count);
   });
 
   it('takes every hold from src/gif_plans.ts, never from a number in the script', () => {
-    expect(numericHolds(SOURCE)).toEqual([]);
+    expect(inlineHolds(SOURCE)).toEqual([]);
   });
 
   it('has no fixed pause outside the helper that paces the GIFs', () => {
@@ -168,12 +194,12 @@ describe('the picture script', () => {
       SOURCE.indexOf('async function expectSideBarHidden('),
       SOURCE.indexOf('async function takePictures('),
     );
-    expect(hide).toMatch(/\$\{partHidden\.toString\(\)\}/);
-    expect(expectHidden).toMatch(/\$\{partHidden\.toString\(\)\}/);
+    expect(SOURCE.match(/\$\{partHidden\.toString\(\)\}/g)).toHaveLength(1);
+    expect(SOURCE).toMatch(/function partHiddenExpression\(part: string\): string \{/);
+    expect(hide).toMatch(/page\.evaluate\(partHiddenExpression\(part\)\)/);
+    expect(hide).toMatch(/const hidden = \$\{partHiddenExpression\(part\)\};/);
+    expect(expectHidden).toMatch(/partHiddenExpression\(part\)/);
     expect(SOURCE).not.toMatch(/box\.width === 0/);
-    expect(hide).toMatch(
-      /page\.evaluate\(\s*`\(\$\{partHidden\.toString\(\)\}\)\(document\.querySelector/,
-    );
     expect(SOURCE).not.toMatch(/\.isVisible\(\)/);
   });
 
@@ -215,5 +241,14 @@ describe('the picture script', () => {
     expect(body).toMatch(/widgetShown\.toString\(\)/);
     expect(body).toMatch(/\.lightBulbWidget/);
     expect(body).toMatch(/the light bulb to be fully shown on the cursor line/);
+  });
+});
+
+describe('the picture script docs', () => {
+  it('puts withTimeout directly under its JSDoc, with firstMessageLine and its one-line comment above', () => {
+    expect(SOURCE).toMatch(/\*\/\nasync function withTimeout<T>\(/);
+    expect(SOURCE).toMatch(
+      /\n\n\/\*\* The first line of an error's message[^\n]*\*\/\nfunction firstMessageLine\(/,
+    );
   });
 });

@@ -342,16 +342,16 @@ async function holdFrame(recording: Recording, ms: number): Promise<void> {
   }
 }
 
-/**
- * Runs `action` with a `timeout` in ms; when it fails, throws an error that names `description`,
- * the state waited for, and keeps Playwright's first-line reason. Every wait and action of the
- * script goes through here.
- */
 /** The first line of an error's message, else the thrown value as text: the reason in a give-up message. */
 function firstMessageLine(error: unknown): string {
   return error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
 }
 
+/**
+ * Runs `action` with a `timeout` in ms; when it fails, throws an error that names `description`,
+ * the state waited for, and keeps Playwright's first-line reason. Every wait and action of the
+ * script goes through here.
+ */
 async function withTimeout<T>(
   description: string,
   timeout: number,
@@ -657,6 +657,11 @@ async function prepare(page: Page): Promise<void> {
   await expectSideBarHidden(page, '.part.auxiliarybar', 'secondary side bar');
 }
 
+/** The page expression that is true when the side bar in `part` is off screen. */
+function partHiddenExpression(part: string): string {
+  return `(${partHidden.toString()})(document.querySelector(${JSON.stringify(part)}))`;
+}
+
 /**
  * Hides the side bar in `part` with the palette command `title`. Does nothing when the bar is off
  * screen. On a busy machine the bar can hide by itself (its empty view container resolves) while the
@@ -669,14 +674,12 @@ async function hideSideBar(
   title: string,
   barName: string,
 ): Promise<void> {
-  const alreadyHidden: unknown = await page.evaluate(
-    `(${partHidden.toString()})(document.querySelector(${JSON.stringify(part)}))`,
-  );
+  const alreadyHidden: unknown = await page.evaluate(partHiddenExpression(part));
   if (alreadyHidden === true) {
     return;
   }
   const palette = page.locator('.quick-input-widget');
-  const outcome = `(() => { const hidden = (${partHidden.toString()})(document.querySelector(${JSON.stringify(part)})); if (hidden) { return 'hidden'; } if (Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row')).some((row) => row.textContent?.includes(${JSON.stringify(title)}) === true)) { return 'listed'; } return document.querySelector('.quick-input-widget')?.checkVisibility() === true ? false : 'closed'; })()`;
+  const outcome = `(() => { const hidden = ${partHiddenExpression(part)}; if (hidden) { return 'hidden'; } if (Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row')).some((row) => row.textContent?.includes(${JSON.stringify(title)}) === true)) { return 'listed'; } return document.querySelector('.quick-input-widget')?.checkVisibility() === true ? false : 'closed'; })()`;
   const result = await withTimeout(
     `the palette to list the command ${title} or the ${barName} to hide`,
     STATE_TIMEOUT_MS,
@@ -723,7 +726,7 @@ async function hideSideBar(
 async function expectSideBarHidden(page: Page, part: string, barName: string): Promise<void> {
   await waitForExpression(
     page,
-    `(${partHidden.toString()})(document.querySelector(${JSON.stringify(part)}))`,
+    partHiddenExpression(part),
     `the ${barName} to be off screen (no picture may show it)`,
   );
 }

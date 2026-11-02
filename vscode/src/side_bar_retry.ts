@@ -25,7 +25,8 @@ export interface SideBarPage {
  * Opens the palette and types the command; each time the palette closes while the bar still shows,
  * opens it and types the command again, until the row is listed (Enter) or the bar hid by itself
  * (Escape). All opens, types and waits share one `timeout` in ms, measured with `now`; it throws
- * naming `step` when the palette kept closing before it listed the command.
+ * naming `step` when no time is left: the palette kept closing, or listed neither the command
+ * nor the bar hid.
  */
 export async function hideSideBarWithRetry(
   page: SideBarPage,
@@ -34,14 +35,26 @@ export async function hideSideBarWithRetry(
   now: () => number,
 ): Promise<SideBarResult> {
   const deadline = now() + timeout;
+  let closed = false;
+  const giveUp = () =>
+    new Error(
+      closed
+        ? `${step}: the palette kept closing before it listed the command`
+        : `${step}: the palette listed neither the command nor the bar hid`,
+    );
   for (;;) {
     const remaining = deadline - now();
     if (remaining <= 0) {
-      throw new Error(`${step}: the palette kept closing before it listed the command`);
+      throw giveUp();
     }
     await page.openPalette(remaining);
     await page.typeCommand();
-    switch (await page.waitForOutcome(Math.max(deadline - now(), 0))) {
+    const left = deadline - now();
+    // A timeout of 0 means no timeout in the Playwright backing, so never wait with it.
+    if (left <= 0) {
+      throw giveUp();
+    }
+    switch (await page.waitForOutcome(left)) {
       case 'listed':
         await page.runCommand();
         return 'command';
@@ -49,9 +62,10 @@ export async function hideSideBarWithRetry(
         await page.dismiss();
         return 'by itself';
       case 'closed':
+        closed = true;
         break;
       case 'none':
-        throw new Error(`${step}: the palette kept closing before it listed the command`);
+        throw giveUp();
     }
   }
 }

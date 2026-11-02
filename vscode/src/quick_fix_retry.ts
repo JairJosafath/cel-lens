@@ -14,6 +14,7 @@ export interface QuickFixEditor {
 }
 
 const NO_FIX_MESSAGE = 'the editor listed no fix before the timeout';
+const ANSWER_STAYED_MESSAGE = 'the editor listed no fix: the empty answer stayed after Escape';
 
 /**
  * Asks for the quick fixes and, each time the editor answers that there are none, dismisses the
@@ -28,20 +29,26 @@ export async function askUntilFixListed(
 ): Promise<void> {
   const deadline = now() + timeout;
   for (;;) {
-    const remaining = deadline - now();
-    if (remaining <= 0) {
+    if (deadline - now() <= 0) {
       throw new Error(NO_FIX_MESSAGE);
     }
     await editor.askForFixes();
-    switch (await editor.waitForAnswer(remaining)) {
+    const left = deadline - now();
+    // A timeout of 0 means no timeout in the Playwright backing, so never wait with it.
+    if (left <= 0) {
+      throw new Error(NO_FIX_MESSAGE);
+    }
+    switch (await editor.waitForAnswer(left)) {
       case 'fix':
         return;
-      case 'empty':
+      case 'empty': {
         await editor.dismiss();
-        if (!(await editor.waitForEmptyAnswerGone(Math.max(deadline - now(), 0)))) {
-          throw new Error(NO_FIX_MESSAGE);
+        const goneLeft = deadline - now();
+        if (goneLeft <= 0 || !(await editor.waitForEmptyAnswerGone(goneLeft))) {
+          throw new Error(ANSWER_STAYED_MESSAGE);
         }
         break;
+      }
       case 'none':
         throw new Error(NO_FIX_MESSAGE);
     }

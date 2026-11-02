@@ -3,12 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { hideSideBarWithRetry, type SideBarOutcome, type SideBarPage } from './side_bar_retry.ts';
 
 /** A fake page that gives `outcomes` in turn, then `last`; its clock moves by `step` per wait. */
-function fakePage(outcomes: readonly SideBarOutcome[], last: SideBarOutcome, step: number) {
+function fakePage(
+  outcomes: readonly SideBarOutcome[],
+  last: SideBarOutcome,
+  step: number,
+  openStep = 0,
+) {
   const log: string[] = [];
   let clock = 0;
   let waited = 0;
   const page: SideBarPage = {
     openPalette: (timeout) => {
+      clock += openStep;
       log.push(`F1 ${String(timeout)}`);
       return Promise.resolve();
     },
@@ -62,8 +68,16 @@ describe('hideSideBarWithRetry', () => {
     expect(log.filter((entry) => entry.startsWith('F1'))).toHaveLength(3);
   });
 
-  it('gives up with the step name when a wait runs out with no outcome', async () => {
+  it('says the palette listed neither the command nor the bar hid when no outcome came', async () => {
     const { page, now } = fakePage([], 'none', 10);
+    await expect(hideSideBarWithRetry(page, 'the step', 100, now)).rejects.toThrow(
+      'the step: the palette listed neither the command nor the bar hid',
+    );
+  });
+
+  it('gives up without a wait when the clock passes the deadline between open and wait', async () => {
+    const { page, log, now } = fakePage([], 'closed', 10, 100);
     await expect(hideSideBarWithRetry(page, 'the step', 100, now)).rejects.toThrow(/the step: /);
+    expect(log).toEqual(['F1 100', 'type']);
   });
 });

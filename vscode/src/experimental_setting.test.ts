@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { COLOR_WORD, experimentalRows } from './experimental_table';
+import {
+  COLOR_WORD,
+  descriptionReason,
+  experimentalReasons,
+  experimentalRows,
+  sameReason,
+} from './experimental_table';
 
 interface ExperimentalItems {
   enum: string[];
@@ -85,6 +91,37 @@ describe('the cel-lens.experimental setting against the README', () => {
       expect(colorsRow).toContain(`\`${name}\``);
     },
   );
+
+  it.each(settingItems().enum.map((name, index) => [name, index] as const))(
+    'gives for %s the reason the README row gives',
+    (name, index) => {
+      const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+      const reason = descriptionReason(settingItems().enumDescriptions[index] ?? '');
+      expect(reason).toBeDefined();
+      expect(sameReason(reason ?? '', experimentalReasons(readme).get(name) ?? '')).toBe(true);
+    },
+  );
+
+  it.each([
+    [
+      'the v0.27.0 crd-typed-policies wording',
+      "the workspace scan blocks the engine's start while it runs.",
+      false,
+    ],
+    [
+      'the README wording',
+      'The workspace scan runs only while the feature is on, at initialize or when the setting turns it on',
+      true,
+    ],
+    ['case, backticks and a final period', 'only `ValidatingPolicy` is read.', true],
+  ])('compares reasons: %s', (_label, description, expected) => {
+    expect(
+      sameReason(
+        description,
+        'The workspace scan runs only while the feature is on, at initialize or when the setting turns it on',
+      ) || sameReason(description, 'Only ValidatingPolicy is read'),
+    ).toBe(expected);
+  });
 
   it.each([
     ['Shows diagnostics in the editor', ['checks']],
