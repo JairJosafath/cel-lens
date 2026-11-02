@@ -25,6 +25,7 @@ import {
   COMPLETION_HOLDS_MS,
   GIF_TYPING_MS,
 } from '../../src/gif_plans.ts';
+import { hideSideBarWithRetry } from '../../src/side_bar_retry.ts';
 import { partHidden } from '../../src/part_hidden.ts';
 import { widgetShown } from '../../src/widget_shown.ts';
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
@@ -475,10 +476,11 @@ async function waitForLightBulbOnCursorLine(page: Page): Promise<void> {
 
 /**
  * Presses Ctrl+. and waits for a fully shown quick fix row; when the editor answers "No code
- * actions available", presses Escape and asks again. All asks share the step's one timeout.
+ * actions available", presses Escape, waits for the message to leave the page and asks again. All asks share the step's one timeout.
  */
 async function askForQuickFix(page: Page): Promise<void> {
   const answer = `(() => { if (Array.from(document.querySelectorAll('.action-widget .monaco-list-row')).length > 0) { return 'fix'; } return Array.from(document.querySelectorAll('.monaco-editor .monaco-editor-overlaymessage:not(.fadeOut)')).some((message) => message.textContent?.includes('No code actions available') === true) ? 'empty' : false; })()`;
+  const gone = `Array.from(document.querySelectorAll('.monaco-editor .monaco-editor-overlaymessage')).every((message) => message.textContent?.includes('No code actions available') !== true)`;
   await withTimeout('the quick fix list to show a fix', STATE_TIMEOUT_MS, (ms) =>
     askUntilFixListed(
       {
@@ -496,6 +498,16 @@ async function askForQuickFix(page: Page): Promise<void> {
           return found === 'fix' || found === 'empty' ? found : 'none';
         },
         dismiss: () => page.keyboard.press('Escape'),
+        waitForEmptyAnswerGone: (timeout) =>
+          page
+            .waitForFunction(gone, undefined, { timeout })
+            .then(() => true)
+            .catch((error: unknown) => {
+              if (error instanceof errors.TimeoutError) {
+                return false;
+              }
+              throw error;
+            }),
       },
       ms,
       Date.now,
@@ -659,24 +671,45 @@ async function hideSideBar(
   if (!(await page.locator(part).isVisible())) {
     return;
   }
-  await page.keyboard.press('F1');
-  await waitForState(
-    page.locator('.quick-input-widget'),
-    'the palette to open',
-    'visible',
-    PALETTE_TIMEOUT_MS,
-  );
-  await page.keyboard.type(title);
-  await waitForExpression(
-    page,
-    `(() => { const hidden = (${partHidden.toString()})(document.querySelector(${JSON.stringify(part)})); const listed = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row')).some((row) => row.textContent?.includes(${JSON.stringify(title)}) === true); return hidden || listed; })()`,
+  const palette = page.locator('.quick-input-widget');
+  const outcome = `(() => { const hidden = (${partHidden.toString()})(document.querySelector(${JSON.stringify(part)})); if (hidden) { return 'hidden'; } if (Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row')).some((row) => row.textContent?.includes(${JSON.stringify(title)}) === true)) { return 'listed'; } return document.querySelector('.quick-input-widget')?.checkVisibility() === true ? false : 'closed'; })()`;
+  const result = await withTimeout(
     `the palette to list the command ${title} or the ${barName} to hide`,
+    STATE_TIMEOUT_MS,
+    (ms) =>
+      hideSideBarWithRetry(
+        {
+          openPalette: async (timeout) => {
+            await page.keyboard.press('F1');
+            await waitForState(
+              palette,
+              'the palette to open',
+              'visible',
+              Math.min(PALETTE_TIMEOUT_MS, timeout),
+            );
+          },
+          typeCommand: () => page.keyboard.type(title),
+          waitForOutcome: async (timeout) => {
+            const found = await page
+              .waitForFunction(outcome, undefined, { timeout })
+              .then((handle) => handle.jsonValue())
+              .catch((error: unknown) => {
+                if (error instanceof errors.TimeoutError) {
+                  return 'none';
+                }
+                throw error;
+              });
+            return found === 'listed' || found === 'hidden' || found === 'closed' ? found : 'none';
+          },
+          runCommand: () => page.keyboard.press('Enter'),
+          dismiss: () => page.keyboard.press('Escape'),
+        },
+        'hiding the ' + barName,
+        ms,
+        Date.now,
+      ),
   );
-  const row = page.locator('.quick-input-list .monaco-list-row', { hasText: title }).first();
-  if (await row.isVisible()) {
-    await page.keyboard.press('Enter');
-  } else {
-    await page.keyboard.press('Escape');
+  if (result === 'by itself') {
     log(`the ${barName} hid by itself before the palette listed ${title}`);
   }
   await waitForQuickInputClosed(page);

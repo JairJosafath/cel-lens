@@ -6,6 +6,15 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-02
+
+### Changed
+
+- The picture script's `hideSideBar` opens the palette again with `F1` and retypes the command when a busy workbench closed the palette while the side bar still showed, all within the step's one deadline; when that runs out, the error says the palette kept closing before it listed the command.
+- The `fitting-completion` setting description now says "completion", as the README row does. The test comparing the two counts "diagnostics" as checks and "typed" as typing, and no longer takes "offers" alone as completion.
+- Each quick-fix retry in the picture script waits for the empty answer to go away before asking again, and fails with the no-fix message when it stays. Nothing changes in what the editor shows.
+- `compareExperimentalRows` accepts a color-only note only when it has no sentence break and names no engine capability such as hover, completion, diagnostics, checks or fixes. Nothing changes in what the editor shows.
+
 ## [0.26.0] - 2026-11-02
 
 ### Changed
@@ -517,7 +526,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.26.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.0...HEAD
+[0.27.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.26.0...vscode-v0.27.0
 [0.26.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.25.0...vscode-v0.26.0
 [0.25.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.3...vscode-v0.25.0
 [0.24.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.2...vscode-v0.24.3

@@ -30,10 +30,10 @@ function readmeRows(): Map<string, string> {
 const COLORS = COLOR_WORD;
 
 const CAPABILITIES = {
-  checks: /\bchecks?\b/i,
+  checks: /\bchecks?\b|\bdiagnostics?\b/i,
   hover: /\bhovers?\b/i,
-  completion: /\bcomplet(?:e|es|ion)\b|\boffers\b/i,
-  typing: /\btypes\b|\btyping\b/i,
+  completion: /\bcomplet(?:e|es|ion)\b/i,
+  typing: /\btypes\b|\btyping\b|\btyped\b/i,
 };
 
 function capabilities(text: string): string[] {
@@ -85,6 +85,16 @@ describe('the cel-lens.experimental setting against the README', () => {
       expect(colorsRow).toContain(`\`${name}\``);
     },
   );
+
+  it.each([
+    ['Shows diagnostics in the editor', ['checks']],
+    ['Shows a diagnostic in the editor', ['checks']],
+    ['Gives typed variables', ['typing']],
+    ['Offers fields', []],
+    ['Offers completion after a dot', ['completion']],
+  ])('reads "%s" as the capabilities %j', (text, expected) => {
+    expect(capabilities(text)).toEqual(expected);
+  });
 
   it.each([
     ['colored', true],

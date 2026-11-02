@@ -32,7 +32,10 @@ describe('the picture script', () => {
   });
 
   it('waits on a page function only through waitForExpression, which has a timeout and names it', () => {
-    const rest = withoutFunction(withoutFunction(SOURCE, 'waitForExpression'), 'askForQuickFix');
+    const rest = withoutFunction(
+      withoutFunction(withoutFunction(SOURCE, 'waitForExpression'), 'askForQuickFix'),
+      'hideSideBar',
+    );
     expect(rest).not.toMatch(/\.waitForFunction\(/);
   });
 
@@ -120,7 +123,7 @@ describe('the picture script', () => {
     const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
     expect(body).toMatch(/the palette to open[\s\S]*?PALETTE_TIMEOUT_MS/);
     expect(body).toMatch(
-      /the palette to list the command \$\{title\} or the \$\{barName\} to hide/,
+      /the palette to list the command \$\{title\} or the \$\{barName\} to hide[\s\S]*?hideSideBarWithRetry/,
     );
     expect(body).toMatch(/press\('Escape'\)[\s\S]*?hid by itself[\s\S]*?waitForQuickInputClosed/);
   });

@@ -31,17 +31,23 @@ export function experimentalRows(readme: string): Map<string, string> {
 /** A word about colors, in any form the READMEs and the setting use. */
 export const COLOR_WORD = /\bcolou?r(?:s|ed|ing)?\b/i;
 
+/** Words for what the engine does; a note about colors only does not speak of them. */
+const ENGINE_WORD =
+  /\b(?:hover|completions?|completes?|diagnostics?|errors?|checks?|checked|fix(?:es)?)\b/i;
+
 /**
  * Coloring is the extension's work and the engine never colors, so the engine README cannot say
  * what a feature does to colors. A row of the extension may therefore add one sentence about
- * colors to the engine's text; any other difference in words is still a difference.
+ * colors only (it may name a setting such as `cel-lens.colorStyle`) to the engine's text; any other difference in words is still a difference.
  */
 function addsOnlyColorNote(extensionText: string, engineText: string): boolean {
   if (!extensionText.includes(engineText)) {
     return false;
   }
   const added = extensionText.replace(engineText, '').replace(/^[\s.,;]+|[\s.,;]+$/g, '');
-  return added === '' || (/^[^.]*$/.test(added) && COLOR_WORD.test(added));
+  return (
+    added === '' || (!/[.]\s/.test(added) && COLOR_WORD.test(added) && !ENGINE_WORD.test(added))
+  );
 }
 
 /** What differs between two tables, one line per feature missing from a side or worded differently. */

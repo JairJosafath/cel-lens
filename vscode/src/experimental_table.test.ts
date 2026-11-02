@@ -69,6 +69,18 @@ describe('compareExperimentalRows', () => {
       [],
     ],
     [
+      'a color note naming a setting added to the engine text',
+      new Map([['alpha', 'Does a. Off, or with cel-lens.colorStyle off, it gets no colors']]),
+      base,
+      [],
+    ],
+    [
+      'a note that mixes colors with another feature',
+      new Map([['alpha', 'Does a. Off, it gets no colors or hover']]),
+      base,
+      ['alpha: differs\n  extension: Does a. Off, it gets no colors or hover\n  engine:    Does a'],
+    ],
+    [
       'a note in other words added to the engine text',
       new Map([['alpha', 'Does a. Off, it gets no hover']]),
       base,
