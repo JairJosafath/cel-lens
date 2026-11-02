@@ -12,7 +12,29 @@ function withoutFunction(source: string, name: string): string {
   return source.slice(0, start) + source.slice(end + 3);
 }
 
+/** The hold arguments of `holdFrame` and `typeText` calls that are numeric literals. */
+function numericHolds(source: string): string[] {
+  const holdFrame = /holdFrame\(\s*[^,()]+,\s*\d[\w.]*/g;
+  const typeTextDelay = /typeText\(\s*[^,]+,[^,]+,[^,]+,\s*\d[\w.]*/g;
+  return [...(source.match(holdFrame) ?? []), ...(source.match(typeTextDelay) ?? [])];
+}
+
 describe('the picture script', () => {
+  it.each([
+    ['holdFrame(recording, 400)', 1],
+    ['holdFrame(recording, 1_000)', 1],
+    ['typeText(page, recording, TEXT, 50)', 1],
+    ['typeText(\n page,\n recording,\n TEXT,\n 50,\n)', 1],
+    ['holdFrame(recording, COLORS_HOLD_AFTER_MS)', 0],
+    ['typeText(page, recording, TEXT, GIF_TYPING_MS)', 0],
+  ])('finds the numeric holds in %j: %i', (source, count) => {
+    expect(numericHolds(source)).toHaveLength(count);
+  });
+
+  it('takes every hold from src/gif_plans.ts, never from a number in the script', () => {
+    expect(numericHolds(SOURCE)).toEqual([]);
+  });
+
   it('has no fixed pause outside the helper that paces the GIFs', () => {
     const rest = withoutFunction(SOURCE, 'holdFrame');
     expect(rest).not.toMatch(/waitForTimeout/);
@@ -58,7 +80,15 @@ describe('the picture script', () => {
     const start = SOURCE.indexOf('async function withTimeout<T>(');
     const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
     expect(body).toMatch(/Gave up after .* waiting for \$\{description\}: \$\{reason\}/);
-    expect(body).toMatch(/split\('\\n'\)\[0\]/);
+    expect(body).toMatch(/const reason = firstMessageLine\(error\);/);
+  });
+
+  it('formats the first line of an error message in one function, used by both give-up reasons', () => {
+    expect(SOURCE.match(/split\('\\n'\)\[0\]/g)).toHaveLength(1);
+    const start = SOURCE.indexOf('function firstMessageLine(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(SOURCE.slice(start, SOURCE.indexOf('\n}\n', start))).toMatch(/split\('\\n'\)\[0\]/);
+    expect(SOURCE.match(/const reason = firstMessageLine\(\w+\);/g)).toHaveLength(2);
   });
 
   it('gives the page load and every screenshot a timeout and a name', () => {
@@ -141,6 +171,10 @@ describe('the picture script', () => {
     expect(hide).toMatch(/\$\{partHidden\.toString\(\)\}/);
     expect(expectHidden).toMatch(/\$\{partHidden\.toString\(\)\}/);
     expect(SOURCE).not.toMatch(/box\.width === 0/);
+    expect(hide).toMatch(
+      /page\.evaluate\(\s*`\(\$\{partHidden\.toString\(\)\}\)\(document\.querySelector/,
+    );
+    expect(SOURCE).not.toMatch(/\.isVisible\(\)/);
   });
 
   it('checks both side bars hidden at the end of prepare', () => {
@@ -160,7 +194,7 @@ describe('the picture script', () => {
     expect(body).not.toMatch(/\bsave\(|IMAGES/);
     expect(body).toMatch(/fullPage: true,\s+timeout: GAVE_UP_TIMEOUT_MS/);
     expect(body).toMatch(
-      /catch \(failure: unknown\) \{[\s\S]*?failure\.message\.split\('\\n'\)\[0\][\s\S]*?the screenshot failed: \$\{reason\}/,
+      /catch \(failure: unknown\) \{\s+const reason = firstMessageLine\(failure\);[\s\S]*?the screenshot failed: \$\{reason\}/,
     );
     expect(SOURCE).toMatch(
       /catch \(error: unknown\) \{\s+await saveGaveUpPicture\(page\);\s+throw error;/,

@@ -29,7 +29,7 @@ export function experimentalRows(readme: string): Map<string, string> {
 }
 
 /** A word about colors, in any form the READMEs and the setting use. */
-export const COLOR_WORD = /\bcolou?r(?:s|ed|ing)?\b/i;
+export const COLOR_WORD = /\bcolou?r(?:s|ed|ing)?\b|\bcolorStyle\b/i;
 
 /** Words for what the engine does; a note about colors only does not speak of them. */
 const ENGINE_WORD =

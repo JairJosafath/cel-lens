@@ -75,6 +75,12 @@ describe('compareExperimentalRows', () => {
       [],
     ],
     [
+      'a color note that names only the colorStyle setting',
+      new Map([['alpha', 'Does a. Styled by cel-lens.colorStyle']]),
+      base,
+      [],
+    ],
+    [
       'a note that mixes colors with another feature',
       new Map([['alpha', 'Does a. Off, it gets no colors or hover']]),
       base,

@@ -3,10 +3,10 @@
 // stand-in. A test that gets no answer fails when vitest's time limit passes
 // (vitest.e2e.config.mts); an engine that exits fails it at once, with its error output.
 import type { ChildProcess } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
-import { platform } from 'node:os';
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -16,7 +16,10 @@ import {
   ExitNotification,
   InitializeRequest,
   InitializedNotification,
+  DidChangeWatchedFilesNotification,
+  FileChangeType,
   PublishDiagnosticsNotification,
+  RegistrationRequest,
   ShutdownRequest,
   StreamMessageReader,
   StreamMessageWriter,
@@ -24,6 +27,7 @@ import {
   type CompletionItem,
   type CompletionList,
   type Diagnostic,
+  type Registration,
   type Hover,
   type ProtocolConnection,
 } from 'vscode-languageserver-protocol/node';
@@ -42,6 +46,8 @@ const FIXTURES = fileURLToPath(new URL('fixtures/', import.meta.url));
 const EXTENSION_PATH = fileURLToPath(new URL('../../', import.meta.url));
 const ERROR = 1;
 const WARNING = 2;
+/** The watch kind Delete of LSP 3.17 (Create 1, Change 2, Delete 4). */
+const DELETE_WATCH_KIND = 4;
 const DOCS_LINK =
   /^https:\/\/(kubernetes\.io\/docs|github\.com\/google\/cel-spec|pkg\.go\.dev\/github\.com\/google\/cel-go)([/#]|$)/;
 
@@ -56,6 +62,8 @@ interface Engine {
   readonly supportedVersions: readonly string[];
   /** The version the engine uses when none is asked for, from its `initialize` result. */
   readonly defaultVersion: string | undefined;
+  /** The registrations the engine asked the client for with `client/registerCapability`. */
+  readonly registrations: Registration[];
   /** Resolves on the next publishDiagnostics. */
   nextPublish: () => Promise<void>;
 }
@@ -80,8 +88,16 @@ async function checkedExtensionPath(): Promise<string> {
   return EXTENSION_PATH;
 }
 
+interface SessionOptions {
+  /** A workspace folder on disk, scanned by the engine. */
+  readonly folder?: string;
+  /** Tells the engine the client registers file watchers. */
+  readonly dynamicRegistration?: boolean;
+  readonly experimental?: readonly string[];
+}
+
 /** Starts the engine as the extension does and initializes a session. */
-async function startEngine(extensionPath: string): Promise<Engine> {
+async function startEngine(extensionPath: string, options: SessionOptions = {}): Promise<Engine> {
   const server = await resolveServer({
     setting: '',
     extensionPath,
@@ -117,13 +133,23 @@ async function startEngine(extensionPath: string): Promise<Engine> {
       wake();
     }
   });
+  const registrations: Registration[] = [];
+  connection.onRequest(RegistrationRequest.type, (params) => {
+    registrations.push(...params.registrations);
+  });
   connection.listen();
   const initialized = await Promise.race([
     connection.sendRequest(InitializeRequest.type, {
       processId: process.pid,
       rootUri: null,
-      capabilities: {},
-      initializationOptions: serverOptions(''),
+      workspaceFolders:
+        options.folder === undefined
+          ? null
+          : [{ uri: pathToFileURL(options.folder).href, name: 'workspace' }],
+      capabilities: options.dynamicRegistration
+        ? { workspace: { didChangeWatchedFiles: { dynamicRegistration: true } } }
+        : {},
+      initializationOptions: serverOptions('', undefined, options.experimental),
     }),
     exited,
   ]);
@@ -135,6 +161,7 @@ async function startEngine(extensionPath: string): Promise<Engine> {
     supportedVersions: parseVersionInfo(initialized, '')?.supported ?? [],
     defaultVersion: parseVersionInfo(initialized, '')?.defaultVersion,
     published,
+    registrations,
     nextPublish: () =>
       new Promise<void>((resolve) => {
         waiting.push(resolve);
@@ -175,16 +202,20 @@ beforeAll(async () => {
   engine = await startEngine(await checkedExtensionPath());
 });
 
+async function stopEngine(stopping: Engine): Promise<void> {
+  try {
+    await Promise.race([stopping.connection.sendRequest(ShutdownRequest.type), stopping.exited]);
+    await stopping.connection.sendNotification(ExitNotification.type);
+  } catch {
+    // The engine already exited; the kill below is then a no-op.
+  }
+  stopping.connection.dispose();
+  stopping.process.kill();
+}
+
 afterAll(async () => {
   if (engine !== undefined) {
-    try {
-      await Promise.race([engine.connection.sendRequest(ShutdownRequest.type), engine.exited]);
-      await engine.connection.sendNotification(ExitNotification.type);
-    } catch {
-      // The engine already exited; the kill below is then a no-op.
-    }
-    engine.connection.dispose();
-    engine.process.kill();
+    await stopEngine(engine);
   }
 });
 
@@ -321,5 +352,49 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
     });
 
     expect(await diagnosticsFor(uri, (list) => list.length === 0)).toEqual([]);
+  });
+});
+
+describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
+  it('forgets the CRDs below a deleted folder, through the delete-only ** watcher', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    const crds = join(root, 'crds');
+    await mkdir(crds);
+    await copyFile(join(FIXTURES, 'widget_crd.yaml'), join(crds, 'widget_crd.yaml'));
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      dynamicRegistration: true,
+      experimental: ['crd-typed-policies'],
+    });
+    const shared = engine;
+    engine = session;
+    try {
+      const { uri, text } = await open('widget_policy.yaml');
+
+      const warned = await diagnosticsFor(uri, (list) => list.length > 0);
+
+      expect(warned).toMatchObject([{ source: 'cel-lens', severity: WARNING }]);
+      expect(warned[0]?.range.start.line).toBe(lineOf(text, '- expression:'));
+      const watched = session.registrations.find(
+        (registration) => registration.method === 'workspace/didChangeWatchedFiles',
+      );
+      expect(watched?.registerOptions).toMatchObject({
+        watchers: [
+          { globPattern: '**/*.{yaml,yml}' },
+          { globPattern: '**', kind: DELETE_WATCH_KIND },
+        ],
+      });
+
+      await rm(crds, { recursive: true });
+      await session.connection.sendNotification(DidChangeWatchedFilesNotification.type, {
+        changes: [{ uri: pathToFileURL(crds).href, type: FileChangeType.Deleted }],
+      });
+
+      expect(await diagnosticsFor(uri, (list) => list.length === 0)).toEqual([]);
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

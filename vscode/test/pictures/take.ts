@@ -347,6 +347,11 @@ async function holdFrame(recording: Recording, ms: number): Promise<void> {
  * the state waited for, and keeps Playwright's first-line reason. Every wait and action of the
  * script goes through here.
  */
+/** The first line of an error's message, else the thrown value as text: the reason in a give-up message. */
+function firstMessageLine(error: unknown): string {
+  return error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
+}
+
 async function withTimeout<T>(
   description: string,
   timeout: number,
@@ -355,8 +360,7 @@ async function withTimeout<T>(
   try {
     return await action(timeout);
   } catch (error) {
-    const reason =
-      error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
+    const reason = firstMessageLine(error);
     throw new Error(`Gave up after ${String(timeout)} ms waiting for ${description}: ${reason}`, {
       cause: error,
     });
@@ -625,10 +629,7 @@ async function saveGaveUpPicture(page: Page): Promise<void> {
     await writeFile(target, bytes);
     process.stderr.write(`pictures: the page when the script stopped: ${GAVE_UP_PICTURE}\n`);
   } catch (failure: unknown) {
-    const reason =
-      failure instanceof Error
-        ? (failure.message.split('\n')[0] ?? failure.message)
-        : String(failure);
+    const reason = firstMessageLine(failure);
     process.stderr.write(
       `pictures: no picture of the page when the script stopped: the screenshot failed: ${reason}\n`,
     );
@@ -668,7 +669,10 @@ async function hideSideBar(
   title: string,
   barName: string,
 ): Promise<void> {
-  if (!(await page.locator(part).isVisible())) {
+  const alreadyHidden: unknown = await page.evaluate(
+    `(${partHidden.toString()})(document.querySelector(${JSON.stringify(part)}))`,
+  );
+  if (alreadyHidden === true) {
     return;
   }
   const palette = page.locator('.quick-input-widget');

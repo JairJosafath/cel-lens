@@ -6,6 +6,19 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-11-02
+
+### Added
+
+- An end-to-end test checks that the engine forgets the CRDs under a deleted folder.
+
+### Changed
+
+- The picture script's `hideSideBar` also uses `partHidden` for its early return.
+- The picture script has one helper for the first line of an error's message.
+- A lint rule forbids numeric hold literals in `test/pictures/take.ts`, so every hold goes through `src/gif_plans.ts`.
+- `compareExperimentalRows` accepts a color note that names only `cel-lens.colorStyle`.
+
 ## [0.27.0] - 2026-11-02
 
 ### Changed
@@ -526,7 +539,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.1...HEAD
+[0.27.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.0...vscode-v0.27.1
 [0.27.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.26.0...vscode-v0.27.0
 [0.26.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.25.0...vscode-v0.26.0
 [0.25.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.24.3...vscode-v0.25.0

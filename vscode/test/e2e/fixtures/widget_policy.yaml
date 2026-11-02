@@ -1,0 +1,16 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: widget-limit
+spec:
+  paramKind:
+    apiVersion: example.com/v1
+    kind: Widget
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['apps']
+        apiVersions: ['v1']
+        operations: ['CREATE', 'UPDATE']
+        resources: ['deployments']
+  validations:
+    - expression: params.spec.maxReplica > 0
