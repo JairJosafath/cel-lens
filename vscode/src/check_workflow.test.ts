@@ -5,14 +5,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { factoryTitle, HAS_FACTORY_WORKFLOWS } from './factory_files';
+import { isRecord } from './is_record';
 
 const WORKFLOWS = ['.gitea/workflows/check.yaml', '.gitea/workflows/release.yaml'];
 const CLEANUP = 'rm -rf "$TMPDIR"';
 const GUARD = ['case "${TMPDIR:-}" in', '"" | /tmp | /tmp/*) exit 0 ;;', 'esac'];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /** Whether a run script ends with the cleanup, possibly after a guard that skips it. */
 function endsWithCleanup(run: unknown): boolean {

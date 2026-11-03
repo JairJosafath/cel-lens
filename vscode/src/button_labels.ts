@@ -9,3 +9,6 @@ export const SHOW_LOGS_LABEL = 'Show Logs';
 
 /** The label of the notification button that opens the `cel-lens.experimental` setting. */
 export const OPEN_EXPERIMENTAL_SETTING_LABEL = 'Open Experimental Setting';
+
+/** The label of the notification button that replaces misspelt `cel-lens.experimental` names with their suggestions. */
+export const REPLACE_EXPERIMENTAL_LABEL = 'Replace';

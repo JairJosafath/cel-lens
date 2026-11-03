@@ -97,6 +97,15 @@ describe('README.md as the store page', () => {
     expect(section).toContain('`cel-lens.experimental`');
   });
 
+  it.each(['in the background', '20000', '1 MiB', 'checked again'])(
+    'says in the crd-typed-policies row why a type stays dyn: %s',
+    (phrase) => {
+      const section = readmeSection(README, 'Experimental features') ?? '';
+      const row = section.split('\n').find((line) => line.startsWith('| `crd-typed-policies`'));
+      expect(row).toContain(phrase);
+    },
+  );
+
   it('links the two GIFs, then the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(PICTURES.map((name) => IMAGE_BASE + name));

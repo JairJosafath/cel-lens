@@ -4,6 +4,7 @@ import { join, resolve, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { factoryTitle, HAS_FACTORY_WORKFLOWS } from './factory_files';
+import { isRecord } from './is_record';
 
 const WORKFLOW = '.gitea/workflows/release.yaml';
 const MAKE_DIST = /\bmake\s+dist\b/;
@@ -23,10 +24,6 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function field(record: Record<string, unknown>, key: string): unknown {
   return record[key];

@@ -2,6 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 import {
   OPEN_ENGINE_SETTING_LABEL,
   OPEN_EXPERIMENTAL_SETTING_LABEL,
+  REPLACE_EXPERIMENTAL_LABEL,
   SHOW_LOGS_LABEL,
 } from './button_labels';
 import { access, chmod, constants, stat } from 'node:fs/promises';
@@ -21,6 +22,8 @@ import { EngineMessages, SHOW_MESSAGE_METHOD, type ShowMessageParams } from './e
 import {
   EXPERIMENTAL_SETTING,
   parseExperimental,
+  replaceExperimental,
+  suggestions,
   unknownExperimental,
   unknownExperimentalMessage,
 } from './experimental';
@@ -162,12 +165,47 @@ export class ServerController implements vscode.Disposable {
       return;
     }
     // Not awaited: a notification stays pending while it is open, and must not block a restart.
+    const fixes = suggestions(names, this.knownFeatures);
+    const buttons =
+      fixes === undefined
+        ? [OPEN_EXPERIMENTAL_SETTING_LABEL]
+        : [REPLACE_EXPERIMENTAL_LABEL, OPEN_EXPERIMENTAL_SETTING_LABEL];
     void vscode.window
-      .showWarningMessage(
-        unknownExperimentalMessage(names, this.knownFeatures),
-        OPEN_EXPERIMENTAL_SETTING_LABEL,
-      )
-      .then((button) => this.handle(button));
+      .showWarningMessage(unknownExperimentalMessage(names, this.knownFeatures), ...buttons)
+      .then((button) =>
+        button === REPLACE_EXPERIMENTAL_LABEL && fixes !== undefined
+          ? this.replaceExperimentalNames(fixes)
+          : this.handle(button),
+      );
+  }
+
+  /** Rewrites the misspelt names in each scope of `cel-lens.experimental` that lists them. */
+  private async replaceExperimentalNames(fixes: ReadonlyMap<string, string>): Promise<void> {
+    try {
+      const scopes = [
+        { target: vscode.ConfigurationTarget.Global, key: 'globalValue' },
+        { target: vscode.ConfigurationTarget.Workspace, key: 'workspaceValue' },
+      ] as const;
+      const configuration = vscode.workspace.getConfiguration('cel-lens');
+      for (const { target, key } of scopes) {
+        const replaced = replaceExperimental(
+          configuration.inspect<unknown>(EXPERIMENTAL_SETTING)?.[key],
+          fixes,
+        );
+        if (replaced !== undefined) {
+          await configuration.update(EXPERIMENTAL_SETTING, replaced, target);
+        }
+      }
+    } catch (error) {
+      this.log.error(`Could not replace the experimental names: ${String(error)}`);
+      // Not awaited: a notification stays pending while it is open.
+      void vscode.window
+        .showWarningMessage(
+          'cel-lens could not change the cel-lens.experimental setting. Fix any errors in settings.json, then correct the names by hand.',
+          OPEN_EXPERIMENTAL_SETTING_LABEL,
+        )
+        .then((button) => this.handle(button));
+    }
   }
 
   /** Starts the server unless it is running. Never rejects. */

@@ -76,3 +76,43 @@ export function unknownExperimentalMessage(
     .join(', ');
   return `cel-lens.experimental lists ${quoted}, which the engine does not know, so ${names.length === 1 ? 'it is' : 'they are'} ignored. Remove or correct ${names.length === 1 ? 'it' : 'them'} in the setting.`;
 }
+
+/**
+ * The suggestion for each unknown name, but only when every one has a suggestion: a replacement
+ * that fixes some names and leaves others would still leave a warning.
+ */
+export function suggestions(
+  names: readonly string[],
+  known: readonly string[],
+): Map<string, string> | undefined {
+  const found = new Map<string, string>();
+  for (const name of names) {
+    const suggestion = closestKnownName(name, known);
+    if (suggestion === undefined) {
+      return undefined;
+    }
+    found.set(name, suggestion);
+  }
+  return found.size === 0 ? undefined : found;
+}
+
+/**
+ * The setting value with each string item found in `replacements` (after trimming) replaced, and
+ * duplicates dropped; other items stay as they are. Undefined when the value is not a list or
+ * nothing in it is replaced.
+ */
+export function replaceExperimental(
+  value: unknown,
+  replacements: ReadonlyMap<string, string>,
+): unknown[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const original: readonly unknown[] = value;
+  const items = original.map((item: unknown) =>
+    typeof item === 'string' ? (replacements.get(item.trim()) ?? item) : item,
+  );
+  return items.some((item, index) => item !== original[index])
+    ? items.filter((item, index) => items.indexOf(item) === index)
+    : undefined;
+}

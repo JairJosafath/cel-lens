@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   channels,
+  commands,
   errorChoice,
   executedCommands,
   reset,
@@ -28,6 +29,10 @@ function newHandler(clock: { now: number }): EngineErrorHandler {
 describe('EngineErrorHandler', () => {
   beforeEach(() => {
     reset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it.each([
@@ -96,6 +101,25 @@ describe('EngineErrorHandler', () => {
       expect(executedCommands).toEqual([{ command, args: [] }]);
     });
   });
+
+  it.each(['Restart Engine', 'Show Logs'])(
+    'logs that it could not follow the %s button when the command rejects',
+    async (button) => {
+      errorChoice.next = button;
+      vi.spyOn(commands, 'executeCommand').mockRejectedValue(new Error('no such command'));
+      const handler = newHandler({ now: 0 });
+
+      for (let i = 0; i < 5; i++) {
+        handler.closed();
+      }
+
+      await vi.waitFor(() => {
+        expect(channels.get('cel-lens')?.lines).toContain(
+          'Could not follow the message button: Error: no such command',
+        );
+      });
+    },
+  );
 
   it('does nothing when the message is dismissed', async () => {
     const handler = newHandler({ now: 0 });

@@ -8,18 +8,22 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { OPEN_EXPERIMENTAL_SETTING_LABEL } from './button_labels';
+import { OPEN_EXPERIMENTAL_SETTING_LABEL, REPLACE_EXPERIMENTAL_LABEL } from './button_labels';
 import {
+  ConfigurationTarget,
   type LogChannel,
   channels,
   errorChoice,
   executedCommands,
   reset,
+  settingUpdates,
   settings,
   shownErrors,
   shownWarnings,
+  updateFailure,
   warningChoice,
   window,
+  workspaceSettings,
 } from '../test/vscode';
 import { END_WAIT_MS, ServerController } from './server_controller';
 
@@ -691,11 +695,75 @@ describe('ServerController', () => {
 
     expect(shownWarnings).toHaveLength(1);
     expect(shownWarnings[0]?.message).toContain('"kyvernoo"');
-    expect(shownWarnings[0]?.buttons).toEqual([OPEN_EXPERIMENTAL_SETTING_LABEL]);
+    expect(shownWarnings[0]?.buttons).toEqual([
+      REPLACE_EXPERIMENTAL_LABEL,
+      OPEN_EXPERIMENTAL_SETTING_LABEL,
+    ]);
     expect(executedCommands).toContainEqual({
       command: 'workbench.action.openSettings',
       args: ['cel-lens.experimental'],
     });
+  });
+
+  it('replaces the misspelt names at the scope that set them, and warns no second time', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    workspaceSettings.set('cel-lens.experimental', ['kyvernoo', 'kyverno']);
+    settings.set('cel-lens.experimental', ['kyvernoo']);
+    client.initializeResult = FEATURES_RESULT;
+    shownWarnings.length = 0;
+    settingUpdates.length = 0;
+    warningChoice.next = REPLACE_EXPERIMENTAL_LABEL;
+    const controller = newController();
+
+    await controller.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    settings.set('cel-lens.experimental', ['kyverno']);
+    await controller.sendSettings();
+
+    expect(settingUpdates).toEqual([
+      { name: 'cel-lens.experimental', value: ['kyverno'], target: ConfigurationTarget.Global },
+      { name: 'cel-lens.experimental', value: ['kyverno'], target: ConfigurationTarget.Workspace },
+    ]);
+    expect(shownWarnings).toHaveLength(1);
+  });
+
+  it('tells the user, with a button to the setting, when the replacement cannot be written', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.experimental', ['kyvernoo']);
+    client.initializeResult = FEATURES_RESULT;
+    shownWarnings.length = 0;
+    updateFailure.error = new Error('settings.json is not writable');
+    warningChoice.next = OPEN_EXPERIMENTAL_SETTING_LABEL;
+    vi.spyOn(window, 'showWarningMessage').mockImplementationOnce((message, ...buttons) => {
+      shownWarnings.push({ message, buttons });
+      return Promise.resolve(REPLACE_EXPERIMENTAL_LABEL as never);
+    });
+
+    await newController().start();
+
+    await vi.waitFor(() => {
+      expect(executedCommands).toContainEqual({
+        command: 'workbench.action.openSettings',
+        args: ['cel-lens.experimental'],
+      });
+    });
+    expect(channels.get('cel-lens')?.lines).toContain(
+      'Could not replace the experimental names: Error: settings.json is not writable',
+    );
+    expect(shownWarnings).toHaveLength(2);
+    expect(shownWarnings[1]?.message).toContain('could not change the cel-lens.experimental');
+    expect(shownWarnings[1]?.buttons).toEqual([OPEN_EXPERIMENTAL_SETTING_LABEL]);
+  });
+
+  it('offers no Replace button when a name has no suggestion', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.experimental', ['kyvernoo', 'zzzzzz']);
+    client.initializeResult = FEATURES_RESULT;
+    shownWarnings.length = 0;
+
+    await newController().start();
+
+    expect(shownWarnings[0]?.buttons).toEqual([OPEN_EXPERIMENTAL_SETTING_LABEL]);
   });
 
   it.each([

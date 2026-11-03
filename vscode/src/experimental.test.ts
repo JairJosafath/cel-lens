@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { closestKnownName, unknownExperimental, unknownExperimentalMessage } from './experimental';
+import {
+  closestKnownName,
+  replaceExperimental,
+  suggestions,
+  unknownExperimental,
+  unknownExperimentalMessage,
+} from './experimental';
 
 const KNOWN = ['kyverno', 'crd-typed-policies', 'fitting-completion'];
 
@@ -54,5 +60,32 @@ describe('unknownExperimentalMessage suggestions', () => {
     [['zzzzzz'], '"zzzzzz", which'],
   ])('for %j says %s', (names, text) => {
     expect(unknownExperimentalMessage(names, ['kyverno'])).toContain(text);
+  });
+});
+
+describe('suggestions', () => {
+  it.each([
+    [['kyvernoo'], new Map([['kyvernoo', 'kyverno']])],
+    [['kyvernoo', 'zzzzzz'], undefined],
+    [[], undefined],
+  ])('for %j gives %j', (names, expected) => {
+    expect(suggestions(names, ['kyverno'])).toEqual(expected);
+  });
+});
+
+describe('replaceExperimental', () => {
+  const fixes = new Map([['kyvernoo', 'kyverno']]);
+
+  it.each([
+    [['kyvernoo'], ['kyverno']],
+    [[' kyvernoo ', 'kyverno'], ['kyverno']],
+    [
+      ['a', 3, 'kyvernoo'],
+      ['a', 3, 'kyverno'],
+    ],
+    [['a'], undefined],
+    ['kyvernoo', undefined],
+  ])('turns %j into %j', (value, expected) => {
+    expect(replaceExperimental(value, fixes)).toEqual(expected);
   });
 });

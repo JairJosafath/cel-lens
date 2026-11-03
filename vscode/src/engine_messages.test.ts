@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   channels,
+  commands,
   executedCommands,
   reset,
   shownErrors,
@@ -33,6 +34,10 @@ describe('EngineMessages', () => {
     reset();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('shows the file-cap warning with a Show Logs button', () => {
     newMessages().show({ type: 2, message: CAP });
 
@@ -46,6 +51,16 @@ describe('EngineMessages', () => {
     await settle();
 
     expect(executedCommands).toContainEqual({ command: SHOW_LOGS_COMMAND, args: [] });
+  });
+
+  it('logs that it could not follow the Show Logs button when the command rejects', async () => {
+    warningChoice.next = 'Show Logs';
+    vi.spyOn(commands, 'executeCommand').mockRejectedValue(new Error('no such command'));
+
+    newMessages().show({ type: 2, message: CAP });
+    await settle();
+
+    expect(log()).toContain('Could not follow the message button: Error: no such command');
   });
 
   it('runs nothing when the user dismisses the warning', async () => {

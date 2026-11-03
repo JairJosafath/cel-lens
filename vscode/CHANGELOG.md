@@ -6,6 +6,18 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-03
+
+### Added
+
+- The notification about unknown names in `cel-lens.experimental` has a Replace button when every unknown name has a suggestion; it rewrites those names in the setting at the scope (user or workspace) that set them.
+
+### Changed
+
+- The README's `crd-typed-policies` row names the background scan, the 20000-file cap and the 1 MiB per-file limit, and says open documents are checked again when the scan ends.
+- The engine error tests cover the log line written when the message button cannot be followed; no behaviour changes.
+- The workflow tests use the shared `isRecord` helper; no behaviour changes.
+
 ## [0.33.0] - 2026-11-03
 
 ### Added
@@ -622,7 +634,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.33.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.0...HEAD
+[0.34.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.33.0...vscode-v0.34.0
 [0.33.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.32.0...vscode-v0.33.0
 [0.32.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.31.0...vscode-v0.32.0
 [0.31.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.30.0...vscode-v0.31.0
