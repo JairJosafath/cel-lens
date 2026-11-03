@@ -14,8 +14,12 @@ import { EngineMessages } from './engine_messages';
 const CAP =
   'cel-lens stopped scanning the workspace for CustomResourceDefinitions after 5000 YAML files; CRDs in the files left out are not known, so a params type may stay dyn';
 
+const warn = vi.fn();
+
 function newMessages(): EngineMessages {
-  const log = { error: vi.fn() } as unknown as ConstructorParameters<typeof EngineMessages>[0];
+  const log = { error: vi.fn(), warn } as unknown as ConstructorParameters<
+    typeof EngineMessages
+  >[0];
   return new EngineMessages(log);
 }
 
@@ -28,6 +32,7 @@ async function settle(): Promise<void> {
 describe('EngineMessages', () => {
   beforeEach(() => {
     reset();
+    warn.mockReset();
   });
 
   it('shows the file-cap warning with a Show Logs button', () => {
@@ -59,6 +64,15 @@ describe('EngineMessages', () => {
     messages.show({ type: 2, message: CAP });
 
     expect(shownWarnings).toHaveLength(1);
+  });
+
+  it('writes the cap warning to the log once per shown warning', () => {
+    const messages = newMessages();
+
+    messages.show({ type: 2, message: CAP });
+    messages.show({ type: 2, message: CAP });
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith(CAP);
   });
 
   it.each([

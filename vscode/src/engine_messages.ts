@@ -45,6 +45,7 @@ export class EngineMessages {
       return;
     }
     this.shown.add(message);
+    this.log.warn(message);
     // Not awaited: a notification stays pending while it is open.
     void vscode.window.showWarningMessage(message, SHOW_LOGS_LABEL).then(async (button) => {
       if (button !== SHOW_LOGS_LABEL) {

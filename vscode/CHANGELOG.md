@@ -6,6 +6,13 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-03
+
+### Changed
+
+- The engine's workspace scan-cap warning is also written to the cel-lens log, so Show Logs lists it with the skipped files even after the notification is dismissed.
+- An end-to-end test checks that the engine reads the CRDs below a folder created in the workspace; no behaviour changes.
+
 ## [0.29.0] - 2026-11-03
 
 ### Changed
@@ -588,7 +595,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.29.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.30.0...HEAD
+[0.30.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.29.0...vscode-v0.30.0
 [0.29.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.1...vscode-v0.29.0
 [0.28.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.0...vscode-v0.28.1
 [0.28.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.3...vscode-v0.28.0

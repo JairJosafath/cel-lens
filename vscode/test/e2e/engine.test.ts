@@ -423,4 +423,34 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('reads the CRDs below a folder created after start, on a Create change', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      dynamicRegistration: true,
+      experimental: ['crd-typed-policies'],
+    });
+    const shared = engine;
+    engine = session;
+    try {
+      const { uri, text } = await open('widget_policy.yaml');
+      expect(await diagnosticsFor(uri, (list) => list.length === 0)).toEqual([]);
+
+      const crds = join(root, 'crds');
+      await mkdir(crds);
+      await copyFile(join(FIXTURES, 'widget_crd.yaml'), join(crds, 'widget_crd.yaml'));
+      await session.connection.sendNotification(DidChangeWatchedFilesNotification.type, {
+        changes: [{ uri: pathToFileURL(crds).href, type: FileChangeType.Created }],
+      });
+
+      const warned = await diagnosticsFor(uri, (list) => list.length > 0);
+      expect(warned).toMatchObject([{ source: 'cel-lens', severity: WARNING }]);
+      expect(warned[0]?.range.start.line).toBe(lineOf(text, '- expression:'));
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
