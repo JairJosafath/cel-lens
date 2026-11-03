@@ -82,6 +82,21 @@ export function parseVersionInfo(
     : undefined;
 }
 
+/**
+ * The `experimentalFeatures` names under `capabilities.experimental.celLens` of
+ * an `initialize` result; empty when the field is missing or not a list, and
+ * entries that are not strings are dropped.
+ */
+export function parseExperimentalFeatures(initializeResult: unknown): string[] {
+  const capabilities = isRecord(initializeResult) ? initializeResult['capabilities'] : undefined;
+  const experimental = isRecord(capabilities) ? capabilities['experimental'] : undefined;
+  const celLens = isRecord(experimental) ? experimental['celLens'] : undefined;
+  const listed = isRecord(celLens) ? celLens['experimentalFeatures'] : undefined;
+  return Array.isArray(listed)
+    ? listed.filter((name): name is string => typeof name === 'string')
+    : [];
+}
+
 function isVersion(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }

@@ -32,7 +32,11 @@ import {
   type ProtocolConnection,
 } from 'vscode-languageserver-protocol/node';
 
-import { parseVersionInfo, serverOptions } from '../../src/kubernetes_version';
+import {
+  parseExperimentalFeatures,
+  parseVersionInfo,
+  serverOptions,
+} from '../../src/kubernetes_version';
 import {
   readmeDefaultKubernetesVersion,
   readmeKubernetesVersions,
@@ -97,16 +101,6 @@ interface SessionOptions {
   /** Tells the engine the client registers file watchers. */
   readonly dynamicRegistration?: boolean;
   readonly experimental?: readonly string[];
-}
-
-/** The `experimentalFeatures` names of an `initialize` result; none when the result lacks them. */
-function parseExperimentalFeatures(initialized: unknown): string[] {
-  const names = (initialized as { capabilities?: { experimental?: { celLens?: unknown } } })
-    .capabilities?.experimental?.celLens;
-  const listed = (names as { experimentalFeatures?: unknown } | undefined)?.experimentalFeatures;
-  return Array.isArray(listed)
-    ? listed.filter((name): name is string => typeof name === 'string')
-    : [];
 }
 
 /** Starts the engine as the extension does and initializes a session. */

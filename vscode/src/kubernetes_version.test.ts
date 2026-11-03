@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   configurationParams,
   effectiveVersion,
+  parseExperimentalFeatures,
   parseVersionInfo,
   pickItems,
   serverOptions,
@@ -236,5 +237,26 @@ describe('pickItems', () => {
       { label: '1.37', description: '', version: '1.37' },
       { label: '1.36', description: 'current', version: '1.36' },
     ]);
+  });
+});
+
+describe('parseExperimentalFeatures', () => {
+  it.each([
+    ['names present', initializeResult({ experimentalFeatures: ['a', 'b'] }), ['a', 'b']],
+    ['empty list', initializeResult({ experimentalFeatures: [] }), []],
+    ['field missing', initializeResult({}), []],
+    ['celLens missing', { capabilities: { experimental: {} } }, []],
+    ['capabilities missing', {}, []],
+    ['result not an object', undefined, []],
+    ['null result', null, []],
+    ['a string, not an array', initializeResult({ experimentalFeatures: 'a' }), []],
+    ['an object, not an array', initializeResult({ experimentalFeatures: { a: 1 } }), []],
+    [
+      'mixed types',
+      initializeResult({ experimentalFeatures: ['a', 1, null, 'b', {}] }),
+      ['a', 'b'],
+    ],
+  ])('reads %s as the names it lists', (_name, result, expected) => {
+    expect(parseExperimentalFeatures(result)).toEqual(expected);
   });
 });

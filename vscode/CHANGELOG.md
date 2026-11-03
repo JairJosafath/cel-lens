@@ -6,6 +6,13 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-03
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.24.2: a created folder that is hidden or named `node_modules` is skipped, and a workspace scan that skips many large files logs one summary line instead of one per file.
+- The `experimentalFeatures` setting is read through a pure parser in `src/kubernetes_version.ts`; behaviour is unchanged.
+
 ## [0.28.1] - 2026-11-03
 
 ### Changed
@@ -581,7 +588,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.1...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.29.0...HEAD
+[0.29.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.1...vscode-v0.29.0
 [0.28.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.0...vscode-v0.28.1
 [0.28.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.3...vscode-v0.28.0
 [0.27.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.2...vscode-v0.27.3
