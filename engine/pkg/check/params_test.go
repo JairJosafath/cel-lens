@@ -324,26 +324,43 @@ func TestCRDsFillScanForgets(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name       string
-		incomplete bool
-		want       bool
+		roots      []string
+		incomplete []string
+		files      []string
+		kept       map[string]bool
 	}{
-		{"complete scan", false, false},
-		{"incomplete scan", true, true},
+		{"complete scan", []string{"/ws"}, nil, []string{"/ws/a/gone.yaml"}, map[string]bool{"/ws/a/gone.yaml": false}},
+		{"incomplete scan", []string{"/ws"}, []string{"/ws"}, []string{"/ws/a/gone.yaml"}, map[string]bool{"/ws/a/gone.yaml": true}},
+		{
+			"one of two roots incomplete",
+			[]string{"/one", "/two"},
+			[]string{"/one"},
+			[]string{"/one/gone.yaml", "/two/gone.yaml"},
+			map[string]bool{"/one/gone.yaml": true, "/two/gone.yaml": false},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var c check.CRDs
-			c.Set(ctx, "/ws/a/gone.yaml", []byte(widgetCRD))
+			for _, f := range tc.files {
+				c.Set(ctx, f, []byte(widgetCRD))
+			}
 			var from check.CRDs
-			from.ScanRoots([]string{"/ws"})
-			if tc.incomplete {
-				from.Incomplete("/ws")
+			from.ScanRoots(tc.roots)
+			for _, dir := range tc.incomplete {
+				from.Incomplete(dir)
 			}
-			if got := c.Fill(&from); got == tc.want {
-				t.Errorf("Fill = %v, want %v", got, !tc.want)
+			dropped := false
+			for _, f := range tc.files {
+				dropped = dropped || !tc.kept[f]
 			}
-			if got := c.Forget("/ws/a/gone.yaml"); got != tc.want {
-				t.Errorf("file still recorded after Fill = %v, want %v", got, tc.want)
+			if got := c.Fill(&from); got != dropped {
+				t.Errorf("Fill = %v, want %v", got, dropped)
+			}
+			for _, f := range tc.files {
+				if got := c.Forget(f); got != tc.kept[f] {
+					t.Errorf("%s recorded after Fill = %v, want %v", f, got, tc.kept[f])
+				}
 			}
 		})
 	}

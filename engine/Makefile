@@ -17,7 +17,7 @@ export GO_PARALLEL
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .DEFAULT_GOAL := help
-.PHONY: help check check-light deps tidy-check fmt fmt-check vet vet-windows lint test dyn-report test-windows test-dist build dist clean
+.PHONY: help check check-light deps tidy-check fmt fmt-check vet vet-windows lint test dyn-report test-windows test-dist build dist release clean
 
 help: ## List the targets.
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -77,6 +77,9 @@ dist: ## Cross-compile the release binaries and checksums.txt into dist/.
 			go build -trimpath -ldflags '-s -w $(LDFLAGS)' -o $$out .; \
 	done
 	cd dist && sha256sum $(BINARY)_* > checksums.txt
+
+release: ## Prepare a release: make release RELEASE=X.Y.Z refreshes the public tag list and the changelog links.
+	@[ ! -x scripts/prepare-release.sh ] || scripts/prepare-release.sh '$(RELEASE)'
 
 clean: ## Remove build output.
 	rm -rf bin dist

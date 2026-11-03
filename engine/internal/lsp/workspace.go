@@ -193,12 +193,34 @@ func (ss *session) stopScan() {
 // same files, except those of open documents and of files that changed during
 // the scan, which win, and checks the open documents again when that changed anything and
 // crd-typed-policies is still on. A file the session read, changed or forgot
-// during the scan is not taken from the scan.
+// during the scan is not taken from the scan. It also reads again the known
+// CRD files under the folders the scan skips, which it never read.
 func (ss *session) finishScan(ctx context.Context, found *check.CRDs) error {
-	if ctx.Err() != nil || !ss.crds.Fill(found) || !ss.features.Has(feature.CRDTypedPolicies) {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	reread := ss.rereadSkipped(ctx, found)
+	if !ss.crds.Fill(found) && !reread || !ss.features.Has(feature.CRDTypedPolicies) {
 		return ctx.Err()
 	}
 	return ss.publishAll(ctx, "")
+}
+
+// rereadSkipped reads again the known CRD files under the folders the scan
+// skipped, which it never read, so an edit made on disk while they were closed
+// is followed. An open document keeps its text. It reports whether the CRDs
+// changed.
+func (ss *session) rereadSkipped(ctx context.Context, found *check.CRDs) bool {
+	changed := false
+	for _, file := range ss.crds.UnderSkipped(found) {
+		if ctx.Err() != nil {
+			break
+		}
+		if !ss.isOpenKey(file) {
+			changed = ss.readFromDisk(ctx, pathURI(filepath.FromSlash(file))) || changed
+		}
+	}
+	return changed
 }
 
 // scanWorkspace reads the YAML files below the workspace folders into dst,
@@ -387,7 +409,7 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 			changed = ss.readFromDisk(ctx, c.URI) || changed
 		case on && c.Type == fileCreated:
 			// A client sends one event for a created folder, not one per file.
-			if path, ok := diskPath(c.URI); ok && !skippedFolder(filepath.Base(path)) && isDir(path) {
+			if path, ok := diskPath(c.URI); ok && !ss.skippedCreated(path) && isDir(path) {
 				created = append(created, path)
 			}
 		}
@@ -405,6 +427,25 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 // name: a hidden folder or node_modules.
 func skippedFolder(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "node_modules"
+}
+
+// skippedCreated reports whether the workspace scan would skip the created
+// folder: every workspace folder that contains it has a hidden or node_modules
+// element between itself and the folder. A folder outside every workspace
+// folder is judged by its own name.
+func (ss *session) skippedCreated(path string) bool {
+	inside := false
+	for _, root := range ss.folders {
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		inside = true
+		if rel == "." || !slices.ContainsFunc(strings.Split(rel, string(filepath.Separator)), skippedFolder) {
+			return false
+		}
+	}
+	return inside || skippedFolder(filepath.Base(path))
 }
 
 func isDir(path string) bool {

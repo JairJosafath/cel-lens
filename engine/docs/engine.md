@@ -133,7 +133,8 @@ type checker does:
   client gets one warning, and one file skipped for its size is named in its own log
   message, many are reported in one summary line with their count, the limit and the first three names) and in the open documents; a rescan forgets a CRD file the scan no
   longer lists, but keeps one under a skipped folder (hidden or `node_modules`,
-  learned from an open document) for as long as the file is on disk. A
+  learned from an open document) for as long as the file is on disk, and reads it again, so a CRD edited on disk there
+  while closed gets its new schema at the next rescan. A
   workspace folder that is missing or cannot be read is logged as incomplete,
   by name: the rescan keeps the CRDs it knows below that folder, since nothing is known
   about them, and still forgets the CRD files deleted below the folders it did

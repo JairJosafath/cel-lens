@@ -91,11 +91,18 @@ repeat:
    listed); a version whose tag is not public has no link line, and a compare link
    starts at the previous public tag. After a release's tag is published, add it to
    that list, so the next release's compare link is checked against it.
-   Before a release is prepared, and again after its tag is published, run
-   `scripts/public-tags.sh` with network access: it lists each tag in the file
+   `make release RELEASE=X.Y.Z` prepares a release: it first reads every `core-v`
+   tag of the public repository and adds each one the list lacks (it removes
+   none), then rewrites the link lines of `CHANGELOG.md` from the list, the
+   release itself comparing from the newest public tag to its own. It needs
+   network access and is not part of `make check` or `go test`, which stay
+   offline. When it can't read the public repository it writes nothing, prints
+   one line with the repository, the address and the reason, and exits 1: fix the
+   network (or set `CEL_LENS_PUBLIC_REMOTE` to a reachable address of the
+   repository) and run it again. After the tag is published, run
+   `scripts/public-tags.sh` to check the list: it lists each tag in the file
    that is not on the public repository and each public `core-v` tag the file
-   lacks, and exits 1 when they differ. It is not part of `make check` or
-   `go test`, which stay offline.
+   lacks, and exits 1 when they differ.
 4. Run `make check`, commit with a Conventional Commit message (`feat:`, `fix:`,
    `test:`, `refactor:`, `docs:`) and open a pull request on the public
    repository.

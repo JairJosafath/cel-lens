@@ -488,6 +488,85 @@ func TestRescanForgetsDeletedCRDFile(t *testing.T) {
 	}
 }
 
+// TestRescanFollowsEditUnderSkippedFolder checks that a rescan reads again a
+// known CRD file under a skipped folder that was edited on disk while closed.
+func TestRescanFollowsEditUnderSkippedFolder(t *testing.T) {
+	t.Parallel()
+	for _, folder := range []string{".hidden", "node_modules"} {
+		t.Run(folder, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			sub := filepath.Join(dir, folder)
+			if err := os.Mkdir(sub, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			crd := filepath.Join(sub, "crd.yaml")
+			if err := os.WriteFile(crd, []byte(scanCRD), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ss := newSession(t)
+			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.folders = []string{dir}
+			ctx := context.Background()
+			ss.crds.Set(ctx, crdKey(pathURI(crd)), []byte(scanCRD))
+			edited := strings.ReplaceAll(scanCRD, "{kind: K}", "{kind: Other}")
+			if edited == scanCRD {
+				t.Fatal("scanCRD has no {kind: K} to edit")
+			}
+			if err := os.WriteFile(crd, []byte(edited), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ss.startScan(ctx)
+			found := <-ss.scan.done
+			ss.scan = nil
+			if err := ss.finishScan(ctx, found); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := ss.crds.Schema("g/v1", "Other"); !ok {
+				t.Error("Schema(g/v1, Other) after a rescan of an edited file = not found, want the new schema")
+			}
+			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
+				t.Error("Schema(g/v1, K) after a rescan of an edited file = found, want the old schema gone")
+			}
+		})
+	}
+}
+
+// TestRescanKeepsOpenDocumentUnderSkippedFolder checks that a rescan does not
+// replace the CRD of an open document under a skipped folder with the disk copy.
+func TestRescanKeepsOpenDocumentUnderSkippedFolder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "node_modules")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	crd := filepath.Join(sub, "crd.yaml")
+	onDisk := strings.ReplaceAll(scanCRD, "{kind: K}", "{kind: Other}")
+	if err := os.WriteFile(crd, []byte(onDisk), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.folders = []string{dir}
+	ctx := context.Background()
+	uri := pathURI(crd)
+	ss.docs[uri] = &document{version: 1, text: []byte(scanCRD), crds: &ss.crds}
+	ss.crds.Set(ctx, crdKey(uri), []byte(scanCRD))
+	ss.startScan(ctx)
+	found := <-ss.scan.done
+	ss.scan = nil
+	if err := ss.finishScan(ctx, found); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
+		t.Error("Schema(g/v1, K) after a rescan with the file open = not found, want the editor text kept")
+	}
+	if _, ok := ss.crds.Schema("g/v1", "Other"); ok {
+		t.Error("Schema(g/v1, Other) after a rescan with the file open = found, want the disk copy ignored")
+	}
+}
+
 // TestRescanKeepsCRDUnderSkippedFolder checks that a rescan keeps the CRD of a
 // file under a folder the scan skips while the file is on disk, and forgets it
 // once the file is deleted.
@@ -678,6 +757,21 @@ func TestRescanWithUnreadableFolder(t *testing.T) {
 	}
 }
 
+// finishCreatedScan waits for the scan a created folder started, if any, and
+// records what it found, as the message loop does.
+func finishCreatedScan(t *testing.T, ss *session) {
+	t.Helper()
+	if ss.scan == nil {
+		return
+	}
+	found := <-ss.scan.done
+	ss.scan = nil
+	ss.crds.Untrack()
+	if err := ss.finishScan(context.Background(), found); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestCreatedSkippedFolderRecordsNoCRDs checks that a created folder the
 // workspace scan would skip, a hidden one or node_modules, records no CRDs.
 func TestCreatedSkippedFolderRecordsNoCRDs(t *testing.T) {
@@ -698,8 +792,40 @@ func TestCreatedSkippedFolderRecordsNoCRDs(t *testing.T) {
 			if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
 				t.Fatal(err)
 			}
+			finishCreatedScan(t, ss)
 			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
 				t.Errorf("Schema(g/v1, K) after creating %s = found, want not found", folder)
+			}
+		})
+	}
+}
+
+// TestCreatedFolderBelowSkippedAncestorRecordsNoCRDs checks that a created
+// folder with a hidden or node_modules element below the workspace folder
+// records no CRDs, though its own name is plain.
+func TestCreatedFolderBelowSkippedAncestorRecordsNoCRDs(t *testing.T) {
+	t.Parallel()
+	for _, ancestor := range []string{".git", "node_modules"} {
+		t.Run(ancestor, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			sub := filepath.Join(root, ancestor, "pkg")
+			if err := os.MkdirAll(sub, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sub, "crd.yaml"), []byte(scanCRD), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ss := newSession(t)
+			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.folders = []string{root}
+			params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileCreated}}})
+			if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
+				t.Fatal(err)
+			}
+			finishCreatedScan(t, ss)
+			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
+				t.Errorf("Schema(g/v1, K) after creating %s/pkg = found, want not found", ancestor)
 			}
 		})
 	}
@@ -801,5 +927,91 @@ func TestCreatedNestedFoldersScanOnce(t *testing.T) {
 			}
 			ss.scan = nil
 		})
+	}
+}
+
+// TestRescanWithUnreadableSubfolder checks that a subfolder that cannot be
+// read below a readable workspace folder keeps the CRDs known below it, does
+// not stop the rescan from forgetting a CRD deleted beside it, and is named,
+// not the folder, in the scan's note.
+func TestRescanWithUnreadableSubfolder(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any folder")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(root, "gone.yaml")
+	kept := filepath.Join(root, "kept.yaml")
+	hidden := filepath.Join(locked, "hidden.yaml")
+	for _, f := range []string{gone, kept, hidden} {
+		if err := os.WriteFile(f, []byte(scanCRD), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.folders = []string{root}
+	ctx := context.Background()
+	rescan := func() {
+		ss.startScan(ctx)
+		found := <-ss.scan.done
+		notes := ss.scan.notes
+		ss.scan = nil
+		if err := ss.finishScan(ctx, found); err != nil {
+			t.Fatal(err)
+		}
+		if len(notes) != 1 || !strings.Contains(notes[0].text, "scan of "+locked+" incomplete") {
+			t.Fatalf("scan notes = %v, want one naming %s as incomplete", notes, locked)
+		}
+	}
+	// The first scan reads hidden.yaml; then the folder is locked.
+	ss.crds.Set(ctx, crdKey(pathURI(hidden)), []byte(scanCRD))
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // a folder needs its execute bit to be removed
+	rescan()
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	rescan()
+	if ss.crds.Forget(crdKey(pathURI(gone))) {
+		t.Error("a rescan kept the CRD deleted beside the unreadable subfolder")
+	}
+	if !ss.crds.Forget(crdKey(pathURI(kept))) {
+		t.Error("a rescan forgot a CRD that is still there")
+	}
+	if !ss.crds.Forget(crdKey(pathURI(hidden))) {
+		t.Error("a rescan forgot a CRD below the subfolder that could not be read")
+	}
+}
+
+// TestCreatedFolderInNestedWorkspaceFolderIsScanned checks that a created
+// folder below node_modules is still scanned when a workspace folder lies
+// inside that node_modules, as the workspace scan reads it under that root.
+func TestCreatedFolderInNestedWorkspaceFolderIsScanned(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	app := filepath.Join(root, "node_modules", "app")
+	sub := filepath.Join(app, "pkg")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "crd.yaml"), []byte(scanCRD), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.folders = []string{root, app}
+	params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileCreated}}})
+	if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
+		t.Fatal(err)
+	}
+	finishCreatedScan(t, ss)
+	if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
+		t.Error("Schema(g/v1, K) after creating a folder in a nested workspace folder = not found, want found")
 	}
 }

@@ -181,6 +181,23 @@ func (c *CRDs) Fill(from *CRDs) bool {
 	return added
 }
 
+// UnderSkipped lists the files of c, sorted, that are below a folder the scan
+// from skipped (see SkipDir) and still exist. The scan never read them, so
+// the caller reads them to follow their edits. A nil from lists none.
+func (c *CRDs) UnderSkipped(from *CRDs) []string {
+	if from == nil {
+		return nil
+	}
+	var files []string
+	for f := range c.files {
+		if from.skippedPresent(f) {
+			files = append(files, f)
+		}
+	}
+	slices.Sort(files)
+	return files
+}
+
 // incompleteAt reports whether file is below a folder the scan left incomplete.
 func (c *CRDs) incompleteAt(file string) bool {
 	return slices.ContainsFunc(c.partial, func(p string) bool { return strings.HasPrefix(file, p) })

@@ -9,6 +9,19 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-11-03
+
+### Changed
+
+- A test covers an unreadable subfolder below a readable workspace root in the language server's CRD scan, and `pkg/check`'s `Fill` table test pins the per-folder `Incomplete` flag.
+- The README's `crd-typed-policies` row mentions the oversized-file summary line.
+
+### Fixed
+
+- A created folder below a hidden folder or `node_modules` is skipped by the workspace CRD scan.
+- A CRD file under a hidden folder or `node_modules` that is edited on disk while closed gives its new schema after a workspace rescan, without waiting for the file to be opened.
+- Preparing a release (`make release RELEASE=X.Y.Z`) refreshes `testdata/public-core-tags.txt` from the public repository and rewrites the changelog's link lines from it, and stops before writing when the repository can't be read.
+
 ## [0.25.0] - 2026-11-03
 
 ### Added
@@ -518,7 +531,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.1...HEAD
+[0.25.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.0...core-v0.25.1
 [0.25.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.2...core-v0.25.0
 [0.24.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.1...core-v0.24.2
 [0.24.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...core-v0.24.1
