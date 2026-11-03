@@ -6,6 +6,12 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-11-03
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.24.1: the engine reads the CRDs below a folder created or renamed in the workspace, and a workspace rescan keeps the CRDs of a folder it could not read instead of forgetting the others' deleted CRDs.
+
 ## [0.28.0] - 2026-11-03
 
 ### Changed
@@ -575,7 +581,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.1...HEAD
+[0.28.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.0...vscode-v0.28.1
 [0.28.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.3...vscode-v0.28.0
 [0.27.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.2...vscode-v0.27.3
 [0.27.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.1...vscode-v0.27.2

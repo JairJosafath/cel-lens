@@ -47,8 +47,8 @@ const FIXTURES = fileURLToPath(new URL('fixtures/', import.meta.url));
 const EXTENSION_PATH = fileURLToPath(new URL('../../', import.meta.url));
 const ERROR = 1;
 const WARNING = 2;
-/** The watch kind Delete of LSP 3.17 (Create 1, Change 2, Delete 4). */
-const DELETE_WATCH_KIND = 4;
+/** The watch kinds Create and Delete of LSP 3.17 together (Create 1, Change 2, Delete 4). */
+const CREATE_DELETE_WATCH_KIND = 5;
 const DOCS_LINK =
   /^https:\/\/(kubernetes\.io\/docs|github\.com\/google\/cel-spec|pkg\.go\.dev\/github\.com\/google\/cel-go)([/#]|$)/;
 
@@ -388,7 +388,7 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
 });
 
 describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
-  it('forgets the CRDs below a deleted folder, through the delete-only ** watcher', async () => {
+  it('forgets the CRDs below a deleted folder, through the create-and-delete ** watcher', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
     const crds = join(root, 'crds');
     await mkdir(crds);
@@ -413,7 +413,7 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
       expect(watched?.registerOptions).toMatchObject({
         watchers: [
           { globPattern: '**/*.{yaml,yml}' },
-          { globPattern: '**', kind: DELETE_WATCH_KIND },
+          { globPattern: '**', kind: CREATE_DELETE_WATCH_KIND },
         ],
       });
 
