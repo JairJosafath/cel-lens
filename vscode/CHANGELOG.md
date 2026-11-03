@@ -6,6 +6,12 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-03
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.25.0: with `crd-typed-policies` on, `object` and `oldObject` of a ValidatingAdmissionPolicy that matches a custom resource are typed from its CustomResourceDefinition in the workspace, so a wrong field gets the API server's warning; a created folder is scanned for CRDs in the background.
+
 ## [0.31.0] - 2026-11-03
 
 ### Added
@@ -605,7 +611,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.31.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.32.0...HEAD
+[0.32.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.31.0...vscode-v0.32.0
 [0.31.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.30.0...vscode-v0.31.0
 [0.30.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.29.0...vscode-v0.30.0
 [0.29.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.1...vscode-v0.29.0

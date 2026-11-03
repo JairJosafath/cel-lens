@@ -303,7 +303,7 @@ describe('published text', () => {
   });
 
   it('names the cel-lens-core release the extension is built for', () => {
-    expect(guide).toContain('cel-lens-core` v0.24.2');
+    expect(guide).toContain('cel-lens-core` v0.25.0');
   });
 
   it('shows no message the engine does not give', () => {
