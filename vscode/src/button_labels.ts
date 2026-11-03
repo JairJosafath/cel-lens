@@ -6,3 +6,6 @@ export const OPEN_ENGINE_SETTING_LABEL = 'Open Engine Setting';
 
 /** The label of the Show Logs menu entry and of every notification button that offers the logs. */
 export const SHOW_LOGS_LABEL = 'Show Logs';
+
+/** The label of the notification button that opens the `cel-lens.experimental` setting. */
+export const OPEN_EXPERIMENTAL_SETTING_LABEL = 'Open Experimental Setting';

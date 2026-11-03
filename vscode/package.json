@@ -2,7 +2,7 @@
   "name": "cel-lens-vscode",
   "displayName": "cel-lens for VS Code",
   "description": "CEL errors, hover and completion inside Kubernetes YAML.",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "publisher": "cel-lens",
   "repository": {
     "type": "git",
@@ -122,7 +122,7 @@
           "default": [],
           "scope": "window",
           "order": 4,
-          "markdownDescription": "Advanced: the experimental features to turn on. An experimental feature is off until you list it here; a name the engine does not know is ignored with one warning in the log."
+          "markdownDescription": "Advanced: the experimental features to turn on. An experimental feature is off until you list it here; a name the engine does not know is ignored and reported once in a notification."
         },
         "cel-lens.serverPath": {
           "type": "string",

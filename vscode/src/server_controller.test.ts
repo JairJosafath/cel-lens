@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { OPEN_EXPERIMENTAL_SETTING_LABEL } from './button_labels';
 import {
   type LogChannel,
   channels,
@@ -17,6 +18,7 @@ import {
   settings,
   shownErrors,
   shownWarnings,
+  warningChoice,
   window,
 } from '../test/vscode';
 import { END_WAIT_MS, ServerController } from './server_controller';
@@ -668,6 +670,64 @@ describe('ServerController', () => {
       },
     ]);
     expect(client.created).toHaveLength(1);
+  });
+
+  const FEATURES_RESULT = {
+    capabilities: { experimental: { celLens: { experimentalFeatures: ['kyverno'] } } },
+  };
+
+  it('warns once, naming the unknown experimental names, with a button to the setting', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.experimental', ['kyverno', 'kyvernoo']);
+    client.initializeResult = FEATURES_RESULT;
+    shownWarnings.length = 0;
+    warningChoice.next = OPEN_EXPERIMENTAL_SETTING_LABEL;
+    const controller = newController();
+
+    await controller.start();
+    await controller.sendSettings();
+    await controller.restart();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(shownWarnings).toHaveLength(1);
+    expect(shownWarnings[0]?.message).toContain('"kyvernoo"');
+    expect(shownWarnings[0]?.buttons).toEqual([OPEN_EXPERIMENTAL_SETTING_LABEL]);
+    expect(executedCommands).toContainEqual({
+      command: 'workbench.action.openSettings',
+      args: ['cel-lens.experimental'],
+    });
+  });
+
+  it.each([
+    ['known names only', ['kyverno'], undefined],
+    ['an engine that lists no features', ['nope'], {}],
+  ])('shows no warning for %s', async (_what, setting, result) => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.experimental', setting);
+    client.initializeResult = result ?? FEATURES_RESULT;
+    shownWarnings.length = 0;
+    const controller = newController();
+
+    await controller.start();
+
+    expect(shownWarnings).toEqual([]);
+  });
+
+  it('warns again when the setting changes to another unknown list', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.experimental', ['a']);
+    client.initializeResult = FEATURES_RESULT;
+    shownWarnings.length = 0;
+    const controller = newController();
+    await controller.start();
+    settings.set('cel-lens.experimental', ['a', 'b']);
+
+    await controller.sendSettings();
+
+    expect(shownWarnings.map((warning) => warning.message)).toEqual([
+      expect.stringContaining('"a"'),
+      expect.stringContaining('"a", "b"'),
+    ]);
   });
 
   it('hands the versions in the initialize result to the listener, and clears them on stop', async () => {

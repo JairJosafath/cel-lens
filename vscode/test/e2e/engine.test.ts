@@ -43,6 +43,7 @@ import {
   readmeSection,
 } from '../../src/readme';
 import { featureNameProblems, experimentalRows } from '../../src/experimental_table';
+import { experimentalSettingEnum } from '../../src/manifest_setting';
 import { requireEngineFile } from '../../src/engine_file';
 import { resolveServer } from '../../src/server_path';
 import { spawnEngine } from '../../src/spawn_engine';
@@ -239,13 +240,9 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
   });
 
   it('lists in package.json and the README the experimental feature names the engine knows', async () => {
-    const manifest = JSON.parse(await readFile(`${EXTENSION_PATH}package.json`, 'utf8')) as {
-      contributes: {
-        configuration: { properties: Record<string, { items?: { enum?: string[] } }> };
-      };
-    };
-    const inManifest =
-      manifest.contributes.configuration.properties['cel-lens.experimental']?.items?.enum ?? [];
+    const inManifest = experimentalSettingEnum(
+      JSON.parse(await readFile(`${EXTENSION_PATH}package.json`, 'utf8')),
+    );
     const readme = await readFile(`${EXTENSION_PATH}README.md`, 'utf8');
     const known = running().experimentalFeatures;
 

@@ -6,6 +6,16 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-03
+
+### Added
+
+- A name in `cel-lens.experimental` that the engine does not know is reported once in a notification naming it, with a button that opens the setting.
+
+### Changed
+
+- The end-to-end test reads the contributions in `package.json` through a pure parser; no behaviour changes.
+
 ## [0.30.0] - 2026-11-03
 
 ### Changed
@@ -595,7 +605,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.30.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.31.0...HEAD
+[0.31.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.30.0...vscode-v0.31.0
 [0.30.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.29.0...vscode-v0.30.0
 [0.29.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.1...vscode-v0.29.0
 [0.28.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.0...vscode-v0.28.1

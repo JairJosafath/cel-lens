@@ -1,5 +1,9 @@
 import type { ChildProcess } from 'node:child_process';
-import { OPEN_ENGINE_SETTING_LABEL, SHOW_LOGS_LABEL } from './button_labels';
+import {
+  OPEN_ENGINE_SETTING_LABEL,
+  OPEN_EXPERIMENTAL_SETTING_LABEL,
+  SHOW_LOGS_LABEL,
+} from './button_labels';
 import { access, chmod, constants, stat } from 'node:fs/promises';
 import { platform } from 'node:process';
 
@@ -14,10 +18,16 @@ import {
 import { RELEASES_PAGE_URL } from './core_releases';
 import { EngineErrorHandler } from './engine_error_handler';
 import { EngineMessages, SHOW_MESSAGE_METHOD, type ShowMessageParams } from './engine_messages';
-import { EXPERIMENTAL_SETTING, parseExperimental } from './experimental';
+import {
+  EXPERIMENTAL_SETTING,
+  parseExperimental,
+  unknownExperimental,
+  unknownExperimentalMessage,
+} from './experimental';
 import {
   KUBERNETES_VERSION_SETTING,
   configurationParams,
+  parseExperimentalFeatures,
   parseVersionInfo,
   serverOptions,
   type ServerState,
@@ -80,6 +90,10 @@ export class ServerController implements vscode.Disposable {
   private sentVersion = '';
   /** The experimental list the running server was last told, as one string. */
   private sentExperimental = '';
+  /** The experimental names the running engine listed in its initialize result. */
+  private knownFeatures: readonly string[] = [];
+  /** The unknown names last warned about, as one string, so the same list is never shown twice. */
+  private warnedUnknown = '';
 
   constructor(
     private readonly log: vscode.LogOutputChannel,
@@ -124,9 +138,33 @@ export class ServerController implements vscode.Disposable {
       this.sentVersion = options.kubernetesVersion;
       this.sentExperimental = experimentalKey;
       this.onState({ kind: 'running', info });
+      this.warnUnknownExperimental(experimental);
     } catch (error) {
       this.log.error(`Could not tell the engine the settings: ${String(error)}`);
     }
+  }
+
+  /**
+   * Tells the user once which names of `cel-lens.experimental` the engine does not know. An engine
+   * that lists no features (an older one) gives nothing to compare with, so it warns of nothing.
+   */
+  private warnUnknownExperimental(experimental: readonly string[]): void {
+    if (this.knownFeatures.length === 0) {
+      return;
+    }
+    const names = unknownExperimental(experimental, this.knownFeatures);
+    const key = names.join(',');
+    if (key === this.warnedUnknown) {
+      return;
+    }
+    this.warnedUnknown = key;
+    if (names.length === 0) {
+      return;
+    }
+    // Not awaited: a notification stays pending while it is open, and must not block a restart.
+    void vscode.window
+      .showWarningMessage(unknownExperimentalMessage(names), OPEN_EXPERIMENTAL_SETTING_LABEL)
+      .then((button) => this.handle(button));
   }
 
   /** Starts the server unless it is running. Never rejects. */
@@ -264,7 +302,9 @@ export class ServerController implements vscode.Disposable {
         );
       }
       this.info = info;
+      this.knownFeatures = parseExperimentalFeatures(client.initializeResult);
       this.onState({ kind: 'running', info });
+      this.warnUnknownExperimental(sentOptions.experimental);
       // The first start cannot know the supported versions, so it sends the raw setting;
       // once the server has reported them, correct it if the engine default replaces it.
       if (
@@ -353,6 +393,11 @@ export class ServerController implements vscode.Disposable {
         this.log.show();
       } else if (button === OPEN_ENGINE_SETTING_LABEL) {
         await openServerPathSetting();
+      } else if (button === OPEN_EXPERIMENTAL_SETTING_LABEL) {
+        await vscode.commands.executeCommand(
+          'workbench.action.openSettings',
+          `cel-lens.${EXPERIMENTAL_SETTING}`,
+        );
       }
     } catch (error) {
       this.log.error(`Could not follow the message button: ${String(error)}`);
