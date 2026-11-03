@@ -198,11 +198,15 @@ func (ss *session) finishScan(ctx context.Context, found *check.CRDs) error {
 // file below a folder it skipped is kept while it is on disk.
 // It stops when ctx is cancelled. It returns what the user should be told: one
 // warning when the scan stopped at limit, and a log message for each folder
-// that could not be read and each file skipped for its size.
+// that could not be read and one for the files skipped for their size: one
+// file is named with its size, many files are counted in one summary line.
 func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.CRDs) []message {
 	var notes []message
 	capped := false
+	capAt := -1 // where the file cap warning sits in notes, -1 when none
 	seen := 0
+	var oversized []string   // files skipped for their size, in scan order
+	var oversizedBytes int64 // the size of the last one, for the one-file message
 	roots := make([]string, len(folders))
 	for i, dir := range folders {
 		roots[i] = crdKey(pathURI(dir))
@@ -222,7 +226,7 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 				return fs.SkipDir // skip what cannot be read
 			}
 			if d.IsDir() {
-				if name := d.Name(); rel != "." && (strings.HasPrefix(name, ".") || name == "node_modules") {
+				if rel != "." && skippedFolder(d.Name()) {
 					dst.SkipDir(crdKey(pathURI(filepath.Join(dir, filepath.FromSlash(rel)))), fileExists)
 					return fs.SkipDir
 				}
@@ -238,6 +242,7 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 				}
 				if !capped {
 					capped = true
+					capAt = len(notes)
 					notes = append(notes, message{typ: messageWarning, text: fmt.Sprintf(
 						"cel-lens stopped scanning the workspace for CustomResourceDefinitions after %d YAML files; CRDs in the files left out are not known, so a params type may stay dyn", limit)})
 				}
@@ -247,8 +252,8 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 			dst.List(crdKey(pathURI(path)))
 			info, err := d.Info()
 			if err == nil && info.Size() > maxWorkspaceFileSize {
-				notes = append(notes, message{typ: messageWarning, log: true, text: fmt.Sprintf(
-					"cel-lens skipped %s while scanning for CustomResourceDefinitions: it is %d bytes, over the limit of %d bytes", path, info.Size(), maxWorkspaceFileSize)})
+				oversized = append(oversized, path)
+				oversizedBytes = info.Size()
 				return nil
 			}
 			if err != nil {
@@ -260,7 +265,34 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 			return nil
 		})
 	}
-	return notes
+	// The size note goes before the cap warning, which ends the client's wait.
+	if capAt < 0 {
+		capAt = len(notes)
+	}
+	return slices.Insert(notes, capAt, oversizeNote(oversized, oversizedBytes)...)
+}
+
+// maxNamedOversized is how many skipped file names the summary line gives.
+const maxNamedOversized = 3
+
+// oversizeNote tells of the files skipped for their size: one file gets its
+// own message with its size, many files one summary line. It returns no
+// message for no files, so the caller drops it.
+func oversizeNote(paths []string, size int64) []message {
+	switch len(paths) {
+	case 0:
+		return nil
+	case 1:
+		return []message{{typ: messageWarning, log: true, text: fmt.Sprintf(
+			"cel-lens skipped %s while scanning for CustomResourceDefinitions: it is %d bytes, over the limit of %d bytes", paths[0], size, maxWorkspaceFileSize)}}
+	}
+	named := paths[:min(len(paths), maxNamedOversized)]
+	text := fmt.Sprintf("cel-lens skipped %d files while scanning for CustomResourceDefinitions: each is over the limit of %d bytes (%s",
+		len(paths), maxWorkspaceFileSize, strings.Join(named, ", "))
+	if more := len(paths) - len(named); more > 0 {
+		text += fmt.Sprintf(" and %d more", more)
+	}
+	return []message{{typ: messageWarning, log: true, text: text + ")"}}
 }
 
 // fileExists reports whether the file with the slash-separated key is on disk.
@@ -342,7 +374,7 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 			changed = ss.readFromDisk(ctx, c.URI) || changed
 		case on && c.Type == fileCreated:
 			// A client sends one event for a created folder, not one per file.
-			if path, ok := diskPath(c.URI); ok && isDir(path) {
+			if path, ok := diskPath(c.URI); ok && !skippedFolder(filepath.Base(path)) && isDir(path) {
 				scanned, err := ss.scanCreated(ctx, path)
 				if err != nil {
 					return err
@@ -355,6 +387,12 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		return nil
 	}
 	return ss.publishAll(ctx, "")
+}
+
+// skippedFolder reports whether the workspace scan skips a folder of that
+// name: a hidden folder or node_modules.
+func skippedFolder(name string) bool {
+	return strings.HasPrefix(name, ".") || name == "node_modules"
 }
 
 func isDir(path string) bool {

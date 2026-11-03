@@ -7,10 +7,11 @@
 #                             REMOTE is a repository URL or path; it defaults to
 #                             https://github.com/JairJosafath/cel-lens/
 #
-# Prints "not public: <tag>" for each listed tag the repository lacks and
+# Prints "cannot read remote: <remote>" to stderr and nothing else when the
+# remote can't be read. Otherwise prints "not public: <tag>" for each listed tag the repository lacks and
 # "not listed: <tag>" for each core-v tag it has that the list lacks. Exit 0
 # when the two agree, 1 when they differ or the remote can't be read, 2 on bad
-# usage. Run it from the repository root.
+# usage or when the list file is missing. Run it from the repository root.
 #
 # Without --append the script changes no file. With --append it adds each
 # public tag the list lacks to the end of the list, in version order, and
@@ -34,12 +35,20 @@ for arg in "$@"; do
 done
 remote=${remote:-https://github.com/JairJosafath/cel-lens/}
 list=testdata/public-core-tags.txt
+if [ ! -f "$list" ]; then
+	echo "$0: $list not found; run it from the repository root" >&2
+	exit 2
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-git ls-remote --tags "$remote" |
-	sed -n 's|^.*[[:space:]]refs/tags/\(core-v[^[:space:]^]*\)$|\1|p' |
+# POSIX sh has no pipefail, so read the remote on its own to see it fail.
+if ! git ls-remote --tags "$remote" >"$tmp/remote"; then
+	echo "cannot read remote: $remote" >&2
+	exit 1
+fi
+sed -n 's|^.*[[:space:]]refs/tags/\(core-v[^[:space:]^]*\)$|\1|p' "$tmp/remote" |
 	sort -u >"$tmp/public"
 grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$list" | sort -u >"$tmp/listed" || true
 

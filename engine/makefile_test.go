@@ -167,3 +167,29 @@ func TestTestDistTargetSetsGateVariable(t *testing.T) {
 	}
 	t.Fatalf("make -n test-dist = %q, want a go test line", out)
 }
+
+func TestTestDistTargetKeepsFlags(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	out, err := exec.Command("make", "-n", "test-dist").CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n test-dist: %v\n%s", err, out)
+	}
+	var line string
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.Contains(l, "go test") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("make -n test-dist = %q, want a go test line", out)
+	}
+	for _, want := range []string{"-race -count=1", "-timeout 30m"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("make -n test-dist go test line = %q, want %q kept", line, want)
+		}
+	}
+}

@@ -29,7 +29,7 @@ type client struct {
 	nextID int
 	done   chan error // Serve's result
 
-	msgs    chan received // the server's messages, read off the pipe
+	msgs    chan received // the server's messages, read off the pipe; closed when the pump ends
 	timeout time.Duration // how long read waits for one message
 }
 
@@ -55,6 +55,7 @@ func start(t *testing.T) *client {
 	pumped := make(chan struct{})
 	go func() {
 		defer close(pumped)
+		defer close(c.msgs)
 		for {
 			m, err := c.in.Read()
 			select {
@@ -138,7 +139,10 @@ func (c *client) next(want string) (jsonrpc.Message, error) {
 	timer := time.NewTimer(c.timeout)
 	defer timer.Stop()
 	select {
-	case r := <-c.msgs:
+	case r, ok := <-c.msgs:
+		if !ok {
+			return jsonrpc.Message{}, fmt.Errorf("server closed the pipe while waiting for %s", want)
+		}
 		if r.err != nil {
 			return jsonrpc.Message{}, fmt.Errorf("read from server while waiting for %s: %w", want, r.err)
 		}
@@ -1213,5 +1217,23 @@ func TestReadDeadline(t *testing.T) {
 	_, err := c.next("textDocument/publishDiagnostics")
 	if err == nil || !strings.Contains(err.Error(), "textDocument/publishDiagnostics") {
 		t.Errorf("next(silent server) = %v, want an error naming textDocument/publishDiagnostics", err)
+	}
+}
+
+// TestReadAfterClose checks that a read after the pump has forwarded the
+// server's read error fails at once, every time, saying the server closed
+// the pipe and what was awaited.
+func TestReadAfterClose(t *testing.T) {
+	t.Parallel()
+	c := start(t)
+	_ = c.out.Close() // Serve sees its input end, returns and closes its output
+	if _, err := c.next("the close"); err == nil {
+		t.Fatal("next(closed pipe) = nil, want the read error")
+	}
+	for range 2 {
+		_, err := c.next("textDocument/publishDiagnostics")
+		if err == nil || !strings.Contains(err.Error(), "server closed the pipe") || !strings.Contains(err.Error(), "textDocument/publishDiagnostics") {
+			t.Fatalf("next(closed pipe) = %v, want an error saying the server closed the pipe while waiting for textDocument/publishDiagnostics", err)
+		}
 	}
 }

@@ -130,8 +130,8 @@ type checker does:
   of the named version in a CustomResourceDefinition. The language server reads
   the CRDs in the workspace folders (YAML files, skipping hidden folders and
   `node_modules`, up to 20,000 files of up to 1 MiB; when the scan stops at the file cap the
-  client gets one warning, and each file skipped for its size is named in a log
-  message) and in the open documents; a rescan forgets a CRD file the scan no
+  client gets one warning, and one file skipped for its size is named in its own log
+  message, many are reported in one summary line with their count, the limit and the first three names) and in the open documents; a rescan forgets a CRD file the scan no
   longer lists, but keeps one under a skipped folder (hidden or `node_modules`,
   learned from an open document) for as long as the file is on disk. A
   workspace folder that is missing or cannot be read is logged as incomplete,

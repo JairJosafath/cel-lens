@@ -675,3 +675,30 @@ func TestRescanWithUnreadableFolder(t *testing.T) {
 		t.Error("a rescan forgot a CRD below the folder that could not be read")
 	}
 }
+
+// TestCreatedSkippedFolderRecordsNoCRDs checks that a created folder the
+// workspace scan would skip, a hidden one or node_modules, records no CRDs.
+func TestCreatedSkippedFolderRecordsNoCRDs(t *testing.T) {
+	t.Parallel()
+	for _, folder := range []string{".git", "node_modules"} {
+		t.Run(folder, func(t *testing.T) {
+			t.Parallel()
+			sub := filepath.Join(t.TempDir(), folder)
+			if err := os.Mkdir(sub, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sub, "crd.yaml"), []byte(scanCRD), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ss := newSession(t)
+			ss.features = feature.Of(feature.CRDTypedPolicies)
+			params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileCreated}}})
+			if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
+				t.Errorf("Schema(g/v1, K) after creating %s = found, want not found", folder)
+			}
+		})
+	}
+}

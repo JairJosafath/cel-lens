@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -172,5 +173,33 @@ func TestScanNotesReachClient(t *testing.T) {
 			expect("showMessage", show, tc.wantShow)
 			expect("logMessage", logs, tc.wantLog)
 		})
+	}
+}
+
+// TestScanWorkspaceOversizedSummary checks that many oversized files make one
+// summary log line, and that a rescan sends one line again.
+func TestScanWorkspaceOversizedSummary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for i := range 50 {
+		name := filepath.Join(dir, fmt.Sprintf("big%02d.yaml", i))
+		if err := os.WriteFile(name, []byte(strings.Repeat("#", maxWorkspaceFileSize+1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		var dst check.CRDs
+		notes := scanWorkspace(context.Background(), []string{dir}, 100, &dst)
+		if len(notes) != 1 {
+			t.Fatalf("scanWorkspace notes = %d, want 1 for 50 files", len(notes))
+		}
+		for _, w := range []string{"50 files", "1048576 bytes", "big00.yaml", "big02.yaml", "and 47 more"} {
+			if !strings.Contains(notes[0].text, w) {
+				t.Errorf("note %q lacks %q", notes[0].text, w)
+			}
+		}
+		if strings.Contains(notes[0].text, "big03.yaml") {
+			t.Errorf("note %q names more than three files", notes[0].text)
+		}
 	}
 }

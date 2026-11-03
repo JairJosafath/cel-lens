@@ -9,6 +9,18 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-11-03
+
+### Changed
+
+- A test asserts `make test-dist` keeps `-race -count=1` and `-timeout 30m`, and the stdio test client of the language server reports a closed server pipe at once.
+
+### Fixed
+
+- A created folder that is itself hidden or named `node_modules` is skipped, like the folders below it.
+- `public-tags.sh` refuses to run when the list file is missing, and reports an unreadable remote as such.
+- A workspace scan that skips many files for their size sends one summary log line, with the count, the limit and the first three names, instead of one line per file; a single file still gets its own line.
+
 ## [0.24.1] - 2026-11-03
 
 ### Changed
@@ -489,8 +501,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.1...HEAD
-[0.24.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...core-v0.24.1
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.2...HEAD
+[0.24.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...core-v0.24.2
 [0.24.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.23.0...core-v0.24.0
 [0.23.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.22.0...core-v0.23.0
 [0.22.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.1...core-v0.22.0
