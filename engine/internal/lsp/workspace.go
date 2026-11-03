@@ -26,11 +26,13 @@ const (
 	registerWatchersID = "cel-lens-watch-yaml"
 )
 
-// File change types of workspace/didChangeWatchedFiles, and the watch kind
-// that selects deletions.
+// File change types of workspace/didChangeWatchedFiles, and the watch kinds
+// that select creations and deletions.
 const (
+	fileCreated = 1
 	fileChanged = 2
 	fileDeleted = 3
+	watchCreate = 1
 	watchDelete = 4
 )
 
@@ -109,16 +111,7 @@ func (ss *session) startScan(ctx context.Context) {
 	if ss.scan != nil {
 		return
 	}
-	limit := ss.fileCap
-	if limit <= 0 {
-		limit = maxWorkspaceFiles
-	}
-	run := func(ctx context.Context, folders []string, dst *check.CRDs) []message {
-		return scanWorkspace(ctx, folders, limit, dst)
-	}
-	if ss.scanner != nil {
-		run = ss.scanner
-	}
+	run := ss.scanFunc()
 	ctx, cancel := context.WithCancel(ctx)
 	sc := &scan{cancel: cancel, done: make(chan *check.CRDs, 1)}
 	ss.scan = sc
@@ -132,6 +125,45 @@ func (ss *session) startScan(ctx context.Context) {
 		sc.notes = run(ctx, folders, &found)
 		sc.done <- &found
 	}()
+}
+
+// scanFunc is the function that scans folders: the injected scanner, or
+// scanWorkspace with the file cap.
+func (ss *session) scanFunc() func(ctx context.Context, folders []string, dst *check.CRDs) []message {
+	if ss.scanner != nil {
+		return ss.scanner
+	}
+	limit := ss.fileCap
+	if limit <= 0 {
+		limit = maxWorkspaceFiles
+	}
+	return func(ctx context.Context, folders []string, dst *check.CRDs) []message {
+		return scanWorkspace(ctx, folders, limit, dst)
+	}
+}
+
+// scanCreated reads the CRDs of the YAML files below the folder at path, which
+// was created or renamed in, with the limits of the workspace scan. Open
+// documents keep their text. It reports whether the CRDs changed, and tells the
+// user what the scan has to say. A workspace scan in progress is restarted
+// after it, so its result does not mix with this one.
+func (ss *session) scanCreated(ctx context.Context, path string) (bool, error) {
+	restart := ss.scan != nil
+	ss.stopScan()
+	var found check.CRDs
+	notes := ss.scanFunc()(ctx, []string{path}, &found)
+	ss.crds.Track()
+	for uri := range ss.docs {
+		ss.crds.Keep(crdKey(uri))
+	}
+	changed := ss.crds.Fill(&found)
+	if restart {
+		ss.startScan(ctx)
+	}
+	if err := ss.warn(notes); err != nil {
+		return changed, err
+	}
+	return changed, ctx.Err()
 }
 
 // stopScan cancels the scan in progress and waits for it to end.
@@ -161,10 +193,12 @@ func (ss *session) finishScan(ctx context.Context, found *check.CRDs) error {
 // skipping hidden folders and node_modules, files over
 // maxWorkspaceFileSize and files past limit. A folder or file that
 // cannot be read is skipped. It lists the files it found in dst, which tells
-// Fill to forget the others below the folders, unless it left files out.
+// Fill to forget the others below the folders, except below a folder it could
+// not read or left files out of, whose CRDs are kept; a
+// file below a folder it skipped is kept while it is on disk.
 // It stops when ctx is cancelled. It returns what the user should be told: one
-// warning when the scan stopped at limit, and a log message for each file
-// skipped for its size.
+// warning when the scan stopped at limit, and a log message for each folder
+// that could not be read and each file skipped for its size.
 func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.CRDs) []message {
 	var notes []message
 	capped := false
@@ -181,11 +215,15 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 				return ctx.Err()
 			}
 			if err != nil {
-				dst.Incomplete()
+				path := filepath.Join(dir, filepath.FromSlash(rel))
+				dst.Incomplete(crdKey(pathURI(path)))
+				notes = append(notes, message{typ: messageWarning, log: true, text: fmt.Sprintf(
+					"cel-lens left the scan of %s incomplete: it could not be read (%v); the CRDs known below it are kept as they were, those below the other folders are rescanned", path, err)})
 				return fs.SkipDir // skip what cannot be read
 			}
 			if d.IsDir() {
 				if name := d.Name(); rel != "." && (strings.HasPrefix(name, ".") || name == "node_modules") {
+					dst.SkipDir(crdKey(pathURI(filepath.Join(dir, filepath.FromSlash(rel)))), fileExists)
 					return fs.SkipDir
 				}
 				return nil
@@ -195,7 +233,9 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 			}
 			seen++
 			if seen > limit {
-				dst.Incomplete()
+				for _, r := range roots {
+					dst.Incomplete(r)
+				}
 				if !capped {
 					capped = true
 					notes = append(notes, message{typ: messageWarning, text: fmt.Sprintf(
@@ -223,6 +263,12 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 	return notes
 }
 
+// fileExists reports whether the file with the slash-separated key is on disk.
+func fileExists(key string) bool {
+	_, err := os.Stat(filepath.FromSlash(key))
+	return err == nil
+}
+
 func isYAML(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".yaml" || ext == ".yml"
@@ -240,8 +286,8 @@ func pathURI(path string) string {
 // registerWatchers asks the client, if it can, to send
 // workspace/didChangeWatchedFiles for YAML files, and for every deletion, so
 // CRDs that change on disk without being open are followed. A client reports a
-// removed folder as one event for the folder, which only a pattern that matches
-// folders sees.
+// removed folder, and a renamed one as a deletion and a creation of the folder,
+// which only a pattern that matches folders sees.
 func (ss *session) registerWatchers() error {
 	if !ss.watchFiles {
 		return nil
@@ -253,7 +299,7 @@ func (ss *session) registerWatchers() error {
 			"registerOptions": map[string]any{
 				"watchers": []map[string]any{
 					{"globPattern": "**/*.{yaml,yml}"},
-					{"globPattern": "**", "kind": watchDelete},
+					{"globPattern": "**", "kind": watchCreate | watchDelete},
 				},
 			},
 		}},
@@ -261,7 +307,7 @@ func (ss *session) registerWatchers() error {
 }
 
 // didChangeWatchedFiles reads the changed files again, or forgets the deleted
-// ones, and checks the open documents again when the CRDs changed. A file that
+// ones, reads the YAML files below a created folder, and checks the open documents again when the CRDs changed. A file that
 // is open keeps the text of the editor. While crd-typed-policies is off it reads
 // nothing and publishes nothing: the CRDs are not used, and turning the feature
 // on scans the whole workspace, which finds what changed meanwhile. It still
@@ -283,7 +329,8 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		if _, open := ss.docs[c.URI]; open {
 			continue
 		}
-		if c.Type == fileDeleted {
+		switch {
+		case c.Type == fileDeleted:
 			// A client sends one event for a removed folder, not one per file.
 			if _, file := diskPath(c.URI); file {
 				changed = ss.crds.ForgetUnder(crdKey(c.URI), ss.isOpenKey) || changed
@@ -291,14 +338,28 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 			if isYAML(crdKey(c.URI)) {
 				changed = ss.crds.Forget(crdKey(c.URI)) || changed
 			}
-		} else if on && isYAML(crdKey(c.URI)) {
+		case on && isYAML(crdKey(c.URI)):
 			changed = ss.readFromDisk(ctx, c.URI) || changed
+		case on && c.Type == fileCreated:
+			// A client sends one event for a created folder, not one per file.
+			if path, ok := diskPath(c.URI); ok && isDir(path) {
+				scanned, err := ss.scanCreated(ctx, path)
+				if err != nil {
+					return err
+				}
+				changed = scanned || changed
+			}
 		}
 	}
 	if !changed || !on {
 		return nil
 	}
 	return ss.publishAll(ctx, "")
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // isOpenKey reports whether the CRDs entry file is an open document, whose

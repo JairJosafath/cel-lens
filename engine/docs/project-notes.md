@@ -15,7 +15,7 @@ CI's `full` job of `.gitea/workflows/check.yaml` runs all four on a push to a
 `scripts/public-tags.sh` is a release step outside `make check`: it needs the network, runs
 `git ls-remote --tags` on the public repository and lists each tag in
 `testdata/public-core-tags.txt` that is not public and each public `core-v` tag the list lacks.
-Run it before a release is prepared and after its tag is published, and add the new tag to the list.
+Run it before a release is prepared and after its tag is published; `--append` adds the new tags to the list.
 
 ## v0.17.2: release
 

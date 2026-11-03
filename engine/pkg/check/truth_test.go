@@ -81,23 +81,12 @@ func truthFileFailures(ctx context.Context, fsys fs.FS, file string) []string {
 	if c.Name == "" || c.Policy == "" || c.TypeChecking == nil {
 		return []string{fmt.Sprintf("%s: name, policy and typeChecking are required (typeChecking: [] for an answer with no line)", file)}
 	}
-	// The recorded version is v1.37.0; the engine's versions are minors.
-	parts := strings.SplitN(strings.TrimPrefix(c.Version, "v"), ".", 3)
-	v, err := kubeversion.Parse(strings.Join(parts[:min(len(parts), 2)], "."))
+	warnings, err := engineWarnings(ctx, path.Base(file), c)
 	if err != nil {
-		return []string{fmt.Sprintf("%s: case %s: version %q: %v", file, c.Name, c.Version, err)}
-	}
-	diags, err := check.Check(ctx, path.Base(file), []byte(c.Policy), check.WithVersion(v), allOn())
-	if err != nil {
-		return []string{fmt.Sprintf("%s: case %s: check: %v", file, c.Name, err)}
-	}
-	var warnings []string
-	for _, d := range diags {
-		if d.Severity == check.SeverityWarning {
-			warnings = append(warnings, d.Message)
-		}
+		return []string{fmt.Sprintf("%s: case %s: %v", file, c.Name, err)}
 	}
 	var out []string
+	malformed := false
 	lines := truthEntries(c.TypeChecking)
 	if len(warnings) != len(lines) {
 		out = append(out, fmt.Sprintf("case %s: %d warnings, want %d; engine warnings: %q", c.Name, len(warnings), len(lines), warnings))
@@ -106,6 +95,7 @@ func truthFileFailures(ctx context.Context, fsys fs.FS, file string) []string {
 		m := truthLine.FindStringSubmatch(line)
 		if m == nil {
 			out = append(out, fmt.Sprintf("case %s: recorded line %q is not in the form '<group/version>, Kind=<Kind>: ERROR: <input>:<line>:<col>: <message>'", c.Name, line))
+			malformed = true
 			continue
 		}
 		want := strings.TrimPrefix(m[1], "/") + " " + m[2] + ": " + m[3]
@@ -130,6 +120,9 @@ func truthFileFailures(ctx context.Context, fsys fs.FS, file string) []string {
 	// of the engine's answer fails until the note records the new one.
 	if c.Engine == nil {
 		return []string{fmt.Sprintf("case %s: a divergence note needs the engine's current warnings in engine (engine: [] when it gives none); they are %q", c.Name, warnings)}
+	}
+	if malformed {
+		return out
 	}
 	if len(out) == 0 {
 		return []string{fmt.Sprintf("case %s: the engine now agrees with the API server; remove its divergence note and engine list", c.Name)}
@@ -175,6 +168,7 @@ func TestTruthSetFailures(t *testing.T) {
 		{"wrong message", strings.Replace(string(good), "unexpected failed resolution of 'kubernetes.authorization.Authorizer'", "unexpected failed resolution of 'kubernetes.authorization.Other'", 1), "recorded line"},
 		{"more warnings than lines", strings.Replace(string(two), "  - \"apps/v1, Kind=StatefulSet: ERROR: <input>:1:11: unexpected failed resolution of 'kubernetes.authorization.Authorizer'\"\n", "", 1), "2 warnings"},
 		{"more lines than warnings", strings.Replace(string(good), "typeChecking:\n", "typeChecking:\n  - \"apps/v1, Kind=StatefulSet: ERROR: <input>:1:11: unexpected failed resolution of 'kubernetes.authorization.Authorizer'\"\n", 1), "want 2"},
+		{"divergence with a malformed recorded line", strings.Replace(diverging, "apps/v1, Kind=StatefulSet: ERROR: <input>:1:11:", "apps/v1, Kind=StatefulSet: ERROR:", 1), "is not in the form"},
 		{"known divergence that is gone", strings.Replace(string(good), "version:", note, 1), "now agrees"},
 		{"divergence whose engine answer changed", strings.Replace(diverging, "unexpected failed resolution", "changed wording", 1), "changed but still differ"},
 		{"divergence without engine answer", strings.Replace(wrongKind, "version:", "divergence: engine differs\nversion:", 1), "needs the engine's current warnings"},
@@ -203,6 +197,28 @@ func TestTruthSetFailures(t *testing.T) {
 	}
 }
 
+// engineWarnings returns the messages of the warnings the engine gives for the
+// policy of c, checked as the Kubernetes version the case records.
+func engineWarnings(ctx context.Context, name string, c truthCase) ([]string, error) {
+	// The recorded version is v1.37.0; the engine's versions are minors.
+	parts := strings.SplitN(strings.TrimPrefix(c.Version, "v"), ".", 3)
+	v, err := kubeversion.Parse(strings.Join(parts[:min(len(parts), 2)], "."))
+	if err != nil {
+		return nil, fmt.Errorf("version %q: %w", c.Version, err)
+	}
+	diags, err := check.Check(ctx, name, []byte(c.Policy), check.WithVersion(v), allOn())
+	if err != nil {
+		return nil, fmt.Errorf("check: %w", err)
+	}
+	var out []string
+	for _, d := range diags {
+		if d.Severity == check.SeverityWarning {
+			out = append(out, d.Message)
+		}
+	}
+	return out, nil
+}
+
 // checkWarnings returns the one warning the engine gives for the truth case in data.
 func checkWarnings(t *testing.T, data string) string {
 	t.Helper()
@@ -210,19 +226,9 @@ func checkWarnings(t *testing.T, data string) string {
 	if err := yaml.Unmarshal([]byte(data), &c); err != nil {
 		t.Fatal(err)
 	}
-	v, err := kubeversion.Parse("1.37")
+	out, err := engineWarnings(context.Background(), "case.yaml", c)
 	if err != nil {
 		t.Fatal(err)
-	}
-	diags, err := check.Check(context.Background(), "case.yaml", []byte(c.Policy), check.WithVersion(v), allOn())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []string
-	for _, d := range diags {
-		if d.Severity == check.SeverityWarning {
-			out = append(out, d.Message)
-		}
 	}
 	if len(out) != 1 {
 		t.Fatalf("engine warnings = %q, want one", out)

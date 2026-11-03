@@ -21,11 +21,22 @@ type CRDs struct {
 	files map[string][]crdKind
 	// touched are the files Set or Forget changed since Track, nil when not tracking.
 	touched map[string]bool
+	// forgotten are the folder prefixes ForgetUnder dropped since Track.
+	forgotten []string
 	// roots, listed and partial describe a scan, for Fill: the folders it read,
-	// the files it found there, and whether it left some out.
+	// the files it found there, and the folders it could not list fully.
 	roots   []string
 	listed  map[string]bool
-	partial bool
+	partial []string
+	// skipped are the folders the scan did not enter.
+	skipped []skippedDir
+}
+
+// skippedDir is a folder a scan did not enter, and how to tell whether a file
+// below it is still there.
+type skippedDir struct {
+	prefix string
+	exists func(file string) bool
 }
 
 // crdKind is one version of one custom resource kind.
@@ -76,6 +87,7 @@ func (c *CRDs) Set(ctx context.Context, file string, data []byte) bool {
 // was being read is not brought back.
 func (c *CRDs) Track() {
 	c.touched = map[string]bool{}
+	c.forgotten = nil
 }
 
 // Keep marks file as touched for the tracking Track started, so Fill leaves
@@ -90,12 +102,13 @@ func (c *CRDs) Keep(file string) {
 // Untrack stops the recording Track started, without a Fill.
 func (c *CRDs) Untrack() {
 	c.touched = nil
+	c.forgotten = nil
 }
 
 // ScanRoots makes c the result of a scan of the folders root, slash-separated
 // paths, for Fill: Fill then drops the files below them that the scan did not
 // list. List names a file the scan found, and Incomplete says it could not list
-// everything, which stops Fill from dropping anything.
+// everything below a folder, which stops Fill from dropping the files below it.
 func (c *CRDs) ScanRoots(roots []string) {
 	c.roots = roots
 	c.listed = map[string]bool{}
@@ -108,28 +121,39 @@ func (c *CRDs) List(file string) {
 	}
 }
 
-// Incomplete records that the scan did not list every file below its folders,
-// because it hit a limit or could not read a folder.
-func (c *CRDs) Incomplete() {
-	c.partial = true
+// SkipDir records that the scan did not enter dir, a slash-separated path, such
+// as a hidden folder. Fill keeps the files of c below dir for which exists
+// reports true, because the scan cannot say whether they are gone.
+func (c *CRDs) SkipDir(dir string, exists func(file string) bool) {
+	c.skipped = append(c.skipped, skippedDir{strings.TrimSuffix(dir, "/") + "/", exists})
+}
+
+// Incomplete records that the scan did not list every file below dir, a
+// slash-separated path, because it hit a limit or could not read dir. Fill
+// keeps the files of c below dir, whose fate is unknown, and still drops the
+// unlisted files below the other scanned folders.
+func (c *CRDs) Incomplete(dir string) {
+	c.partial = append(c.partial, strings.TrimSuffix(dir, "/")+"/")
 }
 
 // Fill records the files of from that c did not touch since Track, replacing
 // what c has for them, ends the tracking, and reports whether that changed
 // the schemas of c. A file Set, Forgotten or Kept after Track wins over from.
-// When from is the result of a complete scan (see ScanRoots), Fill also drops
+// When from is the result of a scan (see ScanRoots), Fill also drops
 // the files of c below the scanned folders that the scan did not list, except
-// those touched since Track. A nil from changes nothing.
+// those touched since Track, those below a folder the scan skipped (see
+// SkipDir) that are still there, and those below a folder it left incomplete
+// (see Incomplete). A nil from changes nothing.
 func (c *CRDs) Fill(from *CRDs) bool {
-	touched := c.touched
-	c.touched = nil
+	touched, forgotten := c.touched, c.forgotten
+	c.touched, c.forgotten = nil, nil
 	if from == nil {
 		return false
 	}
 	added := false
-	if from.listed != nil && !from.partial {
+	if from.listed != nil {
 		for f := range c.files {
-			if touched[f] || from.listed[f] {
+			if touched[f] || from.listed[f] || from.skippedPresent(f) || from.incompleteAt(f) {
 				continue
 			}
 			for _, root := range from.roots {
@@ -142,7 +166,7 @@ func (c *CRDs) Fill(from *CRDs) bool {
 		}
 	}
 	for f, kinds := range from.files {
-		if touched[f] || reflect.DeepEqual(c.files[f], kinds) {
+		if touched[f] || reflect.DeepEqual(c.files[f], kinds) || slices.ContainsFunc(forgotten, func(p string) bool { return strings.HasPrefix(f, p) }) {
 			continue
 		}
 		if c.files == nil {
@@ -152,6 +176,19 @@ func (c *CRDs) Fill(from *CRDs) bool {
 		added = true
 	}
 	return added
+}
+
+// incompleteAt reports whether file is below a folder the scan left incomplete.
+func (c *CRDs) incompleteAt(file string) bool {
+	return slices.ContainsFunc(c.partial, func(p string) bool { return strings.HasPrefix(file, p) })
+}
+
+// skippedPresent reports whether file is below a folder the scan skipped and
+// still exists.
+func (c *CRDs) skippedPresent(file string) bool {
+	return slices.ContainsFunc(c.skipped, func(d skippedDir) bool {
+		return strings.HasPrefix(file, d.prefix) && d.exists(file)
+	})
 }
 
 // Forget drops what the set recorded for file. It reports whether the schemas
@@ -167,12 +204,22 @@ func (c *CRDs) Forget(file string) bool {
 
 // ForgetUnder drops what the set recorded for every file whose name is below
 // dir, a slash-separated path, except those for which keep reports true. It
-// reports whether the schemas of the set changed.
+// reports whether the schemas of the set changed. While tracking (see Track),
+// Fill also skips the files below dir, even those the set did not hold, and
+// leaves what the set has for the kept ones.
 func (c *CRDs) ForgetUnder(dir string, keep func(file string) bool) bool {
 	prefix := strings.TrimSuffix(dir, "/") + "/"
+	if c.touched != nil {
+		c.forgotten = append(c.forgotten, prefix)
+	}
 	changed := false
 	for file := range c.files {
-		if strings.HasPrefix(file, prefix) && !keep(file) {
+		if !strings.HasPrefix(file, prefix) {
+			continue
+		}
+		if keep(file) {
+			c.Keep(file)
+		} else {
 			changed = c.Forget(file) || changed
 		}
 	}

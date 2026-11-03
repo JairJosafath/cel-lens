@@ -86,7 +86,7 @@ func TestKubernetesVersionUnsupported(t *testing.T) {
 	initializeWith(t, c, nil)
 	c.notify("workspace/didChangeConfiguration", map[string]any{"settings": map[string]any{"kubernetesVersion": "1.20"}})
 	for {
-		m := c.read()
+		m := c.read("window/showMessage")
 		if m.Method != "window/showMessage" {
 			continue
 		}
@@ -104,7 +104,7 @@ func TestKubernetesVersionUnsupportedInitializationOptions(t *testing.T) {
 		t.Errorf("initialize kubernetesVersion = %q, want the default 1.37", got)
 	}
 	for {
-		m := c.read()
+		m := c.read("window/showMessage")
 		if m.Method != "window/showMessage" {
 			continue
 		}

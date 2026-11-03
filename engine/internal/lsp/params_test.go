@@ -75,7 +75,7 @@ func (c *client) changeURI(u string, version int, text string) {
 func (c *client) nextDiagnostics() []diagnostic {
 	c.t.Helper()
 	for {
-		m := c.read()
+		m := c.read("textDocument/publishDiagnostics")
 		if m.Method != "textDocument/publishDiagnostics" {
 			continue
 		}
@@ -340,12 +340,12 @@ func TestWatchersRegistered(t *testing.T) {
 	c := start(t)
 	initializeIn(t, c, "", map[string]any{"workspace": map[string]any{"didChangeWatchedFiles": map[string]any{"dynamicRegistration": true}}})
 	for {
-		m := c.read()
+		m := c.read("client/registerCapability")
 		if m.Method != "client/registerCapability" {
 			continue
 		}
-		if !strings.Contains(string(m.Params), "workspace/didChangeWatchedFiles") || !strings.Contains(string(m.Params), "**/*.{yaml,yml}") || !strings.Contains(string(m.Params), `"globPattern":"**","kind":4`) {
-			t.Errorf("registerCapability params = %s, want watchers for YAML files and for deletions of anything", m.Params)
+		if !strings.Contains(string(m.Params), "workspace/didChangeWatchedFiles") || !strings.Contains(string(m.Params), "**/*.{yaml,yml}") || !strings.Contains(string(m.Params), `"globPattern":"**","kind":5`) {
+			t.Errorf("registerCapability params = %s, want watchers for YAML files and for creations and deletions of anything", m.Params)
 		}
 		return
 	}
@@ -480,5 +480,37 @@ func TestDeletedFolderForgottenWhileFeatureOff(t *testing.T) {
 	enableCRDTypedPolicies(c)
 	if diags := c.nextDiagnostics(); len(diags) != 0 {
 		t.Errorf("diagnostics after turning the feature on = %+v, want none: the folder was deleted", diags)
+	}
+}
+
+func TestRenamedFolderKeepsItsCRDs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	old := filepath.Join(dir, "crds")
+	if err := os.Mkdir(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "crd.yaml"), []byte(widgetCRDText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := scanSession(t, dir)
+	policy := strings.Replace(widgetPolicyText, "params.spec.maxReplicas", "params.spec.maxReplica", 1)
+	c.openURI(policyURI, policy)
+	c.nextDiagnostics()
+	enableCRDTypedPolicies(c)
+	c.nextDiagnostics()
+	if diags := c.nextDiagnostics(); len(diags) != 1 {
+		t.Fatalf("diagnostics with the CRD = %+v, want the warning", diags)
+	}
+	renamed := filepath.Join(dir, "renamed")
+	if err := os.Rename(old, renamed); err != nil {
+		t.Fatal(err)
+	}
+	c.notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{
+		{"uri": "file://" + filepath.ToSlash(old), "type": 3},
+		{"uri": "file://" + filepath.ToSlash(renamed), "type": 1},
+	}})
+	if diags := c.nextDiagnostics(); len(diags) != 1 {
+		t.Errorf("diagnostics after the folder was renamed = %+v, want the warning", diags)
 	}
 }

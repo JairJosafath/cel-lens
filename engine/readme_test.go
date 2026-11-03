@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -206,4 +207,47 @@ func TestReadmeCheckFlags(t *testing.T) {
 			t.Errorf("README.md exit codes = %s, check --help says %s", got, want)
 		}
 	})
+}
+
+var (
+	helpKnown     = regexp.MustCompile(`\(known: ([^)]*)\)`)
+	readmeFeature = regexp.MustCompile("^\\| `([a-z][a-z0-9-]*)` \\|")
+)
+
+// TestReadmeExperimentalFeatures compares the names in the README's
+// Experimental table with the known names check --help prints.
+func TestReadmeExperimentalFeatures(t *testing.T) {
+	data, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(data), "\nExperimental:\n")
+	if !ok {
+		t.Fatal("README.md has no Experimental: table")
+	}
+	section, _, _ = strings.Cut(section, "\n\n\n")
+	table, _, _ := strings.Cut(section, "\n\n")
+
+	cmd := exec.CommandContext(t.Context(), buildBinary(t), "check", "--help") //nolint:gosec // bin is the binary make test built
+	out, _ := cmd.CombinedOutput()
+	m := helpKnown.FindStringSubmatch(string(out))
+	if m == nil {
+		t.Fatalf("check --help names no known experimental features:\n%s", out)
+	}
+	var want []string
+	for name := range strings.SplitSeq(m[1], ",") {
+		want = append(want, strings.TrimSpace(name))
+	}
+
+	var got []string
+	for line := range strings.SplitSeq(table, "\n") {
+		if r := readmeFeature.FindStringSubmatch(line); r != nil {
+			got = append(got, r[1])
+		}
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("README.md Experimental table = %v, check --help knows %v", got, want)
+	}
 }

@@ -9,6 +9,22 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-11-03
+
+### Changed
+
+- `public-tags.sh --append` adds newly published tags to `testdata/public-core-tags.txt`, which now lists `core-v0.24.0`.
+- A test pins the README's experimental feature names against `check --help`, another asserts `make test-dist` still sets `CEL_LENS_DIST_TEST=1`, and the stdio test client has a read deadline.
+- A truth case with a divergence note fails on a malformed recorded line.
+
+### Fixed
+
+- On `didChangeWatchedFiles`, the CRDs below a created or renamed-in folder are read.
+- A workspace scan skips the files below a folder forgotten while it ran when its result is filled in.
+- A workspace folder that is missing or cannot be read no longer stops a rescan from forgetting deleted CRDs under the other folders; the CRDs known under the folder that could not be read are kept, and the log names it as incomplete.
+- A workspace scan that read a CRD file before its folder was deleted no longer brings the CRD back when it ends.
+- A CRD file under a hidden folder or `node_modules` that the server learned from a document is kept across a workspace rescan while the file is on disk, and forgotten once it is deleted.
+
 ## [0.24.0] - 2026-11-02
 
 ### Added
@@ -473,7 +489,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.1...HEAD
+[0.24.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...core-v0.24.1
 [0.24.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.23.0...core-v0.24.0
 [0.23.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.22.0...core-v0.23.0
 [0.22.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.1...core-v0.22.0

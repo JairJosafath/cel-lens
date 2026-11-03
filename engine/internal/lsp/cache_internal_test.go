@@ -486,6 +486,51 @@ func TestRescanForgetsDeletedCRDFile(t *testing.T) {
 	}
 }
 
+// TestRescanKeepsCRDUnderSkippedFolder checks that a rescan keeps the CRD of a
+// file under a folder the scan skips while the file is on disk, and forgets it
+// once the file is deleted.
+func TestRescanKeepsCRDUnderSkippedFolder(t *testing.T) {
+	t.Parallel()
+	for _, folder := range []string{".hidden", "node_modules"} {
+		t.Run(folder, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			sub := filepath.Join(dir, folder)
+			if err := os.Mkdir(sub, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			crd := filepath.Join(sub, "crd.yaml")
+			if err := os.WriteFile(crd, []byte(scanCRD), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ss := newSession(t)
+			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.folders = []string{dir}
+			ctx := context.Background()
+			ss.crds.Set(ctx, crdKey(pathURI(crd)), []byte(scanCRD))
+			rescan := func() {
+				ss.startScan(ctx)
+				found := <-ss.scan.done
+				ss.scan = nil
+				if err := ss.finishScan(ctx, found); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rescan()
+			if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
+				t.Fatal("Schema(g/v1, K) after a rescan with the file on disk = not found, want kept")
+			}
+			if err := os.Remove(crd); err != nil {
+				t.Fatal(err)
+			}
+			rescan()
+			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
+				t.Error("Schema(g/v1, K) after a rescan with the file deleted = found, want forgotten")
+			}
+		})
+	}
+}
+
 // TestRescanKeepsFilesPastCap checks that a rescan which hits the file cap
 // does not forget a CRD of a file it left out.
 func TestRescanKeepsFilesPastCap(t *testing.T) {
@@ -515,5 +560,118 @@ func TestRescanKeepsFilesPastCap(t *testing.T) {
 	}
 	if !ss.crds.Forget(crdKey(pathURI(scanned))) {
 		t.Error("a rescan did not record the file within the cap")
+	}
+}
+
+// TestFolderDeletedDuringScanStaysForgotten checks over the wire that the CRDs
+// below a folder deleted while the workspace scan ran, which the scan had
+// already read, do not come back when it ends: the open policy gets no
+// warning from them.
+func TestFolderDeletedDuringScanStaysForgotten(t *testing.T) {
+	t.Parallel()
+	const crd = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata: {name: widgets.example.com}\nspec:\n  group: example.com\n  names: {kind: Widget}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                maxReplicas: {type: integer}\n"
+	const policy = "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nmetadata: {name: demo}\nspec:\n  paramKind: {apiVersion: example.com/v1, kind: Widget}\n  matchConstraints:\n    resourceRules:\n      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}\n  validations:\n    - expression: \"object.spec.replicas <= params.spec.maxReplica\"\n"
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "crds")
+	started, release := make(chan struct{}), make(chan struct{})
+	serverIn, clientOut := io.Pipe()
+	clientIn, serverOut := io.Pipe()
+	ss := newSession(t)
+	ss.conn = jsonrpc.NewConn(serverIn, serverOut)
+	ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) []message {
+		dst.Set(ctx, filepath.ToSlash(filepath.Join(sub, "crd.yaml")), []byte(crd)) // read before the folder is deleted
+		close(started)
+		<-release
+		return []message{{typ: 4, text: "scan ended", log: true}}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ss.serve(ctx, serverIn) }()
+	t.Cleanup(func() { _ = clientOut.Close(); _ = serverOut.Close() })
+
+	c := jsonrpc.NewConn(clientIn, clientOut)
+	if err := c.Request("1", "initialize", map[string]any{
+		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+		"workspaceFolders":      []map[string]any{{"uri": pathURI(dir)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readMessage(t, c) // the initialize result
+	<-started
+	if err := c.Notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": pathURI(filepath.Join(dir, "policy.yaml")), "version": 1, "text": policy}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileDeleted}}}); err != nil {
+		t.Fatal(err)
+	}
+	// A reply to a request sent after the notifications says they are handled.
+	hover := func(id string) {
+		_ = c.Request(id, "textDocument/hover", map[string]any{"textDocument": map[string]any{"uri": pathURI(filepath.Join(dir, "policy.yaml"))}, "position": map[string]any{}})
+	}
+	go hover("2")
+	readUntil(t, c, func(m jsonrpc.Message) bool { return string(m.ID) == `"2"` })
+	close(release)
+	// The scan's note comes before its result is filled in, and a hover sent
+	// after the note is answered after that; a publish in between is the CRD
+	// coming back. The pipes do not buffer: the request is written while the
+	// replies are read.
+	readUntil(t, c, func(m jsonrpc.Message) bool { return m.Method == "window/logMessage" })
+	go hover("3")
+	for {
+		m := readMessage(t, c)
+		if m.Method == "textDocument/publishDiagnostics" {
+			t.Fatalf("diagnostics after the scan ended = %s, want none: the CRD's folder was deleted", m.Params)
+		}
+		if string(m.ID) == `"3"` {
+			return
+		}
+	}
+}
+
+// TestRescanWithUnreadableFolder checks that a missing workspace folder keeps
+// the CRDs known below it, does not stop the rescan from forgetting a CRD
+// deleted below a readable folder, and is named in the scan's notes.
+func TestRescanWithUnreadableFolder(t *testing.T) {
+	t.Parallel()
+	good := t.TempDir()
+	stale := filepath.Join(t.TempDir(), "removed")
+	gone := filepath.Join(good, "gone.yaml")
+	kept := filepath.Join(good, "kept.yaml")
+	for _, f := range []string{gone, kept} {
+		if err := os.WriteFile(f, []byte(scanCRD), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.folders = []string{good, stale}
+	ctx := context.Background()
+	staleFile := crdKey(pathURI(filepath.Join(stale, "widget.yaml")))
+	ss.crds.Set(ctx, staleFile, []byte(scanCRD))
+	rescan := func() {
+		ss.startScan(ctx)
+		found := <-ss.scan.done
+		notes := ss.scan.notes
+		ss.scan = nil
+		if err := ss.finishScan(ctx, found); err != nil {
+			t.Fatal(err)
+		}
+		if len(notes) != 1 || !strings.Contains(notes[0].text, "incomplete") || !strings.Contains(notes[0].text, stale) {
+			t.Fatalf("scan notes = %v, want one naming %s as incomplete", notes, stale)
+		}
+	}
+	rescan()
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	rescan()
+	if ss.crds.Forget(crdKey(pathURI(gone))) {
+		t.Error("a rescan kept the CRD deleted below the readable folder")
+	}
+	if !ss.crds.Forget(crdKey(pathURI(kept))) {
+		t.Error("a rescan forgot a CRD that is still there")
+	}
+	if !ss.crds.Forget(staleFile) {
+		t.Error("a rescan forgot a CRD below the folder that could not be read")
 	}
 }

@@ -113,7 +113,7 @@ func TestExperimentalUnknownName(t *testing.T) {
 			c := start(t)
 			tt.send(c)
 			for {
-				m := c.read()
+				m := c.read("window/logMessage")
 				if m.Method == "window/showMessage" {
 					t.Fatalf("window/showMessage %s, want the warning only in window/logMessage", m.Params)
 				}
@@ -159,7 +159,7 @@ func TestExperimentalWarningCount(t *testing.T) {
 			got := 0
 			if tt.want > 0 {
 				// The pipe has no buffer: read the warning before sending more.
-				for m := c.read(); ; m = c.read() {
+				for m := c.read("window/logMessage"); ; m = c.read("window/logMessage") {
 					if m.Method == "window/showMessage" {
 						t.Fatalf("window/showMessage %s, want none", m.Params)
 					}
@@ -174,7 +174,7 @@ func TestExperimentalWarningCount(t *testing.T) {
 			}
 			c.open(kyvernoPolicy)
 			for {
-				m := c.read()
+				m := c.read("window/logMessage")
 				if m.Method == "window/showMessage" {
 					t.Fatalf("window/showMessage %s, want none", m.Params)
 				}

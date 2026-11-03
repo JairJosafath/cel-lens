@@ -146,3 +146,24 @@ func TestTestDistTargetRunsGatedTests(t *testing.T) {
 		}
 	}
 }
+
+func TestTestDistTargetSetsGateVariable(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	out, err := exec.Command("make", "-n", "test-dist").CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n test-dist: %v\n%s", err, out)
+	}
+	gate := regexp.MustCompile(`(^|\s)CEL_LENS_DIST_TEST=1\s+go test\s`)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "go test") {
+			if !gate.MatchString(line) {
+				t.Errorf("make -n test-dist go test line = %q, want CEL_LENS_DIST_TEST=1 set", line)
+			}
+			return
+		}
+	}
+	t.Fatalf("make -n test-dist = %q, want a go test line", out)
+}

@@ -31,11 +31,17 @@ func TestPublicTagsScript(t *testing.T) {
 		list string
 		exit int
 		out  []string
+		args []string
+		file string
 	}{
-		{"agree", "# c\ncore-v0.1.0\n\ncore-v0.2.0\n", 0, nil},
-		{"unlisted public tag", "core-v0.1.0\n", 1, []string{"not listed: core-v0.2.0"}},
-		{"listed tag not public", "core-v0.1.0\ncore-v0.2.0\ncore-v0.3.0\n", 1, []string{"not public: core-v0.3.0"}},
-		{"both", "core-v0.2.0\ncore-v0.3.0\n", 1, []string{"not public: core-v0.3.0", "not listed: core-v0.1.0"}},
+		{"agree", "# c\ncore-v0.1.0\n\ncore-v0.2.0\n", 0, nil, nil, ""},
+		{"unlisted public tag", "core-v0.1.0\n", 1, []string{"not listed: core-v0.2.0"}, nil, ""},
+		{"listed tag not public", "core-v0.1.0\ncore-v0.2.0\ncore-v0.3.0\n", 1, []string{"not public: core-v0.3.0"}, nil, ""},
+		{"both", "core-v0.2.0\ncore-v0.3.0\n", 1, []string{"not public: core-v0.3.0", "not listed: core-v0.1.0"}, nil, ""},
+		{"append unlisted", "core-v0.1.0\n", 0, []string{"appended: core-v0.2.0"}, []string{"--append"}, "core-v0.1.0\ncore-v0.2.0\n"},
+		{"append without final newline", "# c\ncore-v0.2.0", 0, []string{"appended: core-v0.1.0"}, []string{"--append"}, "# c\ncore-v0.2.0\ncore-v0.1.0\n"},
+		{"append with a tag not public", "core-v0.3.0\n", 1, []string{"not public: core-v0.3.0", "appended: core-v0.1.0", "appended: core-v0.2.0"}, []string{"--append"}, "core-v0.3.0\ncore-v0.1.0\ncore-v0.2.0\n"},
+		{"no flag changes nothing", "core-v0.1.0\n", 1, []string{"not listed: core-v0.2.0"}, nil, "core-v0.1.0\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -46,7 +52,7 @@ func TestPublicTagsScript(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, publicTagsFile), []byte(c.list), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.CommandContext(t.Context(), script, remote) //nolint:gosec // the script of this repository
+			cmd := exec.CommandContext(t.Context(), script, append(c.args, remote)...) //nolint:gosec // the script of this repository
 			cmd.Dir = dir
 			out, err := cmd.Output()
 			got := 0
@@ -57,6 +63,15 @@ func TestPublicTagsScript(t *testing.T) {
 			}
 			if got != c.exit {
 				t.Errorf("public-tags.sh exit = %d, want %d", got, c.exit)
+			}
+			wantFile := c.file
+			if wantFile == "" {
+				wantFile = c.list
+			}
+			if data, err := os.ReadFile(filepath.Join(dir, publicTagsFile)); err != nil {
+				t.Fatal(err)
+			} else if string(data) != wantFile {
+				t.Errorf("public-tags.sh left list = %q, want %q", data, wantFile)
 			}
 			for _, want := range c.out {
 				if !strings.Contains(string(out), want) {

@@ -336,7 +336,7 @@ func TestCRDsFillScanForgets(t *testing.T) {
 			var from check.CRDs
 			from.ScanRoots([]string{"/ws"})
 			if tc.incomplete {
-				from.Incomplete()
+				from.Incomplete("/ws")
 			}
 			if got := c.Fill(&from); got == tc.want {
 				t.Errorf("Fill = %v, want %v", got, !tc.want)
@@ -345,5 +345,28 @@ func TestCRDsFillScanForgets(t *testing.T) {
 				t.Errorf("file still recorded after Fill = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCRDsFillSkipsForgottenFolder checks that Fill does not add a file below
+// a folder ForgetUnder dropped between Track and Fill, but still adds the
+// files beside it and keeps a kept file below it.
+func TestCRDsFillSkipsForgottenFolder(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var from check.CRDs
+	for _, f := range []string{"/ws/crds/a.yaml", "/ws/crds/deep/b.yaml", "/ws/crds-old/x.yaml"} {
+		from.Set(ctx, f, []byte(widgetCRD))
+	}
+	var c check.CRDs
+	c.Track()
+	c.ForgetUnder("/ws/crds", func(string) bool { return false })
+	if !c.Fill(&from) {
+		t.Error("Fill = false, want true: /ws/crds-old/x.yaml is not below the folder")
+	}
+	for f, want := range map[string]bool{"/ws/crds/a.yaml": false, "/ws/crds/deep/b.yaml": false, "/ws/crds-old/x.yaml": true} {
+		if got := c.Forget(f); got != want {
+			t.Errorf("%s recorded after Fill = %v, want %v", f, got, want)
+		}
 	}
 }

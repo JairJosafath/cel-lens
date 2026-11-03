@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/internal/lsp"
@@ -27,7 +28,21 @@ type client struct {
 	out    io.WriteCloser
 	nextID int
 	done   chan error // Serve's result
+
+	msgs    chan received // the server's messages, read off the pipe
+	timeout time.Duration // how long read waits for one message
 }
+
+// received is one result of reading the server's pipe.
+type received struct {
+	msg jsonrpc.Message
+	err error
+}
+
+// readTimeout bounds the wait for a message from the server; a server that
+// stays silent fails the test with the message it was waited for, long
+// before the package timeout.
+const readTimeout = 30 * time.Second
 
 // start runs a Server and returns the client talking to it. The server's
 // goroutine ends, and is waited for, when the test ends.
@@ -35,7 +50,23 @@ func start(t *testing.T) *client {
 	t.Helper()
 	clientIn, serverOut := io.Pipe()
 	serverIn, clientOut := io.Pipe()
-	c := &client{t: t, in: jsonrpc.NewConn(clientIn, io.Discard), out: clientOut, done: make(chan error, 1)}
+	c := &client{t: t, in: jsonrpc.NewConn(clientIn, io.Discard), out: clientOut, done: make(chan error, 1), msgs: make(chan received), timeout: readTimeout}
+	stop := make(chan struct{})
+	pumped := make(chan struct{})
+	go func() {
+		defer close(pumped)
+		for {
+			m, err := c.in.Read()
+			select {
+			case c.msgs <- received{m, err}:
+			case <-stop:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 	go func() {
 		c.done <- (&lsp.Server{Version: "test"}).Serve(context.Background(), serverIn, serverOut)
 		_ = serverOut.Close()
@@ -43,6 +74,8 @@ func start(t *testing.T) *client {
 	t.Cleanup(func() {
 		_ = clientOut.Close()
 		_ = clientIn.Close()
+		close(stop)
+		<-pumped
 		<-c.done // Serve returns once its input ends or it has exited
 	})
 	return c
@@ -65,7 +98,7 @@ func (c *client) call(method string, params any) (json.RawMessage, *jsonrpc.Erro
 	id := strconv.Itoa(c.nextID)
 	c.send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "method": method, "params": params})
 	for {
-		m := c.read()
+		m := c.read("the response to " + method)
 		if string(m.ID) == id {
 			return m.Result, m.Error
 		}
@@ -88,20 +121,38 @@ func (c *client) send(v any) {
 	}
 }
 
-func (c *client) read() jsonrpc.Message {
+// read returns the server's next message. It fails the test if the server
+// sends none within the client's timeout; want names what the caller waits
+// for, such as "textDocument/publishDiagnostics".
+func (c *client) read(want string) jsonrpc.Message {
 	c.t.Helper()
-	m, err := c.in.Read()
+	m, err := c.next(want)
 	if err != nil {
-		c.t.Fatalf("read from server: %v", err)
+		c.t.Fatal(err)
 	}
 	return m
+}
+
+// next is read returning the error instead of failing the test.
+func (c *client) next(want string) (jsonrpc.Message, error) {
+	timer := time.NewTimer(c.timeout)
+	defer timer.Stop()
+	select {
+	case r := <-c.msgs:
+		if r.err != nil {
+			return jsonrpc.Message{}, fmt.Errorf("read from server while waiting for %s: %w", want, r.err)
+		}
+		return r.msg, nil
+	case <-timer.C:
+		return jsonrpc.Message{}, fmt.Errorf("no message from server within %v while waiting for %s", c.timeout, want)
+	}
 }
 
 // diagnostics waits for the next publishDiagnostics notification.
 func (c *client) diagnostics() (version int, diags []diagnostic) {
 	c.t.Helper()
 	for {
-		m := c.read()
+		m := c.read("textDocument/publishDiagnostics")
 		if m.Method != "textDocument/publishDiagnostics" {
 			continue
 		}
@@ -387,7 +438,7 @@ func TestCostFixes(t *testing.T) {
 		}
 	}
 	for {
-		m := c.read()
+		m := c.read("textDocument/publishDiagnostics")
 		if m.Method == "textDocument/publishDiagnostics" {
 			if err := json.Unmarshal(m.Params, &p); err != nil {
 				t.Fatal(err)
@@ -721,7 +772,7 @@ func TestClientResponseIgnored(t *testing.T) {
 	c.send(map[string]any{"jsonrpc": "2.0", "id": 901, "result": map[string]any{}})
 	c.send(map[string]any{"jsonrpc": "2.0", "id": 902, "method": "shutdown"})
 	for {
-		m := c.read()
+		m := c.read("the response to shutdown")
 		if string(m.ID) == "900" || string(m.ID) == "901" {
 			t.Fatalf("server replied to a client response: %+v", m)
 		}
@@ -1151,4 +1202,16 @@ spec:
 		t.Errorf("diagnostics = %+v, want none, as check.Check", diags)
 	}
 	shutdown(t, c)
+}
+
+// TestReadDeadline checks that waiting for a message the server never sends
+// fails with an error naming it, instead of blocking until the package timeout.
+func TestReadDeadline(t *testing.T) {
+	t.Parallel()
+	c := start(t)
+	c.timeout = time.Millisecond
+	_, err := c.next("textDocument/publishDiagnostics")
+	if err == nil || !strings.Contains(err.Error(), "textDocument/publishDiagnostics") {
+		t.Errorf("next(silent server) = %v, want an error naming textDocument/publishDiagnostics", err)
+	}
 }

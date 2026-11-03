@@ -131,11 +131,18 @@ type checker does:
   the CRDs in the workspace folders (YAML files, skipping hidden folders and
   `node_modules`, up to 20,000 files of up to 1 MiB; when the scan stops at the file cap the
   client gets one warning, and each file skipped for its size is named in a log
-  message) and in the open documents;
+  message) and in the open documents; a rescan forgets a CRD file the scan no
+  longer lists, but keeps one under a skipped folder (hidden or `node_modules`,
+  learned from an open document) for as long as the file is on disk. A
+  workspace folder that is missing or cannot be read is logged as incomplete,
+  by name: the rescan keeps the CRDs it knows below that folder, since nothing is known
+  about them, and still forgets the CRD files deleted below the folders it did
+  read. A scan that stops at the file cap keeps the CRDs of every folder;
   `cel-lens-core check` reads the CRDs among the files and folders it checks, so
   name the CRD's file or folder too. When a CRD is added, edited, closed or
   deleted (a deleted or renamed folder too: every CRD file below it is
-  forgotten), the open policies are checked again without restarting the server;
+  forgotten, and a folder created or renamed in is read: the YAML files below it,
+  with the limits of the workspace scan), the open policies are checked again without restarting the server;
   for files that change on disk, the editor must send
   `workspace/didChangeWatchedFiles`, which the server asks for when the client
   allows it. These events are followed only while `crd-typed-policies` is on,
