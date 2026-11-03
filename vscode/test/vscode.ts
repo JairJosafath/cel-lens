@@ -56,6 +56,12 @@ export async function runCommand(command: string, ...args: unknown[]): Promise<u
 /** The messages shown with window.showErrorMessage, oldest first. */
 export const shownErrors: { message: string; buttons: string[] }[] = [];
 
+/** The messages shown with window.showWarningMessage, oldest first. */
+export const shownWarnings: { message: string; buttons: string[] }[] = [];
+
+/** The button the user "clicks" in the next warning message, if any. */
+export const warningChoice: { next: string | undefined } = { next: undefined };
+
 /** The messages shown with window.showInformationMessage, oldest first. */
 export const shownInfos: string[] = [];
 
@@ -452,6 +458,10 @@ export const window = {
     const choice = buttons.find((button) => button === errorChoice.next);
     return Promise.resolve(choice);
   },
+  showWarningMessage<T extends string>(message: string, ...buttons: T[]): Promise<T | undefined> {
+    shownWarnings.push({ message, buttons });
+    return Promise.resolve(buttons.find((button) => button === warningChoice.next));
+  },
   showInformationMessage<T extends string>(
     message: string,
     ...buttons: T[]
@@ -674,6 +684,8 @@ export function reset(): void {
   registry.clear();
   shownErrors.length = 0;
   shownInfos.length = 0;
+  shownWarnings.length = 0;
+  warningChoice.next = undefined;
   infoChoice.next = undefined;
   workspaceSettings.clear();
   workspaceFolderSettings.clear();

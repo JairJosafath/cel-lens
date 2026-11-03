@@ -13,6 +13,7 @@ import {
 
 import { RELEASES_PAGE_URL } from './core_releases';
 import { EngineErrorHandler } from './engine_error_handler';
+import { EngineMessages, SHOW_MESSAGE_METHOD, type ShowMessageParams } from './engine_messages';
 import { EXPERIMENTAL_SETTING, parseExperimental } from './experimental';
 import {
   KUBERNETES_VERSION_SETTING,
@@ -246,6 +247,11 @@ export class ServerController implements vscode.Disposable {
         initializationFailedHandler: () => false,
       },
     );
+    // Registered before start, so it replaces the client's own showMessage handler.
+    const messages = new EngineMessages(this.log);
+    client.onNotification(SHOW_MESSAGE_METHOD, (params: ShowMessageParams) => {
+      messages.show(params);
+    });
     try {
       await client.start();
       started = true;

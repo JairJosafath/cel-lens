@@ -38,6 +38,7 @@ import {
   readmeKubernetesVersions,
   readmeSection,
 } from '../../src/readme';
+import { featureNameProblems, experimentalRows } from '../../src/experimental_table';
 import { requireEngineFile } from '../../src/engine_file';
 import { resolveServer } from '../../src/server_path';
 import { spawnEngine } from '../../src/spawn_engine';
@@ -62,6 +63,8 @@ interface Engine {
   readonly supportedVersions: readonly string[];
   /** The version the engine uses when none is asked for, from its `initialize` result. */
   readonly defaultVersion: string | undefined;
+  /** The experimental feature names the engine knows, from its `initialize` result. */
+  readonly experimentalFeatures: readonly string[];
   /** The registrations the engine asked the client for with `client/registerCapability`. */
   readonly registrations: Registration[];
   /** Resolves on the next publishDiagnostics. */
@@ -94,6 +97,16 @@ interface SessionOptions {
   /** Tells the engine the client registers file watchers. */
   readonly dynamicRegistration?: boolean;
   readonly experimental?: readonly string[];
+}
+
+/** The `experimentalFeatures` names of an `initialize` result; none when the result lacks them. */
+function parseExperimentalFeatures(initialized: unknown): string[] {
+  const names = (initialized as { capabilities?: { experimental?: { celLens?: unknown } } })
+    .capabilities?.experimental?.celLens;
+  const listed = (names as { experimentalFeatures?: unknown } | undefined)?.experimentalFeatures;
+  return Array.isArray(listed)
+    ? listed.filter((name): name is string => typeof name === 'string')
+    : [];
 }
 
 /** Starts the engine as the extension does and initializes a session. */
@@ -160,6 +173,7 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
     exited,
     supportedVersions: parseVersionInfo(initialized, '')?.supported ?? [],
     defaultVersion: parseVersionInfo(initialized, '')?.defaultVersion,
+    experimentalFeatures: parseExperimentalFeatures(initialized),
     published,
     registrations,
     nextPublish: () =>
@@ -228,6 +242,24 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
 
     expect(running().supportedVersions.length).toBeGreaterThan(0);
     expect([...listed].sort()).toEqual([...running().supportedVersions].sort());
+  });
+
+  it('lists in package.json and the README the experimental feature names the engine knows', async () => {
+    const manifest = JSON.parse(await readFile(`${EXTENSION_PATH}package.json`, 'utf8')) as {
+      contributes: {
+        configuration: { properties: Record<string, { items?: { enum?: string[] } }> };
+      };
+    };
+    const inManifest =
+      manifest.contributes.configuration.properties['cel-lens.experimental']?.items?.enum ?? [];
+    const readme = await readFile(`${EXTENSION_PATH}README.md`, 'utf8');
+    const known = running().experimentalFeatures;
+
+    expect(known.length).toBeGreaterThan(0);
+    expect([
+      ...featureNameProblems('package.json', inManifest, known),
+      ...featureNameProblems('README.md', [...experimentalRows(readme).keys()], known),
+    ]).toEqual([]);
   });
 
   it('states the engine’s default Kubernetes version in the README', async () => {

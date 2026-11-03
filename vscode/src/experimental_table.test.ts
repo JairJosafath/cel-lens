@@ -6,6 +6,7 @@ import {
   descriptionReason,
   experimentalReasons,
   experimentalRows,
+  featureNameProblems,
 } from './experimental_table';
 
 const README = [
@@ -44,6 +45,29 @@ describe('experimentalReasons', () => {
       ['alpha', 'because'],
       ['beta', 'later'],
     ]);
+  });
+});
+
+describe('experimentalReasons with an incomplete row', () => {
+  const incomplete = [
+    'Experimental:',
+    '',
+    '| Name | What it does | Why |',
+    '| ---- | ------------ | --- |',
+    '| `short` | Does s |',
+    '| `blank` | Does b |  |',
+    '| `full` | Does f | because |',
+  ].join('\n');
+
+  it('leaves out a row with two cells and gives an empty reason for a blank Why cell', () => {
+    expect([...experimentalReasons(incomplete)]).toEqual([
+      ['blank', ''],
+      ['full', 'because'],
+    ]);
+  });
+
+  it('still lists both incomplete rows in experimentalRows', () => {
+    expect([...experimentalRows(incomplete).keys()]).toEqual(['short', 'blank', 'full']);
   });
 });
 
@@ -150,5 +174,25 @@ describe('the experimental table against the engine README', () => {
 
     expect(extension.size).toBeGreaterThan(0);
     expect(compareExperimentalRows(extension, engine)).toEqual([]);
+  });
+});
+
+describe('featureNameProblems', () => {
+  it.each([
+    ['the same names', ['a', 'b'], ['b', 'a'], []],
+    [
+      'an extra name',
+      ['a', 'b'],
+      ['a'],
+      ['package.json lists "b", which the engine does not know (extra)'],
+    ],
+    [
+      'a missing name',
+      ['a'],
+      ['a', 'b'],
+      ['package.json lacks "b", which the engine knows (missing)'],
+    ],
+  ])('reports %s', (_label, listed, engine, expected) => {
+    expect(featureNameProblems('package.json', listed, engine)).toEqual(expected);
   });
 });

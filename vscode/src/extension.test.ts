@@ -38,6 +38,10 @@ vi.mock('vscode-languageclient/node', () => ({
       };
     }
 
+    onNotification(): void {
+      return undefined;
+    }
+
     sendNotification(method: string, params: unknown): Promise<void> {
       client.notifications.push({ method, params });
       return Promise.resolve();

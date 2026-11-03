@@ -103,3 +103,19 @@ export function compareExperimentalRows(
   }
   return problems;
 }
+
+/** What a hand-written list of feature names gets wrong against the engine's names: one line per extra or missing name. */
+export function featureNameProblems(
+  list: string,
+  listed: readonly string[],
+  engine: readonly string[],
+): string[] {
+  return [
+    ...listed
+      .filter((name) => !engine.includes(name))
+      .map((name) => `${list} lists "${name}", which the engine does not know (extra)`),
+    ...engine
+      .filter((name) => !listed.includes(name))
+      .map((name) => `${list} lacks "${name}", which the engine knows (missing)`),
+  ];
+}

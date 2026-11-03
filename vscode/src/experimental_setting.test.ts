@@ -98,7 +98,9 @@ describe('the cel-lens.experimental setting against the README', () => {
       const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
       const reason = descriptionReason(settingItems().enumDescriptions[index] ?? '');
       expect(reason).toBeDefined();
-      expect(sameReason(reason ?? '', experimentalReasons(readme).get(name) ?? '')).toBe(true);
+      const row = experimentalReasons(readme).get(name);
+      expect(row, `the README Experimental row for ${name} has no Why cell`).toBeTruthy();
+      expect(sameReason(reason ?? '', row ?? '')).toBe(true);
     },
   );
 

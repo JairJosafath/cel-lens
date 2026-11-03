@@ -16,6 +16,7 @@ import {
   reset,
   settings,
   shownErrors,
+  shownWarnings,
   window,
 } from '../test/vscode';
 import { END_WAIT_MS, ServerController } from './server_controller';
@@ -46,6 +47,7 @@ const client = vi.hoisted(() => ({
   startError: undefined as Error | undefined,
   initializeResult: undefined as Record<string, unknown> | undefined,
   notifications: [] as { method: string; params: unknown }[],
+  handlers: new Map<string, (params: never) => void>(),
   startGate: undefined as Promise<void> | undefined,
 }));
 
@@ -88,6 +90,10 @@ vi.mock('vscode-languageclient/node', async () => {
 
       get initializeResult(): Record<string, unknown> | undefined {
         return client.initializeResult;
+      }
+
+      onNotification(method: string, handler: (params: never) => void): void {
+        client.handlers.set(method, handler);
       }
 
       sendNotification(method: string, params: unknown): Promise<void> {
@@ -191,6 +197,7 @@ describe('ServerController', () => {
     client.startError = undefined;
     client.initializeResult = undefined;
     client.notifications.length = 0;
+    client.handlers.clear();
     client.startGate = undefined;
     spawned.calls.length = 0;
     fsFault.chmodError = undefined;
@@ -220,6 +227,21 @@ describe('ServerController', () => {
     ]);
     expect(client.started).toBe(1);
     expect(channels.get('cel-lens')?.lines[0]).toContain(`Starting ${execPath} lsp`);
+  });
+
+  it("shows the engine's showMessage notifications itself, so the file-cap warning gets a button", async () => {
+    settings.set('cel-lens.serverPath', execPath);
+
+    await newController().start();
+    const handler = client.handlers.get('window/showMessage') as (params: unknown) => void;
+    handler({ type: 2, message: 'cel-lens stopped scanning the workspace after 5 YAML files' });
+
+    expect(shownWarnings).toEqual([
+      {
+        message: 'cel-lens stopped scanning the workspace after 5 YAML files',
+        buttons: ['Show Logs'],
+      },
+    ]);
   });
 
   it('runs the server through spawnEngine with the resolved command and args', async () => {

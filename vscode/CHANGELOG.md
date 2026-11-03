@@ -6,6 +6,17 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-03
+
+### Changed
+
+- The engine's warning that it stopped scanning the workspace at its file cap now has a Show Logs button, and appears once per engine start.
+
+### Fixed
+
+- A test pins the experimental feature names against the engine's `initialize` result.
+- The README Experimental table check reports a missing or blank Why cell by name.
+
 ## [0.27.3] - 2026-11-02
 
 ### Changed
@@ -564,7 +575,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.3...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.28.0...HEAD
+[0.28.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.3...vscode-v0.28.0
 [0.27.3]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.2...vscode-v0.27.3
 [0.27.2]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.1...vscode-v0.27.2
 [0.27.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.27.0...vscode-v0.27.1
