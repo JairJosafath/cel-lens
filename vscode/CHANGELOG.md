@@ -6,6 +6,17 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-03
+
+### Added
+
+- The notification about an unknown name in `cel-lens.experimental` suggests the closest known name when there is one, such as `kyverno` for `kyvernoo`.
+
+### Changed
+
+- The engine tests use the `test/vscode.ts` `LogChannel` stand-in instead of cast log mocks; no behaviour changes.
+- One shared `isRecord` narrowing helper serves all of `src`; no behaviour changes.
+
 ## [0.32.0] - 2026-11-03
 
 ### Changed
@@ -611,7 +622,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.32.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.33.0...HEAD
+[0.33.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.32.0...vscode-v0.33.0
 [0.32.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.31.0...vscode-v0.32.0
 [0.31.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.30.0...vscode-v0.31.0
 [0.30.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.29.0...vscode-v0.30.0

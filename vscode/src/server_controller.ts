@@ -163,7 +163,10 @@ export class ServerController implements vscode.Disposable {
     }
     // Not awaited: a notification stays pending while it is open, and must not block a restart.
     void vscode.window
-      .showWarningMessage(unknownExperimentalMessage(names), OPEN_EXPERIMENTAL_SETTING_LABEL)
+      .showWarningMessage(
+        unknownExperimentalMessage(names, this.knownFeatures),
+        OPEN_EXPERIMENTAL_SETTING_LABEL,
+      )
       .then((button) => this.handle(button));
   }
 

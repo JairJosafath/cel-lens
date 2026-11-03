@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 
 import { releaseDownloadUrl } from './core_releases.ts';
+import { isRecord } from './is_record.ts';
 
 /** One binary of the pinned engine release. */
 export interface CoreAsset {
@@ -41,10 +42,6 @@ export interface CorePin {
   readonly version: string;
   readonly baseUrl: string;
   readonly assets: Readonly<Record<string, CoreAsset>>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 /** Checks the parsed core-version.json and returns it; throws saying what is wrong. */

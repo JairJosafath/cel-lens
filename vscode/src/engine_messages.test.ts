@@ -1,12 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  channels,
   executedCommands,
   reset,
   shownErrors,
   shownInfos,
   shownWarnings,
   warningChoice,
+  window,
 } from '../test/vscode';
 import { SHOW_LOGS_COMMAND } from './actions_menu';
 import { EngineMessages } from './engine_messages';
@@ -14,13 +16,10 @@ import { EngineMessages } from './engine_messages';
 const CAP =
   'cel-lens stopped scanning the workspace for CustomResourceDefinitions after 5000 YAML files; CRDs in the files left out are not known, so a params type may stay dyn';
 
-const warn = vi.fn();
+const log = (): string[] => channels.get('cel-lens')?.lines ?? [];
 
 function newMessages(): EngineMessages {
-  const log = { error: vi.fn(), warn } as unknown as ConstructorParameters<
-    typeof EngineMessages
-  >[0];
-  return new EngineMessages(log);
+  return new EngineMessages(window.createOutputChannel('cel-lens'));
 }
 
 async function settle(): Promise<void> {
@@ -32,7 +31,6 @@ async function settle(): Promise<void> {
 describe('EngineMessages', () => {
   beforeEach(() => {
     reset();
-    warn.mockReset();
   });
 
   it('shows the file-cap warning with a Show Logs button', () => {
@@ -72,7 +70,7 @@ describe('EngineMessages', () => {
     messages.show({ type: 2, message: CAP });
     messages.show({ type: 2, message: CAP });
 
-    expect(warn).toHaveBeenCalledExactlyOnceWith(CAP);
+    expect(log()).toEqual([CAP]);
   });
 
   it.each([

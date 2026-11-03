@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { unknownExperimental, unknownExperimentalMessage } from './experimental';
+import { closestKnownName, unknownExperimental, unknownExperimentalMessage } from './experimental';
 
 const KNOWN = ['kyverno', 'crd-typed-policies', 'fitting-completion'];
 
@@ -24,6 +24,35 @@ describe('unknownExperimentalMessage', () => {
       'lists "a", "b", which the engine does not know, so they are ignored. Remove or correct them',
     ],
   ])('names %j and says what to do', (names, text) => {
-    expect(unknownExperimentalMessage(names)).toContain(text);
+    expect(unknownExperimentalMessage(names, KNOWN)).toContain(text);
+  });
+});
+
+describe('closestKnownName', () => {
+  it.each([
+    ['a letter too many', 'kyvernoo', 'kyverno'],
+    ['a letter missing', 'kyvrno', 'kyverno'],
+    ['another case', 'Kyverno', 'kyverno'],
+    ['a swapped letter', 'fitting-completon', 'fitting-completion'],
+    ['nothing close', 'zzzzzz', undefined],
+    ['a short name one edit away from nothing known', 'ab', undefined],
+    ['an empty name', '', undefined],
+  ])('for %s returns the suggestion', (_what, name, expected) => {
+    expect(closestKnownName(name, ['kyverno', 'crd-typed-policies', 'fitting-completion'])).toBe(
+      expected,
+    );
+  });
+
+  it('returns none when the engine lists nothing', () => {
+    expect(closestKnownName('kyvernoo', [])).toBeUndefined();
+  });
+});
+
+describe('unknownExperimentalMessage suggestions', () => {
+  it.each([
+    [['kyvernoo'], '"kyvernoo" (did you mean "kyverno"?)'],
+    [['zzzzzz'], '"zzzzzz", which'],
+  ])('for %j says %s', (names, text) => {
+    expect(unknownExperimentalMessage(names, ['kyverno'])).toContain(text);
   });
 });

@@ -1,7 +1,7 @@
+import { isRecord } from './is_record';
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value))
-    : undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 /** The enum of the `cel-lens.experimental` items in a parsed `package.json`; `[]` when missing or malformed. */

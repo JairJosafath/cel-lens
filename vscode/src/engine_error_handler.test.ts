@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { errorChoice, executedCommands, reset, shownErrors } from '../test/vscode';
+import {
+  channels,
+  errorChoice,
+  executedCommands,
+  reset,
+  shownErrors,
+  window,
+} from '../test/vscode';
 import { SHOW_LOGS_COMMAND } from './actions_menu';
 import { EngineErrorHandler, connectionErrorMessage, giveUpMessage } from './engine_error_handler';
 import { RESTART_SERVER_COMMAND } from './kubernetes_version';
@@ -15,8 +22,7 @@ const DO_NOT_RESTART = 1;
 const MINUTE = 60_000;
 
 function newHandler(clock: { now: number }): EngineErrorHandler {
-  const log = { error: vi.fn() } as unknown as ConstructorParameters<typeof EngineErrorHandler>[0];
-  return new EngineErrorHandler(log, () => clock.now);
+  return new EngineErrorHandler(window.createOutputChannel('cel-lens'), () => clock.now);
 }
 
 describe('EngineErrorHandler', () => {
@@ -72,6 +78,7 @@ describe('EngineErrorHandler', () => {
       },
     ]);
     expect(giveUpMessage()).not.toMatch(/server/i);
+    expect(channels.get('cel-lens')?.lines).toEqual([giveUpMessage()]);
   });
 
   it.each([
@@ -130,5 +137,6 @@ describe('EngineErrorHandler', () => {
       { message: connectionErrorMessage(), buttons: ['Restart Engine', 'Show Logs'] },
     ]);
     expect(connectionErrorMessage()).not.toMatch(/server/i);
+    expect(channels.get('cel-lens')?.lines).toEqual([connectionErrorMessage()]);
   });
 });

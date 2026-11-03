@@ -1,3 +1,4 @@
+import { isRecord } from './is_record';
 /** The `cel-lens.kubernetesVersion` setting, as contributed in package.json. */
 export const KUBERNETES_VERSION_SETTING = 'kubernetesVersion';
 
@@ -44,10 +45,6 @@ export interface VersionPickItem {
   readonly label: string;
   readonly description: string;
   readonly version: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 /**
