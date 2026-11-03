@@ -5,6 +5,7 @@ import {
   commands,
   executedCommands,
   reset,
+  settle,
   shownErrors,
   shownInfos,
   shownWarnings,
@@ -21,12 +22,6 @@ const log = (): string[] => channels.get('cel-lens')?.lines ?? [];
 
 function newMessages(): EngineMessages {
   return new EngineMessages(window.createOutputChannel('cel-lens'));
-}
-
-async function settle(): Promise<void> {
-  for (let turn = 0; turn < 10; turn += 1) {
-    await Promise.resolve();
-  }
 }
 
 describe('EngineMessages', () => {

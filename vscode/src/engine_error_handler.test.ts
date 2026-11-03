@@ -6,6 +6,7 @@ import {
   errorChoice,
   executedCommands,
   reset,
+  settle,
   shownErrors,
   window,
 } from '../test/vscode';
@@ -97,9 +98,9 @@ describe('EngineErrorHandler', () => {
       handler.closed();
     }
 
-    await vi.waitFor(() => {
-      expect(executedCommands).toEqual([{ command, args: [] }]);
-    });
+    await settle();
+
+    expect(executedCommands).toEqual([{ command, args: [] }]);
   });
 
   it.each(['Restart Engine', 'Show Logs'])(
@@ -113,11 +114,11 @@ describe('EngineErrorHandler', () => {
         handler.closed();
       }
 
-      await vi.waitFor(() => {
-        expect(channels.get('cel-lens')?.lines).toContain(
-          'Could not follow the message button: Error: no such command',
-        );
-      });
+      await settle();
+
+      expect(channels.get('cel-lens')?.lines).toContain(
+        'Could not follow the message button: Error: no such command',
+      );
     },
   );
 

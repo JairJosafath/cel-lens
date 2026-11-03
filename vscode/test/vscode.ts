@@ -53,6 +53,13 @@ export async function runCommand(command: string, ...args: unknown[]): Promise<u
   return await callback(...args);
 }
 
+/** Drains the microtask queue, so a follow-up chained on a resolved promise has run. */
+export async function settle(): Promise<void> {
+  for (let turn = 0; turn < 10; turn += 1) {
+    await Promise.resolve();
+  }
+}
+
 /** The messages shown with window.showErrorMessage, oldest first. */
 export const shownErrors: { message: string; buttons: string[] }[] = [];
 
@@ -61,6 +68,13 @@ export const shownWarnings: { message: string; buttons: string[] }[] = [];
 
 /** The button the user "clicks" in the next warning message, if any. */
 export const warningChoice: { next: string | undefined } = { next: undefined };
+
+/**
+ * The buttons the user "clicks" in the next warning and error messages, in order: each
+ * showWarningMessage or showErrorMessage call takes the first one (undefined dismisses it).
+ * Once the queue is empty, the calls fall back to warningChoice and errorChoice.
+ */
+export const notificationChoices: (string | undefined)[] = [];
 
 /** The messages shown with window.showInformationMessage, oldest first. */
 export const shownInfos: string[] = [];
@@ -455,12 +469,14 @@ export const window = {
     if (errorChoice.never) {
       return new Promise<T | undefined>(() => undefined);
     }
-    const choice = buttons.find((button) => button === errorChoice.next);
-    return Promise.resolve(choice);
+    const wanted = notificationChoices.length > 0 ? notificationChoices.shift() : errorChoice.next;
+    return Promise.resolve(buttons.find((button) => button === wanted));
   },
   showWarningMessage<T extends string>(message: string, ...buttons: T[]): Promise<T | undefined> {
     shownWarnings.push({ message, buttons });
-    return Promise.resolve(buttons.find((button) => button === warningChoice.next));
+    const wanted =
+      notificationChoices.length > 0 ? notificationChoices.shift() : warningChoice.next;
+    return Promise.resolve(buttons.find((button) => button === wanted));
   },
   showInformationMessage<T extends string>(
     message: string,
@@ -686,6 +702,7 @@ export function reset(): void {
   shownInfos.length = 0;
   shownWarnings.length = 0;
   warningChoice.next = undefined;
+  notificationChoices.length = 0;
   infoChoice.next = undefined;
   workspaceSettings.clear();
   workspaceFolderSettings.clear();

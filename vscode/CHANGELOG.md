@@ -6,6 +6,13 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-11-03
+
+### Changed
+
+- The engine error handler tests use a deterministic `settle()` helper instead of `vi.waitFor`; no behaviour changes.
+- The `test/vscode.ts` stand-in can queue the choices a notification returns; no behaviour changes.
+
 ## [0.34.0] - 2026-11-03
 
 ### Added
@@ -634,7 +641,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.1...HEAD
+[0.34.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.0...vscode-v0.34.1
 [0.34.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.33.0...vscode-v0.34.0
 [0.33.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.32.0...vscode-v0.33.0
 [0.32.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.31.0...vscode-v0.32.0

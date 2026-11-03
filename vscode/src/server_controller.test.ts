@@ -21,6 +21,7 @@ import {
   shownErrors,
   shownWarnings,
   updateFailure,
+  notificationChoices,
   warningChoice,
   window,
   workspaceSettings,
@@ -733,11 +734,7 @@ describe('ServerController', () => {
     client.initializeResult = FEATURES_RESULT;
     shownWarnings.length = 0;
     updateFailure.error = new Error('settings.json is not writable');
-    warningChoice.next = OPEN_EXPERIMENTAL_SETTING_LABEL;
-    vi.spyOn(window, 'showWarningMessage').mockImplementationOnce((message, ...buttons) => {
-      shownWarnings.push({ message, buttons });
-      return Promise.resolve(REPLACE_EXPERIMENTAL_LABEL as never);
-    });
+    notificationChoices.push(REPLACE_EXPERIMENTAL_LABEL, OPEN_EXPERIMENTAL_SETTING_LABEL);
 
     await newController().start();
 
