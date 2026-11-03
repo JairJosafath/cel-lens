@@ -38,7 +38,7 @@ func (r *reporter) typeCheck(ctx context.Context, p *admissionregistrationv1.Val
 	for i, rule := range p.Spec.MatchConstraints.ResourceRules {
 		rules[i] = matchkind.Rule{Groups: rule.APIGroups, Versions: rule.APIVersions, Resources: rule.Resources}
 	}
-	kinds, ok := matchkind.Resolve(rules)
+	kinds, ok := r.crds.Resolve(rules)
 	if !ok {
 		return nil
 	}
@@ -53,7 +53,7 @@ func (r *reporter) typeCheck(ctx context.Context, p *admissionregistrationv1.Val
 // compileValidations stores the variables of p in composite, compiles each
 // expression of the validations that is in clean, and calls fail with the
 // issues of each one that does not compile.
-func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, fail func(field string, e extract.Expression, issues []string)) error {
+func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, fail func(e extract.Expression, issues []string)) error {
 	for _, v := range p.Spec.Variables {
 		composite.CompileAndStoreVariable(accessor{name: v.Name, expression: v.Expression, returns: anyTypes}, decls, environment.NewExpressions)
 	}
@@ -75,7 +75,7 @@ func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.
 			if len(issues) == 0 {
 				issues = []string{res.Error.Detail}
 			}
-			fail(field, e, issues)
+			fail(e, issues)
 		}
 	}
 	return nil
@@ -87,7 +87,7 @@ func (r *reporter) typeCheckKind(ctx context.Context, p *admissionregistrationv1
 	if err != nil || composite == nil {
 		return err
 	}
-	return r.compileValidations(ctx, composite, decls, p, exprs, clean, func(_ string, e extract.Expression, issues []string) {
+	return r.compileValidations(ctx, composite, decls, p, exprs, clean, func(e extract.Expression, issues []string) {
 		r.reportAs(e, SeverityWarning, kind.String()+": ", strings.Join(issues, "\n"))
 	})
 }

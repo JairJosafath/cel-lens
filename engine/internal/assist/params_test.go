@@ -15,7 +15,7 @@ const paramsWidgetCRD = `apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 spec:
   group: example.com
-  names: {kind: Widget}
+  names: {plural: widgets, kind: Widget}
   versions:
     - name: v1
       schema:
@@ -140,4 +140,36 @@ func TestParamsHover(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestObjectFromCRD(t *testing.T) {
+	t.Parallel()
+	var crds check.CRDs
+	crds.Set(context.Background(), "crd.yaml", []byte(paramsWidgetCRD))
+	doc := "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nspec:\n" +
+		"  matchConstraints:\n    resourceRules:\n      - {apiGroups: [example.com], apiVersions: [v1], resources: [widgets]}\n" +
+		"  validations:\n    - expression: object.spec.maxReplicas > 1\n"
+	t.Run("hover names the kind", func(t *testing.T) {
+		t.Parallel()
+		got, ok := paramsAssistant(t).Hover(assist.Parse(context.Background(), "policy.yaml", []byte(doc), assist.WithCRDs(&crds)), posIn(t, doc, "object.spec", 2))
+		if !ok {
+			t.Fatal("Hover(object) = none")
+		}
+		if !strings.Contains(got.Markdown, "(variable) object: example.com/v1 Widget") || strings.Contains(got.Markdown, "dyn") {
+			t.Errorf("Hover(object) = %q, want example.com/v1 Widget and no dyn", got.Markdown)
+		}
+	})
+	t.Run("completion", func(t *testing.T) {
+		t.Parallel()
+		if got, want := labelsAfter(t, doc, "object.spec.maxReplicas", len("object.spec."), &crds), []string{"maxReplicas"}; !slices.Equal(got, want) {
+			t.Errorf("fields after object.spec. = %v, want %v", got, want)
+		}
+	})
+	t.Run("without CRDs object is dyn", func(t *testing.T) {
+		t.Parallel()
+		got, ok := paramsAssistant(t).Hover(assist.Parse(context.Background(), "policy.yaml", []byte(doc)), posIn(t, doc, "object.spec", 2))
+		if !ok || !strings.Contains(got.Markdown, "dyn") {
+			t.Errorf("Hover(object) = %q, %v, want dyn", got.Markdown, ok)
+		}
+	})
 }

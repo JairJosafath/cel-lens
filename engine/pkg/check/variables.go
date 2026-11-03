@@ -84,7 +84,7 @@ func VariableTypes(ctx context.Context, root map[string]any, opts ...Option) ([]
 		for i, rule := range p.Spec.MatchConstraints.ResourceRules {
 			rules[i] = matchkind.Rule{Groups: rule.APIGroups, Versions: rule.APIVersions, Resources: rule.Resources}
 		}
-		if kinds, ok := matchkind.Resolve(rules); ok {
+		if kinds, ok := r.crds.Resolve(rules); ok {
 			for _, kind := range kinds {
 				composite, decls, err := r.typedComposite(&p, kind)
 				if err != nil {

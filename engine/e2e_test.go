@@ -222,3 +222,36 @@ func TestBinaryVersion(t *testing.T) {
 		t.Errorf("%s --version = %q, want a version after the name", name, out)
 	}
 }
+
+// TestFallbackBuildLeavesNoDirectory runs TestBinaryVersion in an inner go test
+// with binEnv removed, so the test builds the program itself, and checks that
+// the run passes and TestMain leaves no cel-lens-core-test-* directory in the
+// temporary directory. make test always sets binEnv, so only this test guards
+// that fallback. -short leaves it out: the inner run of
+// TestPublicSourceTestsPass is short and must not nest another build.
+func TestFallbackBuildLeavesNoDirectory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the program again")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skipf("go is not on PATH: %v", err)
+	}
+	tmp := t.TempDir()
+	cmd := exec.CommandContext(t.Context(), "go", "test", "-count=1", "-run", "^TestBinaryVersion$", ".")
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, binEnv+"=") && !strings.HasPrefix(kv, "TMPDIR=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, "TMPDIR="+tmp)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test -run '^TestBinaryVersion$' . without %s: %v\n%s", binEnv, err, out)
+	}
+	left, err := filepath.Glob(filepath.Join(tmp, "cel-lens-core-test-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) > 0 {
+		t.Errorf("go test left %q in %s, want none", left, tmp)
+	}
+}

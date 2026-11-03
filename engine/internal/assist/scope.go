@@ -114,7 +114,10 @@ func hasSegment(path, name string) bool {
 // expressions that may use them.
 func policyScope(root map[string]any, e extract.Expression, v kubeversion.Version, crds *check.CRDs, typeFromCRDs bool) []variable {
 	policySpec, _ := root["spec"].(map[string]any)
-	kinds := matchedKinds(policySpec)
+	if !typeFromCRDs {
+		crds = nil
+	}
+	kinds := matchedKinds(policySpec, crds)
 	object := variable{name: "object", desc: "The object being admitted; null on DELETE.", typeName: kinds.name, schema: kinds.schema}
 	oldObject := variable{name: "oldObject", desc: "The existing object; null on CREATE.", typeName: kinds.name, schema: kinds.schema}
 	vars := []variable{
@@ -122,9 +125,6 @@ func policyScope(root map[string]any, e extract.Expression, v kubeversion.Versio
 		{name: "request", desc: "The attributes of the admission request.", typeName: "kubernetes.AdmissionRequest", schema: requestType(false)},
 		{name: "namespaceObject", desc: "The namespace the object belongs to; null for cluster-scoped objects.", typeName: "kubernetes.Namespace", schema: namespaceType()},
 		{name: "authorizer", desc: "Checks what the requesting user may do; start with authorizer.group(...), authorizer.path(...) or authorizer.serviceAccount(...). authorizer.requestResource checks the resource of the request.", typeName: authorizerType, celType: authorizerType},
-	}
-	if !typeFromCRDs {
-		crds = nil
 	}
 	if policySpec["paramKind"] != nil {
 		vars = append(vars, paramsVariable(policySpec["paramKind"], crds, typeFromCRDs))
@@ -358,11 +358,12 @@ type kindsSchema struct {
 // known: its schema is dyn for the reason why.
 func untyped(why dynReason) kindsSchema { return kindsSchema{schema: unknownType(why)} }
 
-// matchedKinds returns the built-in kinds the policy spec matches, as the API
+// matchedKinds returns the kinds the policy spec matches, built-in or, when crds
+// is not nil, custom resources a CRD of crds defines, as the API
 // server's type checker finds them. Unless every matched kind is known, the
 // result has no name and a dyn schema that records why. With several kinds,
 // schema is their merge (see merge).
-func matchedKinds(policySpec map[string]any) kindsSchema {
+func matchedKinds(policySpec map[string]any, crds *check.CRDs) kindsSchema {
 	constraints, _ := policySpec["matchConstraints"].(map[string]any)
 	list, _ := constraints["resourceRules"].([]any)
 	var rules []matchkind.Rule
@@ -370,9 +371,9 @@ func matchedKinds(policySpec map[string]any) kindsSchema {
 		m, _ := item.(map[string]any)
 		rules = append(rules, matchkind.Rule{Groups: stringList(m["apiGroups"]), Versions: stringList(m["apiVersions"]), Resources: stringList(m["resources"])})
 	}
-	kinds, ok := matchkind.Resolve(rules)
+	kinds, ok := crds.Resolve(rules)
 	if !ok {
-		return untyped(whyNotMatched(rules))
+		return untyped(whyNotMatched(rules, crds))
 	}
 	names := make([]string, len(kinds))
 	for i, k := range kinds {

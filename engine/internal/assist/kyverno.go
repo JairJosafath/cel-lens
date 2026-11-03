@@ -85,7 +85,7 @@ func kyvernoVariable(name, typ string) variable {
 // them, as for a ValidatingAdmissionPolicy.
 func (a *Assistant) kyvernoScope(root map[string]any, e extract.Expression) []variable {
 	spec, _ := root["spec"].(map[string]any)
-	kinds := matchedKinds(spec)
+	kinds := matchedKinds(spec, nil)
 	var vars []variable
 	for _, v := range a.vars {
 		switch v.name {

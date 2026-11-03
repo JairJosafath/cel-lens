@@ -25,8 +25,9 @@ of the workspace, never from a neighbouring document of the same file.
 Typing `params` from a CRD at all is the experimental feature `crd-typed-policies`
 (README, "Stable and experimental features"): off, `params` of a custom resource
 is `dyn` and hover says the feature is experimental and off. The gap above stays
-while the feature is experimental. Only `params` is typed from a CRD: `object`
-and `oldObject` of a custom resource are `dyn` with or without one. The
+while the feature is experimental. `params` and, for a ValidatingAdmissionPolicy that
+matches a custom resource by its plural name, `object` and `oldObject` are typed from
+a CRD; with the feature off, or no CRD for the resource, they are `dyn` (`unknown-kind`). The
 workspace scan still runs inside `initialize` when the feature is off; only the
 use of the CRDs is switched off. Hover saying why a value is `dyn` is the
 experimental feature `fitting-completion`.

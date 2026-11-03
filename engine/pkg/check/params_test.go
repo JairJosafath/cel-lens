@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 // paramsPolicy returns a ValidatingAdmissionPolicy over deployments with the
@@ -368,5 +369,59 @@ func TestCRDsFillSkipsForgottenFolder(t *testing.T) {
 		if got := c.Forget(f); got != want {
 			t.Errorf("%s recorded after Fill = %v, want %v", f, got, want)
 		}
+	}
+}
+
+// customPolicy returns a ValidatingAdmissionPolicy over the widgets of
+// example.com/v1 with expression as its only validation.
+func customPolicy(expression string) string {
+	return `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: demo
+spec:
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [example.com], apiVersions: [v1], resources: [widgets]}
+  validations:
+    - expression: "` + expression + `"
+`
+}
+
+// TestObjectTypeFromCRD checks that object and oldObject of a policy that
+// matches a custom resource are typed from its CRD when crd-typed-policies is on.
+func TestObjectTypeFromCRD(t *testing.T) {
+	t.Parallel()
+	crds := loadCRDs(t, map[string]string{"widget.yaml": widgetCRD})
+	tests := []struct {
+		name, doc string
+		crds      *check.CRDs
+		opts      []check.Option
+		want      []warning
+	}{
+		{name: "field", doc: customPolicy("object.spec.maxReplicas > 1 && oldObject.spec.labels.size() > 0"), crds: crds},
+		{
+			name: "wrong field on object", doc: customPolicy("object.spec.maxReplica > 1"), crds: crds,
+			want: []warning{{"example.com/v1 Widget: undefined field 'maxReplica'", "maxReplica"}},
+		},
+		{
+			name: "wrong field on oldObject", doc: customPolicy("oldObject.spec.nope > 1"), crds: crds,
+			want: []warning{{"example.com/v1 Widget: undefined field 'nope'", "nope"}},
+		},
+		{name: "no CRD stays dyn", doc: customPolicy("object.spec.nope > 1")},
+		{name: "feature off stays dyn", doc: customPolicy("object.spec.nope > 1"), crds: crds, opts: []check.Option{check.WithFeatures(feature.Of())}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := append([]check.Option{check.WithCRDs(tt.crds), allOn()}, tt.opts...)
+			diags, err := check.Check(context.Background(), "policy.yaml", []byte(tt.doc), opts...)
+			if err != nil {
+				t.Fatalf("Check(%s) error: %v", tt.name, err)
+			}
+			if got := texts(tt.doc, diags); !slices.Equal(got, tt.want) {
+				t.Errorf("Check(%s) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
 	}
 }

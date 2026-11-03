@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -699,6 +701,105 @@ func TestCreatedSkippedFolderRecordsNoCRDs(t *testing.T) {
 			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
 				t.Errorf("Schema(g/v1, K) after creating %s = found, want not found", folder)
 			}
+		})
+	}
+}
+
+// TestCreatedFolderScansInBackground checks that a hover is answered while the
+// scan of a created folder is still reading, and that the CRD it finds is
+// recorded once it ends.
+func TestCreatedFolderScansInBackground(t *testing.T) {
+	t.Parallel()
+	sub := t.TempDir()
+	started, release := make(chan struct{}), make(chan struct{})
+	serverIn, clientOut := io.Pipe()
+	clientIn, serverOut := io.Pipe()
+	ss := newSession(t)
+	ss.conn = jsonrpc.NewConn(serverIn, serverOut)
+	ss.scanner = func(ctx context.Context, folders []string, dst *check.CRDs) []message {
+		if !slices.Contains(folders, sub) {
+			<-ctx.Done() // the workspace scan, which the created folder restarts
+			return nil
+		}
+		close(started)
+		select {
+		case <-release:
+			dst.Set(ctx, "file:///ws/crd.yaml", []byte(scanCRD))
+		case <-ctx.Done():
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ss.serve(ctx, serverIn) }()
+	t.Cleanup(func() { _ = clientOut.Close(); _ = serverOut.Close() })
+
+	c := jsonrpc.NewConn(clientIn, clientOut)
+	if err := c.Request("1", "initialize", map[string]any{
+		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readMessage(t, c)
+	if err := c.Notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": cacheURI, "version": 1, "text": widget(t)}}); err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, c, func(m jsonrpc.Message) bool { return m.Method == "textDocument/publishDiagnostics" })
+	if err := c.Notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileCreated}}}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := c.Request("2", "textDocument/hover", map[string]any{"textDocument": map[string]any{"uri": cacheURI}, "position": map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, c, func(m jsonrpc.Message) bool { return string(m.ID) == `"2"` })
+	close(release)
+	readUntil(t, c, func(m jsonrpc.Message) bool { return m.Method == "textDocument/publishDiagnostics" })
+}
+
+// TestCreatedNestedFoldersScanOnce checks that a batch with a folder and its
+// subfolders is read in one scan of the outer folder, and that a workspace
+// scan running meanwhile is restarted once, not once per folder.
+func TestCreatedNestedFoldersScanOnce(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	a := filepath.Join(root, "a")
+	ab := filepath.Join(a, "b")
+	abc := filepath.Join(ab, "c")
+	if err := os.MkdirAll(abc, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, running := range []bool{false, true} {
+		t.Run(fmt.Sprintf("workspace scan running=%t", running), func(t *testing.T) {
+			t.Parallel()
+			ss := newSession(t)
+			ss.features = feature.Of(feature.CRDTypedPolicies)
+			var scans [][]string
+			ss.scanner = func(_ context.Context, folders []string, _ *check.CRDs) []message {
+				scans = append(scans, folders) // read after the scan ends
+				return nil
+			}
+			ss.folders = []string{filepath.Join(root, "other")}
+			if running {
+				ss.startScan(context.Background())
+			}
+			changes := []map[string]any{}
+			for _, p := range []string{abc, a, ab, a} {
+				changes = append(changes, map[string]any{"uri": pathURI(p), "type": fileCreated})
+			}
+			params, _ := json.Marshal(map[string]any{"changes": changes})
+			if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
+				t.Fatal(err)
+			}
+			<-ss.scan.done
+			want := [][]string{{a}}
+			if running {
+				want = [][]string{ss.folders, {ss.folders[0], a}}
+			}
+			if !slices.EqualFunc(scans, want, slices.Equal) {
+				t.Errorf("scans after the batch = %q, want %q", scans, want)
+			}
+			ss.scan = nil
 		})
 	}
 }

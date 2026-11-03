@@ -159,8 +159,10 @@ func TestInnerEnvDropsDistTest(t *testing.T) {
 // the files the copy lacks. The copy holds only the files git tracks, so untracked
 // or ignored files cannot change the result; the inner run stops with the test's
 // context and after innerTimeout. The other packages read none of them, so their
-// tests run once, in the outer run. -short leaves out the tests that build every
-// dependency again, which the outer run covers.
+// tests run once, in the outer run. The inner run clears CEL_LENS_DIST_TEST (see
+// innerEnv), which keeps TestDist and TestGoInstallFromProxy out of it. The inner run
+// is short, which keeps this test and TestFallbackBuildLeavesNoDirectory out of it,
+// so it nests neither another copy nor another build.
 func TestPublicSourceTestsPass(t *testing.T) {
 	t.Parallel()
 	if _, err := os.Stat(".gitea"); os.IsNotExist(err) {

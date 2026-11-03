@@ -21,7 +21,7 @@ type settings struct {
 }
 
 // typingCRDs returns the CRDs that type params, none unless the experimental
-// feature crd-typed-policies is on.
+// feature crd-typed-policies is on. They type object and oldObject too.
 func (s settings) typingCRDs() *CRDs {
 	if !s.on.Has(feature.CRDTypedPolicies) {
 		return nil
@@ -65,7 +65,8 @@ func WithFeatures(f feature.Set) Option {
 	return func(s *settings) { s.on = f }
 }
 
-// WithCRDs makes Check type params from the CustomResourceDefinitions in c,
+// WithCRDs makes Check type object and oldObject from the CRD of a custom
+// resource a ValidatingAdmissionPolicy matches, and params from the CustomResourceDefinitions in c,
 // when a ValidatingAdmissionPolicy's spec.paramKind names a custom resource
 // they define and the experimental feature crd-typed-policies is on (see
 // WithFeatures). Without it, or when the kind is in no CRD of c, params of such a

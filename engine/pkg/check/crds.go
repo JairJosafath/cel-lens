@@ -9,6 +9,9 @@ import (
 	"sort"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/kube-openapi/pkg/validation/spec"
+
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
@@ -41,8 +44,8 @@ type skippedDir struct {
 
 // crdKind is one version of one custom resource kind.
 type crdKind struct {
-	apiVersion, kind string
-	schema           map[string]any
+	apiVersion, kind, resource string
+	schema                     map[string]any
 }
 
 // Set records the CustomResourceDefinitions in data, the text of file, in place
@@ -233,8 +236,39 @@ func (c *CRDs) ForgetUnder(dir string, keep func(file string) bool) bool {
 // server publishes. It is false for a kind no recorded
 // CustomResourceDefinition defines.
 func (c *CRDs) Schema(apiVersion, kind string) (map[string]any, bool) {
-	if c == nil {
+	k, ok := c.find(func(k crdKind) bool { return k.apiVersion == apiVersion && k.kind == kind })
+	if !ok {
 		return nil, false
+	}
+	return withTypeMeta(k.schema), true
+}
+
+// Resolve is matchkind.Resolve for rules that may also name the custom
+// resources of the CRDs in c, by their plural name. Their kinds have the schema
+// Schema returns. A nil c resolves built-in kinds only.
+func (c *CRDs) Resolve(rules []matchkind.Rule) ([]matchkind.Kind, bool) {
+	return matchkind.ResolveWith(rules, func(gvr schema.GroupVersionResource) (matchkind.Kind, bool) {
+		k, ok := c.find(func(k crdKind) bool { return k.resource == gvr.Resource && k.apiVersion == gvr.GroupVersion().String() })
+		if !ok {
+			return matchkind.Kind{}, false
+		}
+		data, err := json.Marshal(withTypeMeta(k.schema))
+		if err != nil {
+			return matchkind.Kind{}, false
+		}
+		s := new(spec.Schema)
+		if json.Unmarshal(data, s) != nil {
+			return matchkind.Kind{}, false
+		}
+		return matchkind.Kind{GVK: gvr.GroupVersion().WithKind(k.kind), Schema: s}, true
+	})
+}
+
+// find returns the first kind for which match is true, in the order of the file
+// names.
+func (c *CRDs) find(match func(crdKind) bool) (crdKind, bool) {
+	if c == nil {
+		return crdKind{}, false
 	}
 	files := make([]string, 0, len(c.files))
 	for f := range c.files {
@@ -243,12 +277,12 @@ func (c *CRDs) Schema(apiVersion, kind string) (map[string]any, bool) {
 	slices.Sort(files)
 	for _, f := range files {
 		for _, k := range c.files[f] {
-			if k.apiVersion == apiVersion && k.kind == kind {
-				return withTypeMeta(k.schema), true
+			if match(k) {
+				return k, true
 			}
 		}
 	}
-	return nil, false
+	return crdKind{}, false
 }
 
 // crdKinds returns the kinds, one per version with a schema, that the
@@ -257,11 +291,12 @@ func crdKinds(root map[string]any) []crdKind {
 	if root["apiVersion"] != "apiextensions.k8s.io/v1" || root["kind"] != "CustomResourceDefinition" {
 		return nil
 	}
-	spec, _ := root["spec"].(map[string]any)
-	names, _ := spec["names"].(map[string]any)
-	group, _ := spec["group"].(string)
+	crdSpec, _ := root["spec"].(map[string]any)
+	names, _ := crdSpec["names"].(map[string]any)
+	group, _ := crdSpec["group"].(string)
 	kind, _ := names["kind"].(string)
-	versions, _ := spec["versions"].([]any)
+	resource, _ := names["plural"].(string)
+	versions, _ := crdSpec["versions"].([]any)
 	if kind == "" {
 		return nil
 	}
@@ -278,7 +313,7 @@ func crdKinds(root map[string]any) []crdKind {
 		if group != "" {
 			apiVersion = group + "/" + name
 		}
-		out = append(out, crdKind{apiVersion: apiVersion, kind: kind, schema: open})
+		out = append(out, crdKind{apiVersion: apiVersion, kind: kind, resource: resource, schema: open})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].apiVersion < out[j].apiVersion })
 	return out

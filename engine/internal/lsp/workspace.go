@@ -98,6 +98,8 @@ func (p initializeParams) folders() []string {
 // scan is a workspace scan running in its own goroutine.
 type scan struct {
 	cancel context.CancelFunc
+	// folders are the folders the scan reads.
+	folders []string
 	// done delivers the CRDs found, once, when the goroutine ends.
 	done chan *check.CRDs
 	// notes are what the scan has to tell the user; set before done delivers.
@@ -111,15 +113,19 @@ func (ss *session) startScan(ctx context.Context) {
 	if ss.scan != nil {
 		return
 	}
+	ss.runScan(ctx, slices.Clone(ss.folders))
+}
+
+// runScan starts the scan of folders in a goroutine; no scan may be running.
+func (ss *session) runScan(ctx context.Context, folders []string) {
 	run := ss.scanFunc()
 	ctx, cancel := context.WithCancel(ctx)
-	sc := &scan{cancel: cancel, done: make(chan *check.CRDs, 1)}
+	sc := &scan{cancel: cancel, folders: folders, done: make(chan *check.CRDs, 1)}
 	ss.scan = sc
 	ss.crds.Track()
 	for uri := range ss.docs {
 		ss.crds.Keep(crdKey(uri))
 	}
-	folders := slices.Clone(ss.folders)
 	go func() {
 		var found check.CRDs
 		sc.notes = run(ctx, folders, &found)
@@ -142,28 +148,34 @@ func (ss *session) scanFunc() func(ctx context.Context, folders []string, dst *c
 	}
 }
 
-// scanCreated reads the CRDs of the YAML files below the folder at path, which
-// was created or renamed in, with the limits of the workspace scan. Open
-// documents keep their text. It reports whether the CRDs changed, and tells the
-// user what the scan has to say. A workspace scan in progress is restarted
-// after it, so its result does not mix with this one.
-func (ss *session) scanCreated(ctx context.Context, path string) (bool, error) {
-	restart := ss.scan != nil
+// scanFolders restarts the scan so that it also reads the folders, which were
+// created or renamed in. A scan in progress is stopped once and its folders
+// are read again with these, so its result does not mix with this one; a folder
+// below another of the list is read with that one. The message loop receives
+// the result like that of the workspace scan.
+func (ss *session) scanFolders(ctx context.Context, folders []string) {
+	if ss.scan != nil {
+		folders = append(slices.Clone(ss.scan.folders), folders...)
+	}
+	folders = outermost(folders)
 	ss.stopScan()
-	var found check.CRDs
-	notes := ss.scanFunc()(ctx, []string{path}, &found)
-	ss.crds.Track()
-	for uri := range ss.docs {
-		ss.crds.Keep(crdKey(uri))
+	ss.runScan(ctx, folders)
+}
+
+// outermost returns the folders without those below another of them and
+// without duplicates, in their order.
+func outermost(folders []string) []string {
+	var out []string
+	for _, f := range folders {
+		below := slices.ContainsFunc(folders, func(o string) bool {
+			rel, err := filepath.Rel(o, f)
+			return o != f && err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		})
+		if !below && !slices.Contains(out, f) {
+			out = append(out, f)
+		}
 	}
-	changed := ss.crds.Fill(&found)
-	if restart {
-		ss.startScan(ctx)
-	}
-	if err := ss.warn(notes); err != nil {
-		return changed, err
-	}
-	return changed, ctx.Err()
+	return out
 }
 
 // stopScan cancels the scan in progress and waits for it to end.
@@ -339,7 +351,7 @@ func (ss *session) registerWatchers() error {
 }
 
 // didChangeWatchedFiles reads the changed files again, or forgets the deleted
-// ones, reads the YAML files below a created folder, and checks the open documents again when the CRDs changed. A file that
+// ones, starts a background scan of the YAML files below the created folders, and checks the open documents again when the CRDs changed. A file that
 // is open keeps the text of the editor. While crd-typed-policies is off it reads
 // nothing and publishes nothing: the CRDs are not used, and turning the feature
 // on scans the whole workspace, which finds what changed meanwhile. It still
@@ -357,6 +369,7 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		return nil
 	}
 	changed := false
+	var created []string
 	for _, c := range p.Changes {
 		if _, open := ss.docs[c.URI]; open {
 			continue
@@ -375,13 +388,12 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		case on && c.Type == fileCreated:
 			// A client sends one event for a created folder, not one per file.
 			if path, ok := diskPath(c.URI); ok && !skippedFolder(filepath.Base(path)) && isDir(path) {
-				scanned, err := ss.scanCreated(ctx, path)
-				if err != nil {
-					return err
-				}
-				changed = scanned || changed
+				created = append(created, path)
 			}
 		}
+	}
+	if len(created) > 0 {
+		ss.scanFolders(ctx, created)
 	}
 	if !changed || !on {
 		return nil

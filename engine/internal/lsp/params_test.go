@@ -510,6 +510,9 @@ func TestRenamedFolderKeepsItsCRDs(t *testing.T) {
 		{"uri": "file://" + filepath.ToSlash(old), "type": 3},
 		{"uri": "file://" + filepath.ToSlash(renamed), "type": 1},
 	}})
+	// The deletion is checked at once; the background scan of the renamed
+	// folder finds the CRD again and checks the document a second time.
+	c.nextDiagnostics()
 	if diags := c.nextDiagnostics(); len(diags) != 1 {
 		t.Errorf("diagnostics after the folder was renamed = %+v, want the warning", diags)
 	}

@@ -9,6 +9,23 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-03
+
+### Added
+
+- With `crd-typed-policies` on, `object` and `oldObject` of a ValidatingAdmissionPolicy that matches a custom resource are typed from its CustomResourceDefinition in the workspace: a wrong field gets the API server's warning, and hover names the kind instead of `dyn`.
+
+### Changed
+
+- `make check` guards the `CEL_LENS_BIN` fallback build with a test.
+- A test derives the Kubernetes version range and default in `docs/engine.md` from `pkg/kubeversion`.
+- The doc comment of `TestPublicSourceTestsPass` says what `-short` does.
+- `compileValidations` no longer passes its unused `field` parameter to the `fail` callback.
+
+### Fixed
+
+- A created folder is scanned for CRDs in the background, and nested folder events are coalesced into one scan.
+
 ## [0.24.2] - 2026-11-03
 
 ### Changed
@@ -501,8 +518,10 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.2...HEAD
-[0.24.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...core-v0.24.2
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.0...HEAD
+[0.25.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.2...core-v0.25.0
+[0.24.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.1...core-v0.24.2
+[0.24.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.0...core-v0.24.1
 [0.24.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.23.0...core-v0.24.0
 [0.23.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.22.0...core-v0.23.0
 [0.22.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.21.1...core-v0.22.0

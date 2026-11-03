@@ -118,7 +118,7 @@ but not checked against the matched kinds, as the API server does not.
 ## Typed `params`
 
 Typing `params` from a CustomResourceDefinition is the experimental feature
-`crd-typed-policies` (see the README): off, `params` of a custom resource is `dyn`.
+`crd-typed-policies` (see the README): off, `params` of a custom resource is `dyn`, and so are `object` and `oldObject` of a policy that matches one.
 A built-in kind needs no feature.
 
 `params` gets its type from `spec.paramKind` of the policy, as the API server's

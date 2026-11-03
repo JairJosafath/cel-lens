@@ -47,7 +47,12 @@ func (k Kind) String() string {
 // Like the API server, it skips a rule that lacks groups, versions or
 // resources, and it skips subresources such as deployments/scale: only the
 // kind of the resource itself is typed.
-func Resolve(rules []Rule) ([]Kind, bool) {
+func Resolve(rules []Rule) ([]Kind, bool) { return ResolveWith(rules, nil) }
+
+// ResolveWith is Resolve with custom, when it is not nil, asked for each
+// resource that is no built-in one; it returns the kind served as that resource
+// and reports false for one it does not know either.
+func ResolveWith(rules []Rule, custom func(schema.GroupVersionResource) (Kind, bool)) ([]Kind, bool) {
 	var kinds []Kind
 	var found []schema.GroupVersionKind
 	for _, r := range rules {
@@ -66,19 +71,29 @@ func Resolve(rules []Rule) ([]Kind, bool) {
 			}
 			for _, g := range r.Groups {
 				for _, v := range r.Versions {
-					gvk, t, ok := kindOf(schema.GroupVersionResource{Group: g, Version: v, Resource: res})
-					if !ok {
+					gvr := schema.GroupVersionResource{Group: g, Version: v, Resource: res}
+					var kind Kind
+					if gvk, t, ok := kindOf(gvr); ok {
+						kind = Kind{GVK: gvk, Schema: schemaOf(t)}
+					} else if kind, ok = lookupCustom(custom, gvr); !ok {
 						return nil, false
 					}
-					if !slices.Contains(found, gvk) {
-						found = append(found, gvk)
-						kinds = append(kinds, Kind{GVK: gvk, Schema: schemaOf(t)})
+					if !slices.Contains(found, kind.GVK) {
+						found = append(found, kind.GVK)
+						kinds = append(kinds, kind)
 					}
 				}
 			}
 		}
 	}
 	return kinds, len(kinds) > 0
+}
+
+func lookupCustom(custom func(schema.GroupVersionResource) (Kind, bool), gvr schema.GroupVersionResource) (Kind, bool) {
+	if custom == nil {
+		return Kind{}, false
+	}
+	return custom(gvr)
 }
 
 func wild(s string) bool { return strings.Contains(s, "*") }

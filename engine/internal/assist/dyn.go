@@ -1,6 +1,9 @@
 package assist
 
-import "github.com/JairJosafath/cel-lens/engine/internal/matchkind"
+import (
+	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+)
 
 // dynReason is why a value is dyn: the type of the value cannot be known from
 // its document. Every fallback to dyn records one of these, and hover says it.
@@ -104,7 +107,7 @@ func (a *Assistant) withDynReason(md string, s schema) string {
 
 // whyNotMatched says why the match rules of rules do not name one known set of
 // kinds, in the order matchkind.Resolve checks them.
-func whyNotMatched(rules []matchkind.Rule) dynReason {
+func whyNotMatched(rules []matchkind.Rule, crds *check.CRDs) dynReason {
 	named := false
 	for _, r := range rules {
 		if len(r.Groups) == 0 || len(r.Versions) == 0 || len(r.Resources) == 0 {
@@ -114,7 +117,7 @@ func whyNotMatched(rules []matchkind.Rule) dynReason {
 		if hasWildcard(r.Groups) || hasWildcard(r.Versions) || hasWildcard(r.Resources) {
 			return reasonWildcard
 		}
-		if _, ok := matchkind.Resolve([]matchkind.Rule{r}); !ok {
+		if _, ok := crds.Resolve([]matchkind.Rule{r}); !ok {
 			return reasonUnknownKind
 		}
 	}
