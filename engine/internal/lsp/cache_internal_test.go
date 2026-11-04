@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -844,8 +845,7 @@ func TestCreatedFolderScansInBackground(t *testing.T) {
 	ss.conn = jsonrpc.NewConn(serverIn, serverOut)
 	ss.scanner = func(ctx context.Context, folders []string, dst *check.CRDs) []message {
 		if !slices.Contains(folders, sub) {
-			<-ctx.Done() // the workspace scan, which the created folder restarts
-			return nil
+			return nil // the workspace scan
 		}
 		close(started)
 		select {
@@ -885,7 +885,7 @@ func TestCreatedFolderScansInBackground(t *testing.T) {
 
 // TestCreatedNestedFoldersScanOnce checks that a batch with a folder and its
 // subfolders is read in one scan of the outer folder, and that a workspace
-// scan running meanwhile is restarted once, not once per folder.
+// scan running meanwhile is not restarted: the folders are scanned once, after it.
 func TestCreatedNestedFoldersScanOnce(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -920,7 +920,10 @@ func TestCreatedNestedFoldersScanOnce(t *testing.T) {
 			<-ss.scan.done
 			want := [][]string{{a}}
 			if running {
-				want = [][]string{ss.folders, {ss.folders[0], a}}
+				ss.scan = nil
+				ss.scanQueued(context.Background())
+				<-ss.scan.done
+				want = [][]string{ss.folders, {a}}
 			}
 			if !slices.EqualFunc(scans, want, slices.Equal) {
 				t.Errorf("scans after the batch = %q, want %q", scans, want)
@@ -930,14 +933,25 @@ func TestCreatedNestedFoldersScanOnce(t *testing.T) {
 	}
 }
 
+// failDirFS is a file system in which reading the folder fail fails, whoever
+// runs the test.
+type failDirFS struct {
+	fs.FS
+	fail string
+}
+
+func (f failDirFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if name == f.fail {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	}
+	return fs.ReadDir(f.FS, name)
+}
+
 // TestRescanWithUnreadableSubfolder checks that a subfolder that cannot be
 // read below a readable workspace folder keeps the CRDs known below it, does
 // not stop the rescan from forgetting a CRD deleted beside it, and is named,
 // not the folder, in the scan's note.
 func TestRescanWithUnreadableSubfolder(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads any folder")
-	}
 	root := t.TempDir()
 	locked := filepath.Join(root, "locked")
 	if err := os.Mkdir(locked, 0o700); err != nil {
@@ -954,6 +968,7 @@ func TestRescanWithUnreadableSubfolder(t *testing.T) {
 	ss := newSession(t)
 	ss.features = feature.Of(feature.CRDTypedPolicies)
 	ss.folders = []string{root}
+	ss.fsys = func(dir string) fs.FS { return failDirFS{FS: os.DirFS(dir), fail: "locked"} }
 	ctx := context.Background()
 	rescan := func() {
 		ss.startScan(ctx)
@@ -969,10 +984,6 @@ func TestRescanWithUnreadableSubfolder(t *testing.T) {
 	}
 	// The first scan reads hidden.yaml; then the folder is locked.
 	ss.crds.Set(ctx, crdKey(pathURI(hidden)), []byte(scanCRD))
-	if err := os.Chmod(locked, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // a folder needs its execute bit to be removed
 	rescan()
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
@@ -1014,4 +1025,233 @@ func TestCreatedFolderInNestedWorkspaceFolderIsScanned(t *testing.T) {
 	if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
 		t.Error("Schema(g/v1, K) after creating a folder in a nested workspace folder = not found, want found")
 	}
+}
+
+// TestWatchedBatchWithFolderPublishesOnce checks over the wire that a batch
+// that deletes a CRD file and creates a folder checks the open policy once,
+// after the folder's scan ends, not once at the deletion: a rename keeps the
+// warning the CRD gives, and a deletion that the scan does not undo removes it.
+func TestWatchedBatchWithFolderPublishesOnce(t *testing.T) {
+	t.Parallel()
+	const crd = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata: {name: widgets.example.com}\nspec:\n  group: example.com\n  names: {kind: Widget}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                maxReplicas: {type: integer}\n"
+	const policy = "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nmetadata: {name: demo}\nspec:\n  paramKind: {apiVersion: example.com/v1, kind: Widget}\n  matchConstraints:\n    resourceRules:\n      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}\n  validations:\n    - expression: \"object.spec.replicas <= params.spec.maxReplica\"\n"
+	for _, tc := range []struct {
+		name        string
+		scanFinds   bool
+		wantWarning bool
+	}{
+		{"rename finds the CRD again", true, true},
+		{"delete finds nothing", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			oldFile := filepath.Join(dir, "old", "crd.yaml")
+			renamed := filepath.Join(dir, "new")
+			if err := os.Mkdir(renamed, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			policyURI := pathURI(filepath.Join(dir, "policy.yaml"))
+			release := make(chan struct{})
+			serverIn, clientOut := io.Pipe()
+			clientIn, serverOut := io.Pipe()
+			ss := newSession(t)
+			ss.conn = jsonrpc.NewConn(serverIn, serverOut)
+			ss.crds.Set(context.Background(), filepath.ToSlash(oldFile), []byte(crd))
+			ss.scanner = func(ctx context.Context, folders []string, dst *check.CRDs) []message {
+				if !slices.Contains(folders, renamed) {
+					return nil
+				}
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil
+				}
+				if tc.scanFinds {
+					dst.Set(ctx, filepath.ToSlash(filepath.Join(renamed, "crd.yaml")), []byte(crd))
+				}
+				return nil
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { _ = ss.serve(ctx, serverIn) }()
+			t.Cleanup(func() { _ = clientOut.Close(); _ = serverOut.Close() })
+
+			c := jsonrpc.NewConn(clientIn, clientOut)
+			if err := c.Request("1", "initialize", map[string]any{
+				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			readMessage(t, c)
+			if err := c.Notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": policyURI, "version": 1, "text": policy}}); err != nil {
+				t.Fatal(err)
+			}
+			readUntil(t, c, func(m jsonrpc.Message) bool {
+				if m.Method != "textDocument/publishDiagnostics" {
+					return false
+				}
+				if !strings.Contains(string(m.Params), "maxReplica") {
+					t.Fatalf("diagnostics before the batch = %s, want the CRD's warning", m.Params)
+				}
+				return true
+			})
+			if err := c.Notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{
+				{"uri": pathURI(oldFile), "type": fileDeleted},
+				{"uri": pathURI(renamed), "type": fileCreated},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			hover := func(id string) {
+				_ = c.Request(id, "textDocument/hover", map[string]any{"textDocument": map[string]any{"uri": policyURI}, "position": map[string]any{}})
+			}
+			// The reply to a request sent after the batch says it is handled.
+			go hover("2")
+			for m := readMessage(t, c); string(m.ID) != `"2"`; m = readMessage(t, c) {
+				if m.Method == "textDocument/publishDiagnostics" {
+					t.Fatalf("diagnostics while the scan runs = %s, want none", m.Params)
+				}
+			}
+			close(release)
+			var got jsonrpc.Message
+			readUntil(t, c, func(m jsonrpc.Message) bool { got = m; return m.Method == "textDocument/publishDiagnostics" })
+			if has := strings.Contains(string(got.Params), "maxReplica"); has != tc.wantWarning {
+				t.Errorf("diagnostics after the scan = %s, warning present = %t, want %t", got.Params, has, tc.wantWarning)
+			}
+			go hover("3")
+			for m := readMessage(t, c); string(m.ID) != `"3"`; m = readMessage(t, c) {
+				if m.Method == "textDocument/publishDiagnostics" {
+					t.Fatalf("second diagnostics after the scan = %s, want one publish", m.Params)
+				}
+			}
+		})
+	}
+}
+
+// TestCreatedFoldersDuringScanKeepItsProgress checks that created-folder
+// notifications while a scan runs neither stop it nor make it read again, and
+// that the folders wait and are read together once the scan has ended.
+func TestCreatedFoldersDuringScanKeepItsProgress(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	for _, d := range []string{first, second} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ss := newSession(t)
+	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.folders = []string{filepath.Join(root, "ws")}
+	release := make(chan struct{})
+	var scans [][]string
+	ss.scanner = func(ctx context.Context, folders []string, _ *check.CRDs) []message {
+		scans = append(scans, folders) // read after the scan ends
+		if len(scans) == 1 {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				t.Error("the created folders stopped the running scan")
+			}
+		}
+		return nil
+	}
+	ctx := context.Background()
+	ss.startScan(ctx)
+	for _, d := range []string{first, second, first} {
+		params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": pathURI(d), "type": fileCreated}}})
+		if err := ss.didChangeWatchedFiles(ctx, params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := ss.scan
+	close(release)
+	<-running.done
+	ss.scan = nil
+	ss.scanQueued(ctx)
+	<-ss.scan.done
+	ss.scan = nil
+	want := [][]string{ss.folders, {first, second}}
+	if !slices.EqualFunc(scans, want, slices.Equal) {
+		t.Errorf("scans = %q, want %q", scans, want)
+	}
+}
+
+// TestCreatedFoldersQueuedDuringScansAreScannedInTurn checks, through the
+// message loop, that a folder created during the workspace scan is scanned
+// when it ends, that its CRD is known while a folder created during that scan
+// still waits, and that the waiting folder is scanned in turn.
+func TestCreatedFoldersQueuedDuringScansAreScannedInTurn(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	for _, d := range []string{first, second} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type stage struct{ started, release chan struct{} }
+	newStage := func() stage { return stage{make(chan struct{}), make(chan struct{})} }
+	stages := map[string]stage{"workspace": newStage(), first: newStage(), second: newStage()}
+	serverIn, clientOut := io.Pipe()
+	clientIn, serverOut := io.Pipe()
+	ss := newSession(t)
+	ss.conn = jsonrpc.NewConn(serverIn, serverOut)
+	ss.scanner = func(ctx context.Context, folders []string, dst *check.CRDs) []message {
+		key := "workspace"
+		if slices.Contains(folders, first) {
+			key = first
+		} else if slices.Contains(folders, second) {
+			key = second
+		}
+		s := stages[key]
+		close(s.started)
+		select {
+		case <-s.release:
+			if key == first {
+				dst.Set(ctx, "file:///ws/crd.yaml", []byte(scanCRD))
+			}
+		case <-ctx.Done():
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ss.serve(ctx, serverIn) }()
+	t.Cleanup(func() { _ = clientOut.Close(); _ = serverOut.Close() })
+
+	c := jsonrpc.NewConn(clientIn, clientOut)
+	if err := c.Request("1", "initialize", map[string]any{
+		"workspaceFolders":      []map[string]any{{"uri": pathURI(filepath.Join(root, "ws"))}},
+		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readMessage(t, c)
+	if err := c.Notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": cacheURI, "version": 1, "text": widget(t)}}); err != nil {
+		t.Fatal(err)
+	}
+	created := func(dir, id string) {
+		t.Helper()
+		if err := c.Notify("workspace/didChangeWatchedFiles", map[string]any{"changes": []map[string]any{{"uri": pathURI(dir), "type": fileCreated}}}); err != nil {
+			t.Fatal(err)
+		}
+		// The reply to a request sent after the notification says it is handled.
+		go func() {
+			_ = c.Request(id, "textDocument/hover", map[string]any{"textDocument": map[string]any{"uri": cacheURI}, "position": map[string]any{}})
+		}()
+		readUntil(t, c, func(m jsonrpc.Message) bool { return string(m.ID) == `"`+id+`"` })
+	}
+	<-stages["workspace"].started
+	created(first, "2")
+	close(stages["workspace"].release)
+	<-stages[first].started
+	created(second, "3")
+	close(stages[first].release)
+	readUntil(t, c, func(m jsonrpc.Message) bool {
+		_, known := ss.crds.Schema("g/v1", "K")
+		return m.Method == "textDocument/publishDiagnostics" && known
+	})
+	<-stages[second].started
+	close(stages[second].release)
 }

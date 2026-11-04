@@ -44,7 +44,7 @@ func (r *reporter) kyvernoPolicy(ctx context.Context, node *yaml.Node, exprs map
 	for i, rule := range p.Spec.MatchConstraints.ResourceRules {
 		rules[i] = matchkind.Rule{Groups: rule.APIGroups, Versions: rule.APIVersions, Resources: rule.Resources}
 	}
-	kinds, ok := matchkind.Resolve(rules)
+	kinds, ok := r.crds.Resolve(rules)
 	if !ok {
 		return nil
 	}

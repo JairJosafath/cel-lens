@@ -27,7 +27,7 @@ Typing `params` from a CRD at all is the experimental feature `crd-typed-policie
 is `dyn` and hover says the feature is experimental and off. The gap above stays
 while the feature is experimental. `params` and, for a ValidatingAdmissionPolicy that
 matches a custom resource by its plural name, `object` and `oldObject` are typed from
-a CRD; with the feature off, or no CRD for the resource, they are `dyn` (`unknown-kind`). The
+a CRD; with no CRD for the resource they are `dyn` (`unknown-kind`), and with the feature off they are `dyn` and hover says the feature is off (`crd-typed-policies-off`), as for `params`, when a CRD would have typed them. The
 workspace scan still runs inside `initialize` when the feature is off; only the
 use of the CRDs is switched off. Hover saying why a value is `dyn` is the
 experimental feature `fitting-completion`.

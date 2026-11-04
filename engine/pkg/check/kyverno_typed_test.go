@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 // kyvernoPolicy returns a Kyverno ValidatingPolicy that matches rule, a flow
@@ -74,6 +75,42 @@ func TestKyvernoTypedWarnings(t *testing.T) {
 			for i := range got {
 				if got[i] != tt.want[i] {
 					t.Errorf("Check(%s)[%d] = %v, want %v", tt.name, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestKyvernoTypedFromCRD checks that object of a Kyverno ValidatingPolicy that
+// matches a workspace custom resource is typed from its CRD, only with
+// crd-typed-policies on.
+func TestKyvernoTypedFromCRD(t *testing.T) {
+	t.Parallel()
+	crds := loadCRDs(t, map[string]string{"widget.yaml": widgetCRD})
+	widgets := "{apiGroups: [example.com], apiVersions: [v1], resources: [widgets]}"
+	doc := kyvernoPolicy(widgets, "object.spec.nope == 1")
+	tests := []struct {
+		name string
+		opts []check.Option
+		want int
+	}{
+		{"typed", []check.Option{check.WithCRDs(crds), allOn()}, 1},
+		{"crd-typed-policies off", []check.Option{check.WithCRDs(crds), check.WithFeatures(feature.Of(feature.Kyverno))}, 0},
+		{"no CRDs", []check.Option{allOn()}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags, err := check.Check(context.Background(), "policy.yaml", []byte(doc), tt.opts...)
+			if err != nil {
+				t.Fatalf("Check(%s) error: %v", tt.name, err)
+			}
+			if len(diags) != tt.want {
+				t.Fatalf("Check(%s) = %v, want %d diagnostics", tt.name, diags, tt.want)
+			}
+			if tt.want == 1 {
+				if got, want := diags[0].Message, "example.com/v1 Widget: undefined field 'nope'"; got != want || diags[0].Severity != check.SeverityWarning {
+					t.Errorf("Check(%s) = %q (%s), want warning %q", tt.name, got, diags[0].Severity, want)
 				}
 			}
 		})

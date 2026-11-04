@@ -89,7 +89,7 @@ func (a *Assistant) fitting() bool { return a.features.Has(feature.FittingComple
 // scope returns the variables the expression e of doc can use.
 func (a *Assistant) scope(doc *Document, e extract.Expression) []variable {
 	if a.vars != nil {
-		return a.kyvernoScope(doc.roots[e.Document], e)
+		return a.kyvernoScope(doc, doc.roots[e.Document], e)
 	}
 	return scope(doc, e, a.version, a.features)
 }

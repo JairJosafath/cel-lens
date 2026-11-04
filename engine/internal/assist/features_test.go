@@ -137,3 +137,22 @@ func TestFittingCompletionOff(t *testing.T) {
 		}
 	})
 }
+
+func TestObjectCRDTypedPoliciesOff(t *testing.T) {
+	t.Parallel()
+	var crds check.CRDs
+	crds.Set(context.Background(), "crd.yaml", []byte(paramsWidgetCRD))
+	doc := "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nspec:\n" +
+		"  matchConstraints:\n    resourceRules:\n      - {apiGroups: [example.com], apiVersions: [v1], resources: [widgets]}\n" +
+		"  validations:\n    - expression: object.spec.maxReplicas > 1\n"
+	parsed := assist.Parse(context.Background(), "policy.yaml", []byte(doc), assist.WithCRDs(&crds))
+	h, ok := with(t, feature.FittingCompletion).Hover(parsed, posIn(t, doc, "object.spec", 2))
+	if !ok {
+		t.Fatal("Hover(object) = none, want a hover")
+	}
+	for _, want := range []string{"object: dyn", "experimental", "off", "crd-typed-policies"} {
+		if !strings.Contains(h.Markdown, want) {
+			t.Errorf("Hover(object) with the feature off = %q, want it to contain %q", h.Markdown, want)
+		}
+	}
+}

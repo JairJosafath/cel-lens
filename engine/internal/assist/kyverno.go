@@ -8,6 +8,7 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/kyverno"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 // newKyverno builds the Assistant of a Kyverno ValidatingPolicy from Kyverno's
@@ -83,9 +84,9 @@ func kyvernoVariable(name, typ string) variable {
 // expression e of the ValidatingPolicy root: object and oldObject typed from the
 // kinds the policy matches, and variables only for the expressions that may use
 // them, as for a ValidatingAdmissionPolicy.
-func (a *Assistant) kyvernoScope(root map[string]any, e extract.Expression) []variable {
+func (a *Assistant) kyvernoScope(doc *Document, root map[string]any, e extract.Expression) []variable {
 	spec, _ := root["spec"].(map[string]any)
-	kinds := matchedKinds(spec, nil)
+	kinds := matchedKinds(spec, doc.crds, a.features.Has(feature.CRDTypedPolicies))
 	var vars []variable
 	for _, v := range a.vars {
 		switch v.name {

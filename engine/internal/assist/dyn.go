@@ -53,7 +53,7 @@ func (r dynReason) text() string {
 	case reasonParamKind:
 		return "spec.paramKind is no built-in kind and no CustomResourceDefinition among the workspace files defines it"
 	case reasonCRDsOff:
-		return "typing params from a CustomResourceDefinition is the experimental feature `crd-typed-policies`, which is off"
+		return "typing from a CustomResourceDefinition is the experimental feature `crd-typed-policies`, which is off"
 	case reasonOpenSchema:
 		return "the schema leaves this value open with `x-kubernetes-preserve-unknown-fields`"
 	case reasonNoType:

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"slices"
 	"unicode/utf16"
 
@@ -62,10 +63,18 @@ type session struct {
 	// scanner reads the CRDs of the folders into dst and returns what to tell the
 	// user; nil means scanWorkspace.
 	scanner func(ctx context.Context, folders []string, dst *check.CRDs) []message
+	// fsys gives the file system of a workspace folder for the scan; nil means
+	// os.DirFS.
+	fsys func(dir string) fs.FS
 	// fileCap is the most files a scan reads; 0 means maxWorkspaceFiles.
 	fileCap int
 	// scan is the workspace scan in progress, nil when there is none.
-	scan     *scan
+	scan *scan
+	// scanChanged is set when the batch that started the scan changed the CRDs;
+	// the end of the scan then checks the open documents.
+	scanChanged bool
+	// queued are the created folders to scan once the scan in progress ends.
+	queued   []string
 	init     bool
 	shutdown bool
 }
@@ -171,6 +180,7 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 			if err := ss.finishScan(ctx, found); err != nil {
 				return err
 			}
+			ss.scanQueued(ctx)
 			continue
 		case r = <-msgs:
 		}

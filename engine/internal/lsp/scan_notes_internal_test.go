@@ -38,7 +38,7 @@ func TestScanWorkspaceNotes(t *testing.T) {
 				}
 			}
 			var dst check.CRDs
-			notes := scanWorkspace(context.Background(), []string{dir}, tc.limit, &dst)
+			notes := scanWorkspace(context.Background(), os.DirFS, []string{dir}, tc.limit, &dst)
 			if len(tc.want) == 0 {
 				if len(notes) != 0 {
 					t.Fatalf("scanWorkspace notes = %v, want none", notes)
@@ -116,7 +116,7 @@ func TestScanNotesReachClient(t *testing.T) {
 			ss.scanner = func(ctx context.Context, folders []string, dst *check.CRDs) []message {
 				<-release
 				dst.Set(ctx, "/ws/crd.yaml", []byte(scanCRD)) // a found CRD makes the session publish again
-				return scanWorkspace(ctx, folders, tc.cap, dst)
+				return scanWorkspace(ctx, os.DirFS, folders, tc.cap, dst)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -189,7 +189,7 @@ func TestScanWorkspaceOversizedSummary(t *testing.T) {
 	}
 	for range 2 {
 		var dst check.CRDs
-		notes := scanWorkspace(context.Background(), []string{dir}, 100, &dst)
+		notes := scanWorkspace(context.Background(), os.DirFS, []string{dir}, 100, &dst)
 		if len(notes) != 1 {
 			t.Fatalf("scanWorkspace notes = %d, want 1 for 50 files", len(notes))
 		}

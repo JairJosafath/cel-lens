@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -220,5 +222,29 @@ spec:
 	}
 	if labels := labelsAt(t, a, doc, "vari\"", len("vari")); slices.Contains(labels, "variables") {
 		t.Error("Complete(in a match condition) offers variables")
+	}
+}
+
+func TestKyvernoHoverCRDObject(t *testing.T) {
+	t.Parallel()
+	var crds check.CRDs
+	crds.Set(context.Background(), "crd.yaml", []byte(paramsWidgetCRD))
+	doc := vpol("{apiGroups: [example.com], apiVersions: [v1], resources: [widgets]}", "object.spec.maxReplicas > 1")
+	hover := func(opts ...assist.NewOption) string {
+		a, err := assist.New(kubeversion.Default(), opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := a.Hover(assist.Parse(context.Background(), "policy.yaml", []byte(doc), assist.WithCRDs(&crds)), posIn(t, doc, "object.spec", 2))
+		if !ok {
+			t.Fatal("Hover(object) = none")
+		}
+		return got.Markdown
+	}
+	if got := hover(allOn()); !strings.Contains(got, "example.com/v1 Widget") {
+		t.Errorf("Hover(object) = %q, want it to name example.com/v1 Widget", got)
+	}
+	if got := hover(assist.WithFeatures(feature.Of(feature.Kyverno))); strings.Contains(got, "Widget") {
+		t.Errorf("Hover(object) with crd-typed-policies off = %q, want no Widget", got)
 	}
 }

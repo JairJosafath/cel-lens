@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,6 +224,36 @@ func TestBinaryVersion(t *testing.T) {
 	}
 }
 
+// fallbackEnv returns environ for the inner run of TestFallbackBuildLeavesNoDirectory:
+// binEnv removed, and the temporary directory set to tmp for every platform
+// (os.TempDir reads TMPDIR on Unix and TMP or TEMP on Windows). Names are
+// compared without case, as Windows does.
+func fallbackEnv(environ []string, tmp string) []string {
+	var env []string
+	for _, kv := range environ {
+		key, _, _ := strings.Cut(kv, "=")
+		switch {
+		case strings.EqualFold(key, binEnv), strings.EqualFold(key, "TMPDIR"),
+			strings.EqualFold(key, "TMP"), strings.EqualFold(key, "TEMP"):
+		default:
+			env = append(env, kv)
+		}
+	}
+	return append(env, "TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp)
+}
+
+// TestFallbackEnv checks that the inner run's environment replaces every
+// temporary-directory variable and drops binEnv.
+func TestFallbackEnv(t *testing.T) {
+	t.Parallel()
+	in := []string{"PATH=/bin", binEnv + "=/x/bin", "TMPDIR=/old", "TMP=/old", "TEMP=/old", "Temp=/old", "HOME=/h"}
+	got := fallbackEnv(in, "/new")
+	want := []string{"PATH=/bin", "HOME=/h", "TMPDIR=/new", "TMP=/new", "TEMP=/new"}
+	if !slices.Equal(got, want) {
+		t.Errorf("fallbackEnv(%q, /new) = %q, want %q", in, got, want)
+	}
+}
+
 // TestFallbackBuildLeavesNoDirectory runs TestBinaryVersion in an inner go test
 // with binEnv removed, so the test builds the program itself, and checks that
 // the run passes and TestMain leaves no cel-lens-core-test-* directory in the
@@ -238,12 +269,7 @@ func TestFallbackBuildLeavesNoDirectory(t *testing.T) {
 	}
 	tmp := t.TempDir()
 	cmd := exec.CommandContext(t.Context(), "go", "test", "-count=1", "-run", "^TestBinaryVersion$", ".")
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, binEnv+"=") && !strings.HasPrefix(kv, "TMPDIR=") {
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
-	cmd.Env = append(cmd.Env, "TMPDIR="+tmp)
+	cmd.Env = fallbackEnv(os.Environ(), tmp)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go test -run '^TestBinaryVersion$' . without %s: %v\n%s", binEnv, err, out)
 	}

@@ -114,10 +114,10 @@ func hasSegment(path, name string) bool {
 // expressions that may use them.
 func policyScope(root map[string]any, e extract.Expression, v kubeversion.Version, crds *check.CRDs, typeFromCRDs bool) []variable {
 	policySpec, _ := root["spec"].(map[string]any)
+	kinds := matchedKinds(policySpec, crds, typeFromCRDs)
 	if !typeFromCRDs {
 		crds = nil
 	}
-	kinds := matchedKinds(policySpec, crds)
 	object := variable{name: "object", desc: "The object being admitted; null on DELETE.", typeName: kinds.name, schema: kinds.schema}
 	oldObject := variable{name: "oldObject", desc: "The existing object; null on CREATE.", typeName: kinds.name, schema: kinds.schema}
 	vars := []variable{
@@ -358,12 +358,17 @@ type kindsSchema struct {
 // known: its schema is dyn for the reason why.
 func untyped(why dynReason) kindsSchema { return kindsSchema{schema: unknownType(why)} }
 
-// matchedKinds returns the kinds the policy spec matches, built-in or, when crds
-// is not nil, custom resources a CRD of crds defines, as the API
+// matchedKinds returns the kinds the policy spec matches, built-in or, when
+// typeFromCRDs, custom resources a CRD of crds defines, as the API
 // server's type checker finds them. Unless every matched kind is known, the
-// result has no name and a dyn schema that records why. With several kinds,
-// schema is their merge (see merge).
-func matchedKinds(policySpec map[string]any, crds *check.CRDs) kindsSchema {
+// result has no name and a dyn schema that records why: when typeFromCRDs is
+// false and a CRD of crds would have typed the kinds, that the feature is off.
+// With several kinds, schema is their merge (see merge).
+func matchedKinds(policySpec map[string]any, crds *check.CRDs, typeFromCRDs bool) kindsSchema {
+	all := crds
+	if !typeFromCRDs {
+		crds = nil
+	}
 	constraints, _ := policySpec["matchConstraints"].(map[string]any)
 	list, _ := constraints["resourceRules"].([]any)
 	var rules []matchkind.Rule
@@ -373,7 +378,11 @@ func matchedKinds(policySpec map[string]any, crds *check.CRDs) kindsSchema {
 	}
 	kinds, ok := crds.Resolve(rules)
 	if !ok {
-		return untyped(whyNotMatched(rules, crds))
+		why := whyNotMatched(rules, crds)
+		if _, typed := all.Resolve(rules); !typeFromCRDs && typed {
+			why = reasonCRDsOff
+		}
+		return untyped(why)
 	}
 	names := make([]string, len(kinds))
 	for i, k := range kinds {

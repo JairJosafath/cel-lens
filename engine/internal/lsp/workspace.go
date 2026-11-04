@@ -133,6 +133,15 @@ func (ss *session) runScan(ctx context.Context, folders []string) {
 	}()
 }
 
+// dirFS is the function that gives the file system of a workspace folder: the
+// injected one, or os.DirFS.
+func (ss *session) dirFS() func(dir string) fs.FS {
+	if ss.fsys != nil {
+		return ss.fsys
+	}
+	return os.DirFS
+}
+
 // scanFunc is the function that scans folders: the injected scanner, or
 // scanWorkspace with the file cap.
 func (ss *session) scanFunc() func(ctx context.Context, folders []string, dst *check.CRDs) []message {
@@ -144,22 +153,32 @@ func (ss *session) scanFunc() func(ctx context.Context, folders []string, dst *c
 		limit = maxWorkspaceFiles
 	}
 	return func(ctx context.Context, folders []string, dst *check.CRDs) []message {
-		return scanWorkspace(ctx, folders, limit, dst)
+		return scanWorkspace(ctx, ss.dirFS(), folders, limit, dst)
 	}
 }
 
-// scanFolders restarts the scan so that it also reads the folders, which were
-// created or renamed in. A scan in progress is stopped once and its folders
-// are read again with these, so its result does not mix with this one; a folder
-// below another of the list is read with that one. The message loop receives
-// the result like that of the workspace scan.
+// scanFolders reads the folders, which were created or renamed in. A scan in
+// progress is not restarted, so the files it has read are not read again and
+// it ends however many notifications arrive meanwhile: the folders wait in
+// ss.queued and are scanned together when it ends. A folder below another of
+// the list is read with that one. The message loop receives the result like
+// that of the workspace scan.
 func (ss *session) scanFolders(ctx context.Context, folders []string) {
 	if ss.scan != nil {
-		folders = append(slices.Clone(ss.scan.folders), folders...)
+		ss.queued = outermost(append(ss.queued, folders...))
+		return
 	}
-	folders = outermost(folders)
-	ss.stopScan()
-	ss.runScan(ctx, folders)
+	ss.runScan(ctx, outermost(folders))
+}
+
+// scanQueued starts the scan of the folders that were created during the scan
+// that just ended and still exist, if there are any and crd-typed-policies is still on.
+func (ss *session) scanQueued(ctx context.Context) {
+	folders := slices.DeleteFunc(ss.queued, func(f string) bool { return !isDir(f) })
+	ss.queued = nil
+	if len(folders) > 0 && ss.features.Has(feature.CRDTypedPolicies) {
+		ss.runScan(ctx, folders)
+	}
 }
 
 // outermost returns the folders without those below another of them and
@@ -186,12 +205,14 @@ func (ss *session) stopScan() {
 	ss.scan.cancel()
 	<-ss.scan.done
 	ss.scan = nil
+	ss.queued = nil
 	ss.crds.Untrack()
 }
 
 // finishScan records the CRDs the scan found, replacing those it had for the
 // same files, except those of open documents and of files that changed during
-// the scan, which win, and checks the open documents again when that changed anything and
+// the scan, which win, and checks the open documents again when that changed anything,
+// or when the batch that started the scan changed the CRDs, and
 // crd-typed-policies is still on. A file the session read, changed or forgot
 // during the scan is not taken from the scan. It also reads again the known
 // CRD files under the folders the scan skips, which it never read.
@@ -200,7 +221,9 @@ func (ss *session) finishScan(ctx context.Context, found *check.CRDs) error {
 		return ctx.Err()
 	}
 	reread := ss.rereadSkipped(ctx, found)
-	if !ss.crds.Fill(found) && !reread || !ss.features.Has(feature.CRDTypedPolicies) {
+	pending := ss.scanChanged
+	ss.scanChanged = false
+	if !ss.crds.Fill(found) && !reread && !pending || !ss.features.Has(feature.CRDTypedPolicies) {
 		return ctx.Err()
 	}
 	return ss.publishAll(ctx, "")
@@ -230,11 +253,12 @@ func (ss *session) rereadSkipped(ctx context.Context, found *check.CRDs) bool {
 // Fill to forget the others below the folders, except below a folder it could
 // not read or left files out of, whose CRDs are kept; a
 // file below a folder it skipped is kept while it is on disk.
+// dirFS gives the file system of a folder; os.DirFS reads the disk.
 // It stops when ctx is cancelled. It returns what the user should be told: one
 // warning when the scan stopped at limit, and a log message for each folder
 // that could not be read and one for the files skipped for their size: one
 // file is named with its size, many files are counted in one summary line.
-func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.CRDs) []message {
+func scanWorkspace(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, limit int, dst *check.CRDs) []message {
 	var notes []message
 	capped := false
 	capAt := -1 // where the file cap warning sits in notes, -1 when none
@@ -247,7 +271,7 @@ func scanWorkspace(ctx context.Context, folders []string, limit int, dst *check.
 	}
 	dst.ScanRoots(roots)
 	for _, dir := range folders {
-		root := os.DirFS(dir)
+		root := dirFS(dir)
 		_ = fs.WalkDir(root, ".", func(rel string, d fs.DirEntry, err error) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -415,7 +439,11 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		}
 	}
 	if len(created) > 0 {
+		// The scan's end checks the open documents once, so no state
+		// without the scan's CRDs is published in between.
+		ss.scanChanged = ss.scanChanged || changed
 		ss.scanFolders(ctx, created)
+		return nil
 	}
 	if !changed || !on {
 		return nil

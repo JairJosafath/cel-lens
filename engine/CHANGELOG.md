@@ -9,6 +9,21 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-04
+
+### Changed
+
+- Hover says `crd-typed-policies` is off when a workspace CRD would type `object`.
+- The language server publishes once per `didChangeWatchedFiles` batch that starts a folder scan.
+- A test checks every version number in the Kubernetes version section of `docs/engine.md` against `pkg/kubeversion`.
+- The fallback-build test honours the Windows temp directory.
+- The unreadable-subfolder scan test of the language server runs as root, by injecting the file system.
+
+### Fixed
+
+- A created-folder notification during a workspace CRD scan no longer restarts it: the folders wait and are scanned together when it ends, so a long clone or unzip lets the scan finish and the first folders' CRDs become known before it ends.
+- With `kyverno` and `crd-typed-policies` on, `object` and `oldObject` of a Kyverno ValidatingPolicy that matches a custom resource are typed from its workspace CRD: a wrong field gets a warning naming the kind, and hover names it.
+
 ## [0.25.1] - 2026-11-03
 
 ### Changed
@@ -531,7 +546,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.1...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.26.0...HEAD
+[0.26.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.1...core-v0.26.0
 [0.25.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.0...core-v0.25.1
 [0.25.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.2...core-v0.25.0
 [0.24.2]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.1...core-v0.24.2
