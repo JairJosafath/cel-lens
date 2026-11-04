@@ -106,6 +106,16 @@ describe('README.md as the store page', () => {
     },
   );
 
+  it.each([
+    'a single skipped file is logged on its own line',
+    'many are reported in one summary log line with their count, the limit and the first three names',
+  ])('says in the crd-typed-policies row how skipped files are logged: %s', (phrase) => {
+    const section = readmeSection(README, 'Experimental features') ?? '';
+    const row = section.split('\n').find((line) => line.startsWith('| `crd-typed-policies`'));
+    expect(row).toContain(phrase);
+    expect(row).not.toContain('logs each skipped file');
+  });
+
   it('links the two GIFs, then the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(PICTURES.map((name) => IMAGE_BASE + name));

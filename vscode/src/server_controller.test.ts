@@ -17,6 +17,7 @@ import {
   executedCommands,
   reset,
   settingUpdates,
+  settle,
   settings,
   shownErrors,
   shownWarnings,
@@ -56,6 +57,7 @@ const client = vi.hoisted(() => ({
   notifications: [] as { method: string; params: unknown }[],
   handlers: new Map<string, (params: never) => void>(),
   startGate: undefined as Promise<void> | undefined,
+  onStart: undefined as (() => void) | undefined,
 }));
 
 const fsFault = vi.hoisted(() => ({ chmodError: undefined as Error | undefined }));
@@ -129,6 +131,7 @@ vi.mock('vscode-languageclient/node', async () => {
 
       async start(): Promise<void> {
         client.started += 1;
+        client.onStart?.();
         if (client.startGate !== undefined) {
           return client.startGate;
         }
@@ -206,6 +209,7 @@ describe('ServerController', () => {
     client.notifications.length = 0;
     client.handlers.clear();
     client.startGate = undefined;
+    client.onStart = undefined;
     spawned.calls.length = 0;
     fsFault.chmodError = undefined;
     engine.hung = undefined;
@@ -493,10 +497,14 @@ describe('ServerController', () => {
           release = resolve;
         });
       }
-      const starting = newController().start();
-      await vi.waitFor(() => {
-        expect(client.started).toBe(1);
+      const reached = new Promise<void>((resolve) => {
+        client.onStart = resolve;
       });
+      const starting = newController().start();
+      await reached;
+      if (started) {
+        await starting;
+      }
       const options = client.created[0]?.options as {
         errorHandler: { closed: () => { action: number; handled?: boolean } };
       };
@@ -738,11 +746,10 @@ describe('ServerController', () => {
 
     await newController().start();
 
-    await vi.waitFor(() => {
-      expect(executedCommands).toContainEqual({
-        command: 'workbench.action.openSettings',
-        args: ['cel-lens.experimental'],
-      });
+    await settle();
+    expect(executedCommands).toContainEqual({
+      command: 'workbench.action.openSettings',
+      args: ['cel-lens.experimental'],
     });
     expect(channels.get('cel-lens')?.lines).toContain(
       'Could not replace the experimental names: Error: settings.json is not writable',

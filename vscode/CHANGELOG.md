@@ -6,6 +6,14 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-04
+
+### Changed
+
+- The README says the engine logs many files skipped for their size in one summary line, and a single file on its own line.
+- The extension ships `cel-lens-core` v0.25.1: a created folder below a hidden folder or `node_modules` is skipped by the workspace CRD scan, and a CRD file there edited on disk while closed gives its new schema after a workspace rescan.
+- The `server_controller.test.ts` tests use `settle()` or fake timers instead of `vi.waitFor`; no behaviour changes.
+
 ## [0.34.1] - 2026-11-03
 
 ### Changed
@@ -641,7 +649,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.1...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.35.0...HEAD
+[0.35.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.1...vscode-v0.35.0
 [0.34.1]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.0...vscode-v0.34.1
 [0.34.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.33.0...vscode-v0.34.0
 [0.33.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.32.0...vscode-v0.33.0
