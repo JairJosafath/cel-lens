@@ -9,6 +9,17 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-04
+
+### Added
+
+- The `initialize` result reports the workspace-scan limits, the file cap and the per-file size in bytes, under `capabilities.experimental.celLens`.
+
+### Changed
+
+- A table test covers the root cases of `skippedCreated`.
+- A test checks the changelog intro's list of unlinked versions against the public tag list.
+
 ## [0.26.0] - 2026-11-04
 
 ### Changed
@@ -546,7 +557,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.26.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.27.0...HEAD
+[0.27.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.26.0...core-v0.27.0
 [0.26.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.1...core-v0.26.0
 [0.25.1]: https://github.com/JairJosafath/cel-lens/compare/core-v0.25.0...core-v0.25.1
 [0.25.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.24.2...core-v0.25.0

@@ -258,6 +258,47 @@ func TestChangelogProblems(t *testing.T) {
 	}
 }
 
+// TestChangelogIntro checks that the intro's list of never-tagged versions is held
+// to the version headings and the public tag list.
+func TestChangelogIntro(t *testing.T) {
+	t.Parallel()
+	repo := changelogRepo
+	const body = "## [Unreleased]\n\n## [0.17.0] - 2026-03-01\n\n## [0.16.0] - 2026-02-01\n\n## [0.14.0] - 2026-01-01\n\n## [0.13.0] - 2025-12-01\n\n"
+	const intro = "# Changelog\n\nVersions before 0.14.0 were released before it existed, and 0.16.0 was never tagged on it, so it has no link.\n\n"
+	const unnamed = "# Changelog\n\nVersions before 0.14.0 were released before it existed.\n\n"
+	withoutLink := "[Unreleased]: " + repo + "compare/core-v0.17.0...HEAD\n" +
+		"[0.17.0]: " + repo + "compare/core-v0.14.0...core-v0.17.0\n" +
+		"[0.14.0]: " + repo + "releases/tag/core-v0.14.0\n"
+	withLink := "[Unreleased]: " + repo + "compare/core-v0.17.0...HEAD\n" +
+		"[0.17.0]: " + repo + "compare/core-v0.16.0...core-v0.17.0\n" +
+		"[0.16.0]: " + repo + "compare/core-v0.14.0...core-v0.16.0\n" +
+		"[0.14.0]: " + repo + "releases/tag/core-v0.14.0\n"
+	tests := []struct {
+		name   string
+		intro  string
+		links  string
+		public []string
+		want   string
+	}{
+		{"intro matches", intro, withoutLink, []string{"core-v0.14.0"}, ""},
+		{"named version is public", intro, withLink, []string{"core-v0.14.0", "core-v0.16.0"}, "0.16.0 was never tagged"},
+		{"unlinked version not named", unnamed, withoutLink, []string{"core-v0.14.0"}, "0.16.0 has no link"},
+		{"no unlinked version to name", unnamed, withLink, []string{"core-v0.14.0", "core-v0.16.0"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := changelogProblems(tt.intro+body+tt.links, tt.public)
+			if tt.want == "" && len(got) != 0 {
+				t.Errorf("changelogProblems(%s) = %q, want none", tt.name, got)
+			}
+			if tt.want != "" && !slices.ContainsFunc(got, func(p string) bool { return strings.Contains(p, tt.want) }) {
+				t.Errorf("changelogProblems(%s) = %q, want a problem containing %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestChangelogProblemsMiddleTag checks that the rule is the list, not a version range:
 // a link naming a tag the list leaves out fails although older and newer tags are listed.
 func TestChangelogProblemsMiddleTag(t *testing.T) {
@@ -382,6 +423,7 @@ func changelogProblems(text string, public []string) []string {
 			problems = append(problems, fmt.Sprintf("CHANGELOG.md: [%s]: %s, want %s", v, got, want))
 		}
 	}
+	problems = append(problems, introProblems(lines, versions, linkable)...)
 	want := changelogRepo + "compare/core-v" + versions[0] + "...HEAD"
 	if got, ok := links["Unreleased"]; !ok {
 		problems = append(problems, "CHANGELOG.md has no \"[Unreleased]:\" link definition, want "+want)
@@ -389,4 +431,53 @@ func changelogProblems(text string, public []string) []string {
 		problems = append(problems, fmt.Sprintf("CHANGELOG.md: [Unreleased]: %s, want %s", got, want))
 	}
 	return problems
+}
+
+// firstLinkedVersion is the oldest version whose tag the public repository has; an older
+// version without a link needs no mention in the intro.
+const firstLinkedVersion = "0.14.0"
+
+// unlinkedNote matches the intro's list of the versions that were never tagged.
+var unlinkedNote = regexp.MustCompile(`((?:\d+\.\d+\.\d+(?:, | and )?)+) (?:were|was) never tagged`)
+
+// introProblems returns one message for each way the intro of the changelog (the lines before
+// the first version heading) disagrees with the versions and linkable, which says whether a
+// version's core tag is public: a version named as never tagged whose tag is public, and a version
+// from firstLinkedVersion on that has no public tag and is not named.
+func introProblems(lines, versions []string, linkable func(string) bool) []string {
+	var intro strings.Builder
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## [") {
+			break
+		}
+		intro.WriteString(line + "\n")
+	}
+	versionRef := regexp.MustCompile(`\d+\.\d+\.\d+`)
+	var named []string
+	if m := unlinkedNote.FindStringSubmatch(intro.String()); m != nil {
+		named = versionRef.FindAllString(m[1], -1)
+	}
+	var problems []string
+	for _, v := range named {
+		if linkable(v) {
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md: the intro says %s was never tagged, but core-v%s is public (see %s)", v, v, publicTagsFile))
+		}
+	}
+	for _, v := range versions {
+		if !linkable(v) && versionAtLeast(v, firstLinkedVersion) && !slices.Contains(named, v) {
+			problems = append(problems, fmt.Sprintf("CHANGELOG.md: %s has no link and the intro does not say it was never tagged", v))
+		}
+	}
+	return problems
+}
+
+// versionAtLeast reports whether the X.Y.Z version v is not older than oldest.
+func versionAtLeast(v, oldest string) bool {
+	parts := func(s string) [3]int {
+		var p [3]int
+		fmt.Sscanf(s, "%d.%d.%d", &p[0], &p[1], &p[2]) //nolint:errcheck // callers pass X.Y.Z matched by a regexp
+		return p
+	}
+	a, b := parts(v), parts(oldest)
+	return slices.Compare(a[:], b[:]) >= 0
 }

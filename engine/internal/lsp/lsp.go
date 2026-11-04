@@ -455,6 +455,8 @@ func (ss *session) initializeResult() any {
 				"kubernetesVersion":           kubeversion.Default().String(),
 				"supportedKubernetesVersions": supported,
 				"experimentalFeatures":        feature.Known(),
+				"workspaceScanMaxFiles":       maxWorkspaceFiles,
+				"workspaceScanMaxFileBytes":   maxWorkspaceFileSize,
 			}},
 		},
 		"serverInfo": info{"cel-lens-core", ss.version},

@@ -23,6 +23,13 @@ theirs, from 1.33 to 1.37 (`pkg/kubeversion` defines the range and the default):
   `"supportedKubernetesVersions": ["1.37", "1.36", "1.35", "1.34", "1.33"]`
   and `"kubernetesVersion": "1.37"`.
 
+The same object reports the limits of the workspace CRD scan, whether or not
+`crd-typed-policies` is on: `workspaceScanMaxFiles` is the greatest number of
+files (a count) the scan reads from a workspace, and `workspaceScanMaxFileBytes`
+is the greatest size of one file (in bytes) it reads. They come from the
+constants the scan uses. Clients such as the VS Code extension read them to
+check their docs against the running engine.
+
 ## Language server
 
 `cel-lens-core lsp` serves CEL support for Kubernetes YAML over the Language
