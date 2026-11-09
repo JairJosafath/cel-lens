@@ -88,8 +88,12 @@ type lensItem struct {
 // lensCompletion answers textDocument/completion in the open .cellens at
 // uri: the keys of an entry, the values of its keys, the CEL type names
 // where type: writes one, and the keywords and their values of a schema, as
-// far as the line at the position can be read (see cellens.Locate).
-func (ss *session) lensCompletion(ctx context.Context, uri string, pos position) (any, error) {
+// far as the line at the position can be read (see cellens.Locate). trigger
+// is the character the client asks after, "" when it asks for no character.
+// After a space it answers only where the space follows a key's colon, as
+// in "go: ", with what it answers there when asked: a space elsewhere, as
+// between the words of a value, asks for nothing.
+func (ss *session) lensCompletion(ctx context.Context, uri string, pos position, trigger string) (any, error) {
 	l := ss.lenses[crdKey(uri)]
 	if l == nil || !l.open {
 		return nil, nil
@@ -98,6 +102,9 @@ func (ss *session) lensCompletion(ctx context.Context, uri string, pos position)
 	at := fromPosition(lines, pos)
 	s, ok := cellens.Locate(l.text, at.Line-1, at.Column-1)
 	if !ok {
+		return nil, nil
+	}
+	if trigger == " " && !afterColon(lines[s.Line], at.Column-1, s) {
 		return nil, nil
 	}
 	items, incomplete, err := ss.lensItems(ctx, l, s, lines[s.Line], at.Column-1, eolOf(l.text))
@@ -129,6 +136,13 @@ func (ss *session) lensCompletion(ctx context.Context, uri string, pos position)
 		return map[string]any{"isIncomplete": true, "items": out}, nil
 	}
 	return out, nil
+}
+
+// afterColon reports whether the character col of line, the line of the spot
+// s, comes right after the colon of the key s is the value of and one space:
+// where a value starts.
+func afterColon(line []rune, col int, s cellens.Spot) bool {
+	return s.Key != "" && col >= 2 && col <= len(line) && line[col-1] == ' ' && line[col-2] == ':'
 }
 
 // eolOf is the line ending of text: CR LF when it has one, else LF.

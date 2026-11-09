@@ -791,9 +791,11 @@ func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, erro
 
 // triggerCharacters are the characters after which the client asks for
 // completion: a dot in CEL and in a .cellens path, and in a .cellens the /
-// of a file or folder, the # of a Go type, the ( of a list or map type and
-// the colon after a key.
-var triggerCharacters = []string{".", "/", "#", "(", ":"}
+// of a file or folder, the # of a Go type, the ( of a list or map type, the
+// colon after a key and the space after that colon. The protocol has one
+// list for every document, so a client asks after each of them everywhere:
+// the server answers null at once where one gives nothing (see completion).
+var triggerCharacters = []string{".", "/", "#", "(", ":", " "}
 
 // triggerCharacter is the protocol's CompletionTriggerKind for a character.
 const triggerCharacter = 2
@@ -809,10 +811,14 @@ func (ss *session) completion(ctx context.Context, params json.RawMessage) (any,
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, badParams("textDocument/completion", err)
 	}
-	if isLens(p.TextDocument.URI) {
-		return ss.lensCompletion(ctx, p.TextDocument.URI, p.Position)
+	trigger := ""
+	if c := p.Context; c != nil && c.TriggerKind == triggerCharacter {
+		trigger = c.TriggerCharacter
 	}
-	if c := p.Context; c != nil && c.TriggerKind == triggerCharacter && c.TriggerCharacter != "." {
+	if isLens(p.TextDocument.URI) {
+		return ss.lensCompletion(ctx, p.TextDocument.URI, p.Position, trigger)
+	}
+	if trigger != "" && trigger != "." {
 		return nil, nil // the other characters are for .cellens files
 	}
 	doc, ok := ss.docs[p.TextDocument.URI]

@@ -893,37 +893,45 @@ func offsetPosition(text []byte, off int) position {
 
 // snippet is a placeholder type setType writes for a snippet: the entry's
 // type and where the cursor goes in the text of its type: after the first
-// cursor characters, selecting the next selected.
+// cursor characters, selecting the next selected, or, when below, on a new
+// line after text, indented two more than it.
 type snippet struct {
 	entry            cellens.Entry
 	text             string // the type's text as the entry writes it
 	cursor, selected int
+	below            bool
 }
 
 // snippetFor returns the placeholder of the snippet kind, type or schema,
 // for a value of a document of the kind: in a CustomResourceDefinition, whose
 // x-kubernetes-int-or-string values take an int or a string, int and
-// integer, selected; in a policy an empty struct, with the cursor in it.
+// integer, selected; in a policy an empty struct, with the cursor in it, or
+// a schema in block style, type: object and properties: without a value,
+// which is no properties, as in a CRD, with the cursor on the line below,
+// where the first property goes.
 func snippetFor(ctx context.Context, kind, document string) (snippet, error) {
 	crd := document == cellens.CRDKind
 	switch kind {
 	case "type":
 		if crd {
 			t, _ := cellens.ParseType("int")
-			return snippet{cellens.Entry{Type: t}, "type: int", len("type: "), len("int")}, nil
+			return snippet{entry: cellens.Entry{Type: t}, text: "type: int", cursor: len("type: "), selected: len("int")}, nil
 		}
 		t, _ := cellens.ParseType("{}")
-		return snippet{cellens.Entry{Type: t}, `type: "{}"`, len(`type: "{`), 0}, nil
+		return snippet{entry: cellens.Entry{Type: t}, text: `type: "{}"`, cursor: len(`type: "{`)}, nil
 	case "schema":
-		js, text, cursor, selected := `{"type": "object", "properties": {}}`, "properties: {}", len("properties: {"), 0
+		sn := snippet{text: "properties:", cursor: len("properties:"), below: true}
+		yml := "type: object\nproperties:\n"
 		if crd {
-			js, text, cursor, selected = `{"type": "integer"}`, "type: integer", len("type: "), len("integer")
+			sn = snippet{text: "type: integer", cursor: len("type: "), selected: len("integer")}
+			yml = "type: integer\n"
 		}
-		s, problems := cellens.ReadSchema(ctx, []byte(js))
+		s, problems := cellens.ReadSchema(ctx, []byte(yml))
 		if len(problems) > 0 {
 			return snippet{}, fmt.Errorf("the schema of the snippet: %s", strings.Join(problems, "; "))
 		}
-		return snippet{cellens.Entry{Schema: s}, text, cursor, selected}, nil
+		sn.entry = cellens.Entry{Schema: s}
+		return sn, nil
 	}
 	return snippet{}, invalid(fmt.Sprintf("%s: snippet %q: use type or schema", commandSetType, kind))
 }
@@ -975,12 +983,22 @@ func (ss *session) setSnippet(ctx context.Context, a valueArgs) (*workspaceEdit,
 	if err != nil {
 		return nil, failed(fmt.Sprintf("%s: %v", ss.lensSource(&lens{key: f.key}), err))
 	}
+	i := strings.LastIndex(ed.Text, sn.text) + sn.cursor
+	if sn.below {
+		// The cursor goes on a line of its own below the key, where the
+		// first name goes, indented two more than the key.
+		lineStart := strings.LastIndexAny(ed.Text[:i], "\n") + 1
+		indent := len(ed.Text[lineStart:i]) - len(strings.TrimLeft(ed.Text[lineStart:i], " "))
+		line := eolOf([]byte(ed.Text)) + strings.Repeat(" ", indent+2)
+		ed.Text = ed.Text[:i] + line + ed.Text[i:]
+		i += len(line)
+	}
 	edit, err := ss.textEdit(f, ed)
 	if err != nil {
 		return nil, err
 	}
 	text := ed.Apply(f.text)
-	at := ed.Start + strings.LastIndex(ed.Text, sn.text) + sn.cursor
+	at := ed.Start + i
 	sel := lspRange{offsetPosition(text, at), offsetPosition(text, at+sn.selected)}
 	src := ss.lensSource(&lens{key: f.key})
 	return &workspaceEdit{label: "Give " + v.name + " a type", key: f.key, path: src, edit: edit, result: commandResult{Cellens: f.uri, Change: change, Selection: &sel}}, nil

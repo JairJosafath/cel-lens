@@ -13,9 +13,9 @@ package infer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -24,6 +24,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assume"
+	"github.com/JairJosafath/cel-lens/engine/internal/crdschema"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -75,14 +76,16 @@ type Options struct {
 
 // Result is the schema Schema works out, and what it could not settle.
 type Result struct {
-	// Schema is an OpenAPI v3 schema as YAML decodes a
-	// CustomResourceDefinition's openAPIV3Schema: maps with string keys,
-	// []any, strings and bools. JSON writes its keys sorted.
-	Schema map[string]any `json:"schema"`
+	// Schema is an OpenAPI v3 schema, as a CustomResourceDefinition's
+	// openAPIV3Schema, written as JSON as a person reads one: the keys of
+	// each schema in the order the API server writes them (type first,
+	// properties after required, see crdschema.Arrange), and the properties
+	// of an object in the order the examples first have them.
+	Schema json.RawMessage `json:"schema"`
 	// Notes say where the examples did not settle a type, each starting
 	// with the value's path, such as "spec.items: an empty list says nothing
-	// about its items", in the order of the paths; empty, never nil, when
-	// there are none.
+	// about its items", in the order of the schema's values; empty, never
+	// nil, when there are none.
 	Notes []string `json:"notes"`
 }
 
@@ -143,7 +146,11 @@ func Schema(ctx context.Context, text []byte, opts Options) (Result, error) {
 		in.add(&top, ex, "", len(opts.Path) == 0)
 	}
 	res := Result{Notes: []string{}}
-	res.Schema = in.schema(&top, "", &res.Notes)
+	schema, err := crdschema.JSON(crdschema.Arrange(in.schema(&top, "", &res.Notes)))
+	if err != nil {
+		return Result{}, fmt.Errorf("write the schema: %w", err)
+	}
+	res.Schema = schema
 	return res, nil
 }
 
@@ -176,6 +183,21 @@ func isSeparator(l []byte) bool {
 	return bytes.Equal(l, []byte("---")) || bytes.HasPrefix(l, []byte("--- ")) || bytes.HasPrefix(l, []byte("---\t"))
 }
 
+// object is an object of an example: its fields, and their names in the
+// order written, those a merge key (<<) brings after them.
+type object struct {
+	names  []string
+	fields map[string]any
+}
+
+// set gives the field name the value v, after the others when it is new.
+func (o *object) set(name string, v any) {
+	if _, ok := o.fields[name]; !ok {
+		o.names = append(o.names, name)
+	}
+	o.fields[name] = v
+}
+
 // unwrap returns the examples a document v gives: the items of a list of
 // objects or of a v1 List, nothing for an empty document, else v.
 func unwrap(v any) []any {
@@ -183,12 +205,12 @@ func unwrap(v any) []any {
 	case nil:
 		return nil
 	case []any:
-		if len(t) > 0 && !slices.ContainsFunc(t, func(item any) bool { _, ok := item.(map[string]any); return !ok }) {
+		if len(t) > 0 && !slices.ContainsFunc(t, func(item any) bool { _, ok := item.(*object); return !ok }) {
 			return t
 		}
-	case map[string]any:
-		if plain(t["apiVersion"]) == "v1" && plain(t["kind"]) == "List" {
-			if items, ok := plain(t["items"]).([]any); ok {
+	case *object:
+		if plain(t.fields["apiVersion"]) == "v1" && plain(t.fields["kind"]) == "List" {
+			if items, ok := plain(t.fields["items"]).([]any); ok {
 				return items
 			}
 		}
@@ -207,14 +229,14 @@ func at(examples []any, path []string) []any {
 					next = append(next, list...)
 				}
 			case assume.Values:
-				if m, ok := ex.(map[string]any); ok {
-					for _, k := range slices.Sorted(maps.Keys(m)) {
-						next = append(next, plain(m[k]))
+				if m, ok := ex.(*object); ok {
+					for _, k := range m.names {
+						next = append(next, plain(m.fields[k]))
 					}
 				}
 			default:
-				if m, ok := ex.(map[string]any); ok {
-					if v, ok := m[step]; ok {
+				if m, ok := ex.(*object); ok {
+					if v, ok := m.fields[step]; ok {
 						next = append(next, plain(v))
 					}
 				}
@@ -413,8 +435,8 @@ func (d *decoder) sequence(ctx context.Context, n *yaml.Node, depth int) ([]any,
 // written twice is an error; the keys a merge key (<<) brings count only
 // where the mapping, or a mapping merged before, does not have them, as YAML
 // merges.
-func (d *decoder) mapping(ctx context.Context, n *yaml.Node, depth int) (map[string]any, int, error) {
-	out := make(map[string]any, len(n.Content)/2)
+func (d *decoder) mapping(ctx context.Context, n *yaml.Node, depth int) (*object, int, error) {
+	out := &object{names: make([]string, 0, len(n.Content)/2), fields: make(map[string]any, len(n.Content)/2)}
 	lines := make(map[string]int, len(n.Content)/2)
 	height := 1
 	var merges []*yaml.Node
@@ -437,13 +459,13 @@ func (d *decoder) mapping(ctx context.Context, n *yaml.Node, depth int) (map[str
 			return nil, 0, err
 		}
 		height = max(height, h+1)
-		out[key] = val
 		for k.Kind == yaml.AliasNode {
 			k = k.Alias
 		}
 		if isYAML11BoolNode(k) {
-			out[key] = yaml11Key{key, val}
+			val = yaml11Key{key, val}
 		}
+		out.set(key, val)
 	}
 	for _, m := range merges {
 		h, err := d.merge(ctx, out, m, depth)
@@ -458,7 +480,7 @@ func (d *decoder) mapping(ctx context.Context, n *yaml.Node, depth int) (map[str
 // merge adds to out the keys of the mapping, or the list of mappings, m
 // merges that out does not have yet, and returns the height of the deepest
 // mapping merged.
-func (d *decoder) merge(ctx context.Context, out map[string]any, m *yaml.Node, depth int) (int, error) {
+func (d *decoder) merge(ctx context.Context, out *object, m *yaml.Node, depth int) (int, error) {
 	for m.Kind == yaml.AliasNode {
 		m = m.Alias
 	}
@@ -478,10 +500,10 @@ func (d *decoder) merge(ctx context.Context, out map[string]any, m *yaml.Node, d
 		if err != nil {
 			return 0, err
 		}
-		merged, _ := v.(map[string]any) // the value of a mapping is an object
-		for k, v := range merged {
-			if _, ok := out[k]; !ok {
-				out[k] = v
+		merged, _ := v.(*object) // the value of a mapping is an object
+		for _, k := range merged.names {
+			if _, ok := out.fields[k]; !ok {
+				out.set(k, merged.fields[k])
 			}
 		}
 		height = max(height, h)
@@ -532,15 +554,17 @@ const (
 type shape struct {
 	kinds uint8
 	// fields are the fields of the objects seen here, and present how many
-	// of the objects had each; objects counts the objects.
+	// of the objects had each; objects counts the objects. names are the
+	// fields' names in the order the examples first have them.
 	fields  map[string]*shape
+	names   []string
 	present map[string]int
 	objects int
 	// items are the items of the lists seen here, nil while none had one.
 	items *shape
 	// fixed is the schema Kubernetes gives this place, which the values do
 	// not change; nil for one the values decide.
-	fixed func() map[string]any
+	fixed func() *yaml.Node
 	// yaml11 is the first plain string seen here that kubectl reads as a
 	// boolean, "" when none; yaml11Key is the key of this field when kubectl
 	// reads it as a boolean.
@@ -582,13 +606,13 @@ func (in *inferrer) add(s *shape, v any, path string, top bool) {
 			}
 			in.add(s.items, item, path+assume.Items, false)
 		}
-	case map[string]any:
+	case *object:
 		s.kinds |= kindObject
 		s.objects++
-		for _, k := range slices.Sorted(maps.Keys(t)) {
+		for _, k := range t.names {
 			f := s.field(k)
 			s.present[k]++
-			v := t[k]
+			v := t.fields[k]
 			if w, ok := v.(yaml11Key); ok {
 				f.yaml11Key, v = w.key, w.value
 			}
@@ -623,13 +647,16 @@ func (s *shape) field(k string) *shape {
 	if f == nil {
 		f = &shape{}
 		s.fields[k] = f
+		s.names = append(s.names, k)
 	}
 	return f
 }
 
-// schema makes the schema of s, at path, and adds to notes what it could
-// not settle there and below.
-func (in *inferrer) schema(s *shape, path string, notes *[]string) map[string]any {
+// schema makes the schema of s, at path, as a YAML mapping, and adds to
+// notes what it could not settle there and below. The properties of an
+// object come in the order of s's names; its keys in any order, which
+// crdschema.Arrange puts right.
+func (in *inferrer) schema(s *shape, path string, notes *[]string) *yaml.Node {
 	if s.yaml11Key != "" {
 		b := yaml11True(s.yaml11Key)
 		*notes = append(*notes, fmt.Sprintf("%s: the key %s, unquoted, is the boolean %t to kubectl (YAML 1.1), which sends it as the key \"%t\": quote it", name(path), s.yaml11Key, b, b))
@@ -640,53 +667,55 @@ func (in *inferrer) schema(s *shape, path string, notes *[]string) map[string]an
 	if s.yaml11 != "" {
 		*notes = append(*notes, fmt.Sprintf("%s: an example has %s, unquoted, which kubectl reads as a boolean (YAML 1.1): quote it if a string is meant", name(path), s.yaml11))
 	}
-	out := map[string]any{}
+	out := mapping()
 	if s.kinds&kindNull != 0 {
-		out["nullable"] = true
+		put(out, "nullable", scalar("!!bool", "true"))
 	}
 	switch k := s.kinds &^ kindNull; k {
 	case 0:
-		out["x-kubernetes-preserve-unknown-fields"] = true
+		put(out, "x-kubernetes-preserve-unknown-fields", scalar("!!bool", "true"))
 		*notes = append(*notes, name(path)+": only null was seen, which says nothing about its type")
 	case kindBoolean:
-		out["type"] = "boolean"
+		put(out, "type", scalar("!!str", "boolean"))
 	case kindInteger:
-		out["type"] = "integer"
+		put(out, "type", scalar("!!str", "integer"))
 	case kindNumber, kindInteger | kindNumber:
-		out["type"] = "number"
+		put(out, "type", scalar("!!str", "number"))
 	case kindString:
-		out["type"] = "string"
+		put(out, "type", scalar("!!str", "string"))
 	case kindInteger | kindString:
-		out["x-kubernetes-int-or-string"] = true
+		put(out, "x-kubernetes-int-or-string", scalar("!!bool", "true"))
 	case kindObject:
-		out["type"] = "object"
+		put(out, "type", scalar("!!str", "object"))
 		if len(s.fields) == 0 {
-			out["x-kubernetes-preserve-unknown-fields"] = true
+			put(out, "x-kubernetes-preserve-unknown-fields", scalar("!!bool", "true"))
 			*notes = append(*notes, name(path)+": an empty object says nothing about its fields")
 			break
 		}
-		props := map[string]any{}
-		var required []any
-		for _, f := range slices.Sorted(maps.Keys(s.fields)) {
-			props[f] = in.schema(s.fields[f], join(path, f), notes)
+		props := mapping()
+		required := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, f := range s.names {
+			put(props, f, in.schema(s.fields[f], join(path, f), notes))
 			if in.required && s.present[f] == s.objects {
-				required = append(required, f)
+				required.Content = append(required.Content, scalar("!!str", f))
 			}
 		}
-		out["properties"] = props
-		if len(required) > 0 {
-			out["required"] = required
+		put(out, "properties", props)
+		if len(required.Content) > 0 {
+			put(out, "required", required)
 		}
 	case kindList:
-		out["type"] = "array"
+		put(out, "type", scalar("!!str", "array"))
 		if s.items == nil {
-			out["items"] = map[string]any{"x-kubernetes-preserve-unknown-fields": true}
+			unknown := mapping()
+			put(unknown, "x-kubernetes-preserve-unknown-fields", scalar("!!bool", "true"))
+			put(out, "items", unknown)
 			*notes = append(*notes, name(path)+": an empty list says nothing about its items")
 			break
 		}
-		out["items"] = in.schema(s.items, path+assume.Items, notes)
+		put(out, "items", in.schema(s.items, path+assume.Items, notes))
 	default:
-		out["x-kubernetes-preserve-unknown-fields"] = true
+		put(out, "x-kubernetes-preserve-unknown-fields", scalar("!!bool", "true"))
 		*notes = append(*notes, fmt.Sprintf("%s: the examples have %s here, which no type Kubernetes accepts holds together: it is left without a type", name(path), describe(k)))
 	}
 	return out
@@ -749,6 +778,23 @@ func pathString(path []string) string {
 }
 
 // schemaOf returns a function that makes the schema of the type t.
-func schemaOf(t string) func() map[string]any {
-	return func() map[string]any { return map[string]any{"type": t} }
+func schemaOf(t string) func() *yaml.Node {
+	return func() *yaml.Node {
+		out := mapping()
+		put(out, "type", scalar("!!str", t))
+		return out
+	}
+}
+
+// mapping is an empty YAML mapping, for a schema.
+func mapping() *yaml.Node { return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"} }
+
+// put adds the key and its value to the mapping m.
+func put(m *yaml.Node, key string, v *yaml.Node) {
+	m.Content = append(m.Content, scalar("!!str", key), v)
+}
+
+// scalar is the YAML scalar of the tag and value.
+func scalar(tag, value string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value}
 }

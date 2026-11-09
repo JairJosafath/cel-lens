@@ -27,6 +27,7 @@ package cellens
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -88,6 +89,26 @@ type Schema struct {
 	// key and node are the key schema: and the schema as written, in its
 	// order, with its lines; key is nil for a schema ReadSchema read.
 	key, node *yaml.Node
+}
+
+// JSON writes the schema as JSON, as the engine writes every schema: the
+// keys of each schema in it in the order the API server writes them
+// (crdschema.Arrange), the names of its properties in the order written, or
+// by name for a schema without its YAML. It is nil when the schema cannot
+// be written, as with a number JSON has not.
+func (s *Schema) JSON() json.RawMessage {
+	n := s.node
+	if n == nil {
+		n = new(yaml.Node)
+		if n.Encode(s.Value) != nil {
+			return nil
+		}
+	}
+	out, err := crdschema.JSON(crdschema.Arrange(n))
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // GoType names a Go type, as go: does: the folder of its package and its name.

@@ -348,7 +348,9 @@ func TestCheckTypeSchemaAndGo(t *testing.T) {
 
 // TestSetTypeSchemaAndGo checks that setType writes a schema as a block of
 // YAML below schema:, and a Go type's folder relative to the .cellens the
-// entry goes in (#15).
+// entry goes in (#15). #23: the keys of each schema come in the order the
+// API server writes them, type first, and the properties in the order the
+// JSON gives them.
 func TestSetTypeSchemaAndGo(t *testing.T) {
 	t.Parallel()
 	const subText = "# deploy's types.\ntypes:\n  # mine\n  - file: other.yaml\n    document: ValidatingAdmissionPolicy other\n    variable: params\n    type: int\n"
@@ -368,12 +370,12 @@ func TestSetTypeSchemaAndGo(t *testing.T) {
 	if got, want := apply(t, subText, dc.Edits), subText+entry+"    go: ../api/v1#QuotaSpec\n"; dc.TextDocument.URI != sub || got != want {
 		t.Errorf("setType(go) edits %s to\n%s\nwant %s to\n%s", dc.TextDocument.URI, got, sub, want)
 	}
-	schema := map[string]any{"type": "object", "properties": map[string]any{"maxReplicas": map[string]any{"type": "integer", "minimum": 0}}}
+	schema := json.RawMessage(`{"properties": {"team": {"type": "string"}, "maxReplicas": {"minimum": 0, "type": "integer"}}, "required": ["team"], "type": "object"}`)
 	edit, _, rerr = c.command("cel-lens.setType", with(value, "schema", schema), applied)
 	if rerr != nil {
 		t.Fatalf("setType error = %+v", rerr)
 	}
-	want := subText + entry + "    schema:\n      properties:\n        maxReplicas:\n          minimum: 0\n          type: integer\n      type: object\n"
+	want := subText + entry + "    schema:\n      type: object\n      required:\n        - team\n      properties:\n        team:\n          type: string\n        maxReplicas:\n          type: integer\n          minimum: 0\n"
 	if got := apply(t, subText, edit.Edit.DocumentChanges[0].Edits); got != want {
 		t.Errorf("setType(schema) gives\n%s\nwant\n%s", got, want)
 	}

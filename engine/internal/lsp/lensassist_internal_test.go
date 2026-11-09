@@ -21,7 +21,7 @@ const goEntry = "types:\n  - file: policy.yaml\n    document: ValidatingAdmissio
 // incomplete.
 func completeGo(tb testing.TB, ss *session, uri string) (labels []string, incomplete bool) {
 	tb.Helper()
-	res, err := ss.lensCompletion(context.Background(), uri, position{Line: 4, Character: len("    go: ")})
+	res, err := ss.lensCompletion(context.Background(), uri, position{Line: 4, Character: len("    go: ")}, "")
 	if err != nil {
 		tb.Fatal(err)
 	}

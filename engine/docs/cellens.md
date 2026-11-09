@@ -395,7 +395,9 @@ value; the editor asks what type is meant and the language server writes the
 entry, with the commands of [engine.md](engine.md#commands). The editor can
 also open the `.cellens` at a new entry for the person to write the type in,
 with completion: the server writes the entry with a type to fill in and says
-where the cursor goes. It never writes a
+where the cursor goes; a schema to fill in is a block, `type: object` and
+`properties:`, with the cursor on the line below, where the first property
+goes. It never writes a
 file itself: it sends the editor an edit (`workspace/applyEdit`), which lands
 in the editor's buffer and can be undone, on the `.cellens` as it is then, the
 editor's text when it is open. An editor that refuses the edit gets an error
@@ -434,9 +436,17 @@ included, stays as a person wrote it:
   when they have a struct or a comma in them, or anything YAML would read
   otherwise, such as `true`. A Go type is written plain, as
   `go: ./api/v1#QuotaSpec`. A schema is written as a block of YAML below
-  `schema:`, indented two more than the key, with its keys in the order the
-  command gives them, each value plain unless YAML would read it otherwise
-  (`"true"`), and a value of several lines as a `|-` block.
+  `schema:`, indented two more than the key, as a CRD writes one: the keys of
+  each schema in it in the order the API server's JSONSchemaProps declares
+  them, `description`, `type` and `format` first, then the limits,
+  `required`, `items`, `properties` and the other schemas, and the
+  `x-kubernetes-` extensions last, a key that is no keyword after them; the
+  names of `properties` (and of `patternProperties`, `definitions` and
+  `dependencies`) and the items of a list in the order the command gives
+  them, which for JSON is the order of the text. Each value is plain unless
+  YAML would read it otherwise (`"true"`), and a value of several lines is a
+  `|-` block. The same order holds for the schema the lines above a rule
+  give their commands.
 - Removing a type removes the entry with its comments: the comment lines
   directly above its `-`, those inside it, and those right after it, indented
   more than its `-`. A comment after a blank line is not the entry's above
@@ -502,7 +512,10 @@ and the API server would accept the schema in a CustomResourceDefinition.
   times the values the text writes (10,000 in any case, 1,000,000 at most); a
   text that is bigger, deeper, not YAML or JSON, or with a key written twice
   in one object, is refused with what is wrong and its line.
-  The schema's keys come sorted, the same on every run.
+  The schema is written as a CRD's is: the keys of each schema in the order
+  the API server writes them, `type` first and `required` before
+  `properties`, and the properties of an object in the order the examples
+  first have them; the notes come in that order too.
 
 Two samples of `config/samples/limits.yaml`:
 
@@ -544,14 +557,14 @@ properties:
     type: object
     properties:
       maxReplicas: {type: integer}
-      owner: {type: string, nullable: true}
-      port: {x-kubernetes-int-or-string: true}
       ratio: {type: number}
+      port: {x-kubernetes-int-or-string: true}
+      owner: {type: string, nullable: true}
       teams:
         type: array
         items: {x-kubernetes-preserve-unknown-fields: true}
 ```
 
 With `path: spec`, the schema is that of `spec` alone, and with `required:
-true` it lists `maxReplicas`, `owner`, `port`, `ratio` and `teams`, which both
+true` it lists `maxReplicas`, `ratio`, `port`, `owner` and `teams`, which both
 samples have.

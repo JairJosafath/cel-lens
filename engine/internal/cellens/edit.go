@@ -786,8 +786,11 @@ func typeText(e Entry, indent int, eol string) string {
 }
 
 // schemaLines writes the schema s as a block of YAML, one line each, without
-// indent: its keys in the order written, or by name for a schema without
-// its YAML, and each value plain when YAML reads it back as it is.
+// indent: the keys of each schema in it in the order the API server writes
+// them (crdschema.Arrange), the names of its properties in the order
+// written, or by name for a schema without its YAML, and each value plain
+// when YAML reads it back as it is. A keyword without a value, such as the
+// properties: of a schema to fill in, is written as the key alone.
 func schemaLines(s *Schema) []string {
 	n := s.node
 	if n == nil {
@@ -799,7 +802,7 @@ func schemaLines(s *Schema) []string {
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
-	if err := enc.Encode(blockStyle(n)); err != nil {
+	if err := enc.Encode(blockStyle(crdschema.Arrange(n))); err != nil {
 		return []string{"# not written: " + err.Error()}
 	}
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")

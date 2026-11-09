@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -107,9 +108,20 @@ func (g *guided) set(text string) map[string]any {
 // types.
 func (g *guided) complete(text string) []completionItem {
 	g.t.Helper()
+	return g.completeAfter(text, "")
+}
+
+// completeAfter is complete as the client asks once the person typed the
+// trigger character trigger, or when asked for completion for "".
+func (g *guided) completeAfter(text, trigger string) []completionItem {
+	g.t.Helper()
 	pos := g.set(text)
+	params := map[string]any{"textDocument": map[string]any{"uri": g.lens}, "position": pos}
+	if trigger != "" {
+		params["context"] = map[string]any{"triggerKind": 2, "triggerCharacter": trigger}
+	}
 	for {
-		res, rerr := g.call("textDocument/completion", map[string]any{"textDocument": map[string]any{"uri": g.lens}, "position": pos})
+		res, rerr := g.call("textDocument/completion", params)
 		if rerr != nil {
 			g.t.Fatalf("completion error = %+v", rerr)
 		}
@@ -307,7 +319,8 @@ func TestLensCompletionEdits(t *testing.T) {
 }
 
 // TestCompletionTriggers checks that the characters that ask for completion
-// in a .cellens ask for nothing in a CEL expression, but the dot.
+// in a .cellens, the space too (#23), ask for nothing in a CEL expression,
+// but the dot.
 func TestCompletionTriggers(t *testing.T) {
 	t.Parallel()
 	c := start(t)
@@ -323,8 +336,8 @@ func TestCompletionTriggers(t *testing.T) {
 	if err := json.Unmarshal(res, &r); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.Capabilities.CompletionProvider.TriggerCharacters; !slices.Equal(got, []string{".", "/", "#", "(", ":"}) {
-		t.Errorf("triggerCharacters = %q, want . / # ( :", got)
+	if got := r.Capabilities.CompletionProvider.TriggerCharacters; !slices.Equal(got, []string{".", "/", "#", "(", ":", " "}) {
+		t.Errorf("triggerCharacters = %q, want . / # ( : and space", got)
 	}
 	c.notify("initialized", map[string]any{})
 	text := readFile(t, "widget.yaml")
@@ -334,7 +347,7 @@ func TestCompletionTriggers(t *testing.T) {
 	for _, tc := range []struct {
 		trigger string
 		null    bool
-	}{{"/", true}, {".", false}} {
+	}{{"/", true}, {" ", true}, {".", false}} {
 		res, _ := c.call("textDocument/completion", map[string]any{
 			"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": line, "character": char + len("self.")},
 			"context": map[string]any{"triggerKind": 2, "triggerCharacter": tc.trigger},
@@ -472,9 +485,11 @@ func snippetArgs(lens, kind string, policy bool) map[string]any {
 
 // TestSetTypeSnippet is the fourth acceptance criterion of #16: setType with
 // a snippet writes a new entry with a type to fill in, an empty struct or an
-// object schema with empty properties, or for a CRD's int-or-string value
-// int, and answers where the cursor goes; for a value with an entry it
-// changes nothing and answers where its type is.
+// object schema, or for a CRD's int-or-string value int or integer, and
+// answers where the cursor goes; for a value with an entry it changes nothing
+// and answers where its type is. #23: the object schema is in block style,
+// with properties: without a value and the cursor on the line below, where
+// the first property goes, and the .cellens has no problem while it is so.
 func TestSetTypeSnippet(t *testing.T) {
 	t.Parallel()
 	const start0 = "# types\ntypes:\n"
@@ -486,7 +501,7 @@ func TestSetTypeSnippet(t *testing.T) {
 		want string
 	}{
 		{"a struct type", "type", true, start0 + "  - file: policy.yaml\n    document: ValidatingAdmissionPolicy replica-limit\n    variable: params\n    type: \"{⟨⟩}\"\n"},
-		{"an object schema", "schema", true, start0 + "  - file: policy.yaml\n    document: ValidatingAdmissionPolicy replica-limit\n    variable: params\n    schema:\n      type: object\n      properties: {⟨⟩}\n"},
+		{"an object schema", "schema", true, start0 + "  - file: policy.yaml\n    document: ValidatingAdmissionPolicy replica-limit\n    variable: params\n    schema:\n      type: object\n      properties:\n        ⟨⟩\n"},
 		{"int for an int-or-string value", "type", false, start0 + "  - file: crd.yaml\n    document: CustomResourceDefinition widgets.example.com\n    version: v1\n    path: spec.config\n    type: ⟨int⟩\n"},
 		{"integer for an int-or-string value", "schema", false, start0 + "  - file: crd.yaml\n    document: CustomResourceDefinition widgets.example.com\n    version: v1\n    path: spec.config\n    schema:\n      type: ⟨integer⟩\n"},
 	}
@@ -515,6 +530,10 @@ func TestSetTypeSnippet(t *testing.T) {
 			sel := apply(t, got, []lspEdit{{Range: r.Selection, NewText: "⟨" + selected(t, got, r.Selection) + "⟩"}})
 			if sel != tt.want || r.Cellens != fileURI(lens) || r.Change != "added" {
 				t.Errorf("setType makes\n%s(%s %s), want\n%s", sel, r.Cellens, r.Change, tt.want)
+			}
+			entries, problems := cellens.Parse([]byte(got))
+			if _, more := cellens.CheckSchemas(t.Context(), entries); len(entries) != 1 || len(problems)+len(more) > 0 {
+				t.Errorf("the .cellens setType makes has %d entries, problems %v %v; want one entry and none", len(entries), problems, more)
 			}
 		})
 	}
@@ -583,4 +602,44 @@ func selected(t *testing.T, text string, r struct{ Start, End struct{ Line, Char
 	t.Helper()
 	line := []rune(strings.Split(text, "\n")[r.Start.Line])
 	return string(line[r.Start.Character:r.End.Character])
+}
+
+// TestCompletionAfterColonSpace is #23: typing go: asks for completion after
+// the colon, and typing the space after it asks again, and gets what asking
+// for completion there gives, for go:, kind:, type: and file:; a space that
+// follows no key's colon, as between the words of a value or after a dash,
+// gets nothing.
+func TestCompletionAfterColonSpace(t *testing.T) {
+	t.Parallel()
+	g := newGuided(t, map[string]any{})
+	const entry = "types:\n  - file: policy.yaml\n    document: ValidatingAdmissionPolicy limits\n    variable: params\n"
+	for _, tc := range []struct{ key, want string }{
+		{"go", "./api/v1"},
+		{"kind", "apps/v1 Deployment"},
+		{"type", "string"},
+	} {
+		g.use(t)
+		colon := labels(g.completeAfter(entry+"    "+tc.key+":‸\n", ":"))
+		if !slices.Contains(colon, tc.want) {
+			t.Errorf("completion after %s: = %q, want %s among them", tc.key, colon, tc.want)
+		}
+		space := g.completeAfter(entry+"    "+tc.key+": ‸\n", " ")
+		asked := g.complete(entry + "    " + tc.key + ": ‸\n")
+		if !slices.Contains(labels(space), tc.want) || !reflect.DeepEqual(space, asked) {
+			t.Errorf("completion after %s: and a space = %q, want %q, what asking gives", tc.key, labels(space), labels(asked))
+		}
+	}
+	file := g.completeAfter("types:\n  - file: ‸\n", " ")
+	if !slices.Contains(labels(file), "policy.yaml") || !reflect.DeepEqual(file, g.complete("types:\n  - file: ‸\n")) {
+		t.Errorf("completion after file: and a space = %q, want the files, as asking gives", labels(file))
+	}
+	for _, text := range []string{
+		"types:\n  - file: policy.yaml\n    document: ValidatingAdmissionPolicy ‸\n",
+		"types:\n  - ‸\n",
+		"# a comment ‸\ntypes:\n",
+	} {
+		if got := g.completeAfter(text, " "); len(got) != 0 {
+			t.Errorf("completion after a space in %q = %q, want none", text, labels(got))
+		}
+	}
 }

@@ -8,6 +8,10 @@
 // requires a structural schema and refuses what the API server refuses, and
 // places each of its errors on the key of the schema it is about.
 //
+// Arrange puts the keys of a schema in the order the API server writes them,
+// and JSON writes a schema as JSON in the order of its keys, for the schemas
+// the engine writes.
+//
 // The schema is that of a value, not of a whole resource: the rules the API
 // server has only for the root of a CRD's schema (it must be an object, it may
 // not be nullable, its metadata is restricted) do not apply. Nor does a schema
@@ -16,9 +20,12 @@
 package crdschema
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -534,4 +541,153 @@ func child(n *yaml.Node, step string) (key, value *yaml.Node) {
 		return n.Content[i], n.Content[i]
 	}
 	return nil, nil
+}
+
+// order is where each keyword comes in a schema the engine writes: the order
+// in which apiextensions.k8s.io/v1 JSONSchemaProps declares its fields, as
+// the API server writes a schema.
+var order = keywordOrder()
+
+// keywordOrder is the place of each field of JSONSchemaProps, by its JSON
+// name, from 0.
+func keywordOrder() map[string]int {
+	t := reflect.TypeFor[apiextensionsv1.JSONSchemaProps]()
+	out := make(map[string]int, t.NumField())
+	for i := range t.NumField() {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" {
+			out[name] = i
+		}
+	}
+	return out
+}
+
+// Arrange returns a copy of n, a schema as Read takes it, with the keys of
+// each schema in it in the order apiextensions.k8s.io/v1 JSONSchemaProps
+// declares them, as the API server writes a schema: description, type and
+// format first, then the limits, required, items, the properties and the
+// other schemas below it, and the x-kubernetes- extensions last. A key that
+// is no keyword comes after them, in the order written. The names of
+// properties, patternProperties, definitions and dependencies keep the order
+// written, as do lists and the values of default, enum and example. n is not
+// changed; a node that is no mapping is returned as it is.
+func Arrange(n *yaml.Node) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return n
+	}
+	type entry struct{ key, value *yaml.Node }
+	entries := make([]entry, 0, len(n.Content)/2)
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		key := n.Content[i]
+		entries = append(entries, entry{key, arrangeValue(key.Value, n.Content[i+1])})
+	}
+	rank := func(e entry) int {
+		if i, ok := order[e.key.Value]; ok {
+			return i
+		}
+		return len(order)
+	}
+	slices.SortStableFunc(entries, func(a, b entry) int { return cmp.Compare(rank(a), rank(b)) })
+	c := *n
+	c.Content = make([]*yaml.Node, 0, len(n.Content))
+	for _, e := range entries {
+		c.Content = append(c.Content, e.key, e.value)
+	}
+	return &c
+}
+
+// arrangeValue is v, the value of the keyword key, with the schemas in it
+// arranged (see Arrange).
+func arrangeValue(key string, v *yaml.Node) *yaml.Node {
+	k, known := keywords[key]
+	if !known {
+		return v
+	}
+	switch k {
+	case kindSchema, kindSchemaOrBool:
+		return Arrange(v)
+	case kindSchemas, kindSchemaOrList:
+		if v.Kind != yaml.SequenceNode {
+			return Arrange(v)
+		}
+		return each(v, 1, Arrange)
+	case kindSchemaMap, kindSchemaOrNames:
+		if v.Kind != yaml.MappingNode {
+			return v
+		}
+		return each(v, 2, Arrange) // a list of names in dependencies is no mapping, and stays
+	case kindString, kindNumber, kindInteger, kindBool, kindStrings, kindAny, kindList, kindDocs, kindRules:
+		// no schema in it: its order is the one written
+	}
+	return v
+}
+
+// each returns a copy of n whose every step-th child, from the step-th, is
+// f of it: every item of a list for 1, every value of a mapping for 2.
+func each(n *yaml.Node, step int, f func(*yaml.Node) *yaml.Node) *yaml.Node {
+	c := *n
+	c.Content = slices.Clone(n.Content)
+	for i := step - 1; i < len(c.Content); i += step {
+		c.Content[i] = f(c.Content[i])
+	}
+	return &c
+}
+
+// JSON writes n, a schema as Read takes it, as JSON: the keys of each
+// mapping in the order written, each scalar as Read reads it. The error is
+// for a scalar JSON cannot write, such as an infinite number.
+func JSON(n *yaml.Node) ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeJSON(&b, n); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func writeJSON(b *bytes.Buffer, n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.DocumentNode:
+		if len(n.Content) == 0 {
+			b.WriteString("null")
+			return nil
+		}
+		return writeJSON(b, n.Content[0])
+	case yaml.MappingNode:
+		b.WriteByte('{')
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			key, err := json.Marshal(n.Content[i].Value)
+			if err != nil {
+				return err
+			}
+			b.Write(key)
+			b.WriteByte(':')
+			if err := writeJSON(b, n.Content[i+1]); err != nil {
+				return err
+			}
+		}
+		b.WriteByte('}')
+		return nil
+	case yaml.SequenceNode:
+		b.WriteByte('[')
+		for i, item := range n.Content {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			if err := writeJSON(b, item); err != nil {
+				return err
+			}
+		}
+		b.WriteByte(']')
+		return nil
+	case yaml.ScalarNode, yaml.AliasNode:
+		// a scalar is its value; Read takes no alias, and jsonValue makes one null
+	}
+	v, err := json.Marshal(jsonValue(n))
+	if err != nil {
+		return err
+	}
+	b.Write(v)
+	return nil
 }

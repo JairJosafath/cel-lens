@@ -159,3 +159,59 @@ func FuzzRead(f *testing.F) {
 		}
 	})
 }
+
+// TestArrange is #23: a schema the engine writes has the keys of each schema
+// in it in the order JSONSchemaProps declares them, as the API server writes
+// one, type before properties, required before properties, x-kubernetes-
+// last; the names of properties and the values of default, enum and example
+// keep the order written, and so does a key that is no keyword, after the
+// keywords. JSON writes it in that order.
+func TestArrange(t *testing.T) {
+	t.Parallel()
+	const in = `x-kubernetes-preserve-unknown-fields: false
+properties:
+  zeta: {x-kubernetes-int-or-string: true, description: z}
+  alpha:
+    items: {minimum: 1, type: integer}
+    type: array
+  beta:
+    additionalProperties: {format: date-time, type: string}
+    type: object
+dependencies: {zeta: [alpha, beta], alpha: {required: [beta], type: object}}
+required: [zeta, alpha]
+default: {b: 1, a: 2}
+enum: [{b: 1, a: 2}]
+type: object
+description: d
+`
+	want := `{"description":"d","type":"object","default":{"b":1,"a":2},"enum":[{"b":1,"a":2}],"required":["zeta","alpha"],` +
+		`"properties":{"zeta":{"description":"z","x-kubernetes-int-or-string":true},` +
+		`"alpha":{"type":"array","items":{"type":"integer","minimum":1}},` +
+		`"beta":{"type":"object","additionalProperties":{"type":"string","format":"date-time"}}},` +
+		`"dependencies":{"zeta":["alpha","beta"],"alpha":{"type":"object","required":["beta"]}},` +
+		`"x-kubernetes-preserve-unknown-fields":false}`
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(in), &doc); err != nil {
+		t.Fatal(err)
+	}
+	n := doc.Content[0]
+	got, err := crdschema.JSON(crdschema.Arrange(n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("JSON(Arrange(schema)) =\n%s\nwant\n%s", got, want)
+	}
+	if first := n.Content[0].Value; first != "x-kubernetes-preserve-unknown-fields" {
+		t.Errorf("Arrange changed its input: its first key is %s", first)
+	}
+	unknown := &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "x-other"},
+		{Kind: yaml.ScalarNode, Tag: "!!int", Value: "1"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "type"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "string"},
+	}}
+	if got, _ := crdschema.JSON(crdschema.Arrange(unknown)); string(got) != `{"type":"string","x-other":1}` {
+		t.Errorf("JSON(Arrange(a key that is no keyword)) = %s, want it after the keywords", got)
+	}
+}

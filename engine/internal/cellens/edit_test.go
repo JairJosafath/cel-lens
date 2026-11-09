@@ -498,9 +498,13 @@ func TestSetSchemaAndGo(t *testing.T) {
 	}
 	const head = "types:\n  - file: p.yaml\n    document: ValidatingAdmissionPolicy p\n    variable: params\n"
 	const limits = `{"type": "object", "description": "The limits: for a team.", "properties": {"maxReplicas": {"type": "integer", "minimum": 0}, "team": {"type": "string", "enum": ["true", "b"]}}, "required": ["team"]}`
+	// #23: the keys of each schema in the order of JSONSchemaProps, the
+	// properties in the order of the JSON.
 	const limitsYAML = `    schema:
-      type: object
       description: 'The limits: for a team.'
+      type: object
+      required:
+        - team
       properties:
         maxReplicas:
           type: integer
@@ -510,8 +514,6 @@ func TestSetSchemaAndGo(t *testing.T) {
           enum:
             - "true"
             - b
-      required:
-        - team
 `
 	tests := []struct {
 		name string
@@ -547,7 +549,7 @@ func TestSetSchemaAndGo(t *testing.T) {
 			name: "long and multi-line strings are not folded",
 			text: head + "    type: int\n",
 			e:    withSchema(`{"type": "string", "description": "` + strings.Repeat("word ", 30) + `end", "pattern": "^a\\nb$", "title": "one\ntwo"}`),
-			want: head + "    schema:\n      type: string\n      description: " + strings.Repeat("word ", 30) + "end\n      pattern: ^a\\nb$\n      title: |-\n        one\n        two\n",
+			want: head + "    schema:\n      description: " + strings.Repeat("word ", 30) + "end\n      type: string\n      title: |-\n        one\n        two\n      pattern: ^a\\nb$\n",
 		},
 		{
 			name: "a new entry with a Go type, plain",

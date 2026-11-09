@@ -11,6 +11,7 @@
 package inline
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -120,12 +121,13 @@ type Target struct {
 	// Value is the value as the expression reads it, for the client to show.
 	Value string `json:"value"`
 	// Type, Kind, Schema or Go is what the entry gives the value now, as
-	// the entry writes it, a schema as a JSON object; none is set for a value
-	// no entry names.
-	Type   string         `json:"type,omitempty"`
-	Kind   string         `json:"kind,omitempty"`
-	Schema map[string]any `json:"schema,omitempty"`
-	Go     string         `json:"go,omitempty"`
+	// the entry writes it, a schema as a JSON object whose keys keep the
+	// order the engine writes a schema in; none is set for a value no entry
+	// names.
+	Type   string          `json:"type,omitempty"`
+	Kind   string          `json:"kind,omitempty"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+	Go     string          `json:"go,omitempty"`
 }
 
 // Part is one part of a line: its text and the command it runs when

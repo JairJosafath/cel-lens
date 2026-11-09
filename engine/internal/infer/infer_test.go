@@ -1,6 +1,7 @@
 package infer_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -63,6 +64,27 @@ func accepted(t *testing.T, s map[string]any, whole bool) {
 			t.Errorf("schema %v at the root: the API server refuses it: %v", s, p)
 		}
 	}
+}
+
+// decoded is the schema s, JSON text, as YAML decodes a CRD's schema: maps
+// and lists.
+func decoded(t *testing.T, s json.RawMessage) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal(s, &out); err != nil {
+		t.Fatalf("decode %s: %v", s, err)
+	}
+	return out
+}
+
+// compact is the JSON text s without spaces, its keys in the order written.
+func compact(t *testing.T, s string) string {
+	t.Helper()
+	var b bytes.Buffer
+	if err := json.Compact(&b, []byte(s)); err != nil {
+		t.Fatalf("compact %s: %v", s, err)
+	}
+	return b.String()
 }
 
 // sorted is the JSON text s as json.Marshal writes its value: without
@@ -189,9 +211,10 @@ func TestSchema(t *testing.T) {
 				"config":{"type":"object","x-kubernetes-preserve-unknown-fields":true},
 				"items":{"type":"array","items":{"x-kubernetes-preserve-unknown-fields":true}},
 				"more":{"type":"array","items":{"x-kubernetes-preserve-unknown-fields":true}}}}}}`,
+			// #23: the notes come in the order of the schema, the examples'.
 			notes: []string{
-				"spec.config: an empty object says nothing about its fields",
 				"spec.items: an empty list says nothing about its items",
+				"spec.config: an empty object says nothing about its fields",
 				"spec.more: an empty list says nothing about its items",
 			},
 		},
@@ -247,8 +270,8 @@ func TestSchema(t *testing.T) {
 			want: `{"type":"object","properties":{"on":{"type":"string"},"spec":{"type":"object","properties":{"Off":{"type":"integer"},"n":{"type":"integer"},"y":{"type":"integer"}}}}}`,
 			notes: []string{
 				`on: the key on, unquoted, is the boolean true to kubectl (YAML 1.1), which sends it as the key "true": quote it`,
-				`spec.Off: the key Off, unquoted, is the boolean false to kubectl (YAML 1.1), which sends it as the key "false": quote it`,
 				`spec.y: the key y, unquoted, is the boolean true to kubectl (YAML 1.1), which sends it as the key "true": quote it`,
+				`spec.Off: the key Off, unquoted, is the boolean false to kubectl (YAML 1.1), which sends it as the key "false": quote it`,
 			},
 		},
 		{
@@ -294,11 +317,7 @@ func TestSchema(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Schema(%q) error = %v", tt.text, err)
 			}
-			got, err := json.Marshal(res.Schema)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if want := sorted(t, tt.want); string(got) != want {
+			if got, want := sorted(t, string(res.Schema)), sorted(t, tt.want); got != want {
 				t.Errorf("Schema(%q) = %s, want %s", tt.text, got, want)
 			}
 			if tt.notes == nil {
@@ -307,7 +326,7 @@ func TestSchema(t *testing.T) {
 			if !slices.Equal(res.Notes, tt.notes) || res.Notes == nil {
 				t.Errorf("Schema(%q) notes = %#v, want %#v", tt.text, res.Notes, tt.notes)
 			}
-			accepted(t, res.Schema, tt.opts.Path == nil)
+			accepted(t, decoded(t, res.Schema), tt.opts.Path == nil)
 		})
 	}
 }
@@ -335,7 +354,7 @@ status:
 	if err != nil {
 		t.Fatal(err)
 	}
-	props, _ := res.Schema["properties"].(map[string]any)
+	props, _ := decoded(t, res.Schema)["properties"].(map[string]any)
 	for _, k := range []string{"apiVersion", "kind"} {
 		if got, _ := json.Marshal(props[k]); string(got) != `{"type":"string"}` {
 			t.Errorf("Schema(sample) %s = %s, want {\"type\":\"string\"}", k, got)
@@ -344,7 +363,7 @@ status:
 	if got, _ := json.Marshal(props["metadata"]); string(got) != `{"type":"object"}` {
 		t.Errorf("Schema(sample) metadata = %s, want {\"type\":\"object\"}, nothing from the example", got)
 	}
-	accepted(t, res.Schema, true)
+	accepted(t, decoded(t, res.Schema), true)
 	if got, _ := json.Marshal(props["status"]); string(got) != sorted(t, `{"type":"object","properties":{"ready":{"type":"boolean"}}}`) {
 		t.Errorf("Schema(sample) status = %s, want it inferred, as the value is the whole object", got)
 	}
@@ -358,7 +377,7 @@ status:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, _ := json.Marshal(res.Schema); string(got) != sorted(t, `{"type":"object","properties":{"maxReplicas":{"type":"integer"}}}`) {
+		if got := string(res.Schema); got != `{"type":"object","properties":{"maxReplicas":{"type":"integer"}}}` {
 			t.Errorf("Schema(sample, spec) = %s, want spec alone, without status", got)
 		}
 	})
@@ -368,7 +387,7 @@ status:
 		if err != nil {
 			t.Fatal(err)
 		}
-		accepted(t, res.Schema, true)
+		accepted(t, decoded(t, res.Schema), true)
 	})
 	t.Run("a reference is no object", func(t *testing.T) {
 		t.Parallel()
@@ -376,7 +395,7 @@ status:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, _ := json.Marshal(res.Schema); !strings.Contains(string(got), `"metadata":{"type":"string"}`) {
+		if got := string(res.Schema); !strings.Contains(got, `"metadata":{"type":"string"}`) {
 			t.Errorf("Schema(ref) = %s, want metadata inferred below the root", got)
 		}
 	})
@@ -409,21 +428,23 @@ spec:
 
 // TestSchemaDocExample checks that the samples of docs/cellens.md give the
 // schema and note it shows, and with path spec and required what it says
-// (#17).
+// (#17), written in that order (#23): the keys of each schema as the API
+// server writes them, type first and required before properties, and the
+// properties in the order the samples first have them, not by name.
 func TestSchemaDocExample(t *testing.T) {
 	t.Parallel()
 	const spec = `{"type":"object","properties":{
-		"maxReplicas":{"type":"integer"},"owner":{"type":"string","nullable":true},
-		"port":{"x-kubernetes-int-or-string":true},"ratio":{"type":"number"},
+		"maxReplicas":{"type":"integer"},"ratio":{"type":"number"},
+		"port":{"x-kubernetes-int-or-string":true},"owner":{"type":"string","nullable":true},
 		"teams":{"type":"array","items":{"x-kubernetes-preserve-unknown-fields":true}}}}`
 	res, err := infer.Schema(t.Context(), []byte(docSamples), infer.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted(t, res.Schema, true)
-	want := `{"type":"object","properties":{"apiVersion":{"type":"string"},"kind":{"type":"string"},"metadata":{"type":"object"},"spec":` + spec + `}}`
-	if got, _ := json.Marshal(res.Schema); string(got) != sorted(t, want) {
-		t.Errorf("Schema(docSamples) = %s, want %s", got, sorted(t, want))
+	accepted(t, decoded(t, res.Schema), true)
+	want := compact(t, `{"type":"object","properties":{"apiVersion":{"type":"string"},"kind":{"type":"string"},"metadata":{"type":"object"},"spec":`+spec+`}}`)
+	if got := string(res.Schema); got != want {
+		t.Errorf("Schema(docSamples) = %s, want %s", got, want)
 	}
 	if !slices.Equal(res.Notes, []string{"spec.teams: an empty list says nothing about its items"}) {
 		t.Errorf("Schema(docSamples) notes = %q, want the one for spec.teams", res.Notes)
@@ -432,9 +453,9 @@ func TestSchemaDocExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantSpec := strings.Replace(spec, `{"type":"object",`, `{"type":"object","required":["maxReplicas","owner","port","ratio","teams"],`, 1)
-	if got, _ := json.Marshal(res.Schema); string(got) != sorted(t, wantSpec) {
-		t.Errorf("Schema(docSamples, spec, required) = %s, want %s", got, sorted(t, wantSpec))
+	wantSpec := compact(t, strings.Replace(spec, `{"type":"object",`, `{"type":"object","required":["maxReplicas","ratio","port","owner","teams"],`, 1))
+	if got := string(res.Schema); got != wantSpec {
+		t.Errorf("Schema(docSamples, spec, required) = %s, want %s", got, wantSpec)
 	}
 }
 

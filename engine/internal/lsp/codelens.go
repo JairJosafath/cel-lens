@@ -147,7 +147,7 @@ func (ss *session) inlineValues(uri string, values []assist.Value) []inline.Valu
 			case e.Type != nil:
 				iv.Target.Type = e.Type.String()
 			case e.Schema != nil:
-				iv.Target.Schema = e.Schema.Value
+				iv.Target.Schema = e.Schema.JSON()
 			case e.Go != nil:
 				iv.Target.Go = e.Go.String()
 			}

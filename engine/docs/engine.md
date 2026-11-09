@@ -44,9 +44,11 @@ Server Protocol on stdin and stdout, for any editor:
   a short description.
 - **Completion** inside an expression: `self`/`oldSelf` or `object`/`request`/...,
   the fields of the type before a dot, and the Kubernetes CEL functions. The
-  server's `triggerCharacters` are `.`, `/`, `#`, `(` and `:`: in a YAML file
-  only `.` gives items, and a request for another of them
-  (`context.triggerKind` 2) gets `null`.
+  server's `triggerCharacters` are `.`, `/`, `#`, `(`, `:` and the space: in a
+  YAML file only `.` gives items, and a request for another of them
+  (`context.triggerKind` 2) gets `null` at once. The protocol has one list for
+  every document, so a client asks after a space in every file; only in a
+  `.cellens`, after a key's colon, does the space give items.
 
 - **Quick fixes** (the light bulb): "Change to `maxReplicas`" for a misspelled
   field, function or macro when exactly one name valid there is within two edits
@@ -70,7 +72,10 @@ number also brings the total under its budget). No fix is offered when there is 
   files (`didOpen`, `didChange`, `didClose`) as it sends YAML files; the server
   knows them by their name. In a `.cellens` the trigger characters start a
   path (`.`), a file or folder (`/`), a Go type (`#`), a type's argument
-  (`(`) and a value (`:`). A completion item replaces the word at the cursor
+  (`(`) and a value (`:`), and the space typed after a key's colon, as in
+  `go: `, gives the items asking for completion there gives, so the list the
+  colon opened comes back after the space; a space anywhere else, as between
+  the words of a value, gets `null`. A completion item replaces the word at the cursor
   (`textEdit`); `list($1)`, `map(string, $1)` and `{$1}` are snippets
   (`insertTextFormat` 2) for a client with
   `textDocument.completion.completionItem.snippetSupport`, and plain text
@@ -298,7 +303,9 @@ object with these keys:
   `{"message": "spec.config is x-kubernetes-int-or-string, an int or a string to a rule: give it int or string"}`.
   A `kind` in the argument is not checked.
 - `cel-lens.setType` with a value and one of `type`, `kind`, `schema` and
-  `go` writes its entry, a schema as a block of YAML below `schema:`, a Go
+  `go` writes its entry, a schema as a block of YAML below `schema:`, the
+  keys of each schema in it in the order the API server writes them (see
+  [cellens.md](cellens.md#writing-entries-from-the-editor)), a Go
   type's folder relative to the `.cellens` the entry goes in, and returns
   `{"cellens": "file:///repo/.cellens", "change": "added"}`:
   the `.cellens` it changed and how, `added`, `replaced` or `created`. Which
@@ -310,9 +317,12 @@ object with these keys:
   cursor in the `.cellens` once the edit is applied:
   `{"cellens": "file:///repo/.cellens", "change": "added", "selection":
   {"start": {"line": 9, "character": 11}, "end": {"line": 9, "character": 11}}}`.
-  For a value of a policy, `type` writes `type: "{}"` and `schema` writes
-  `schema:` with `type: object` and `properties: {}`, the cursor between the
-  braces; for a CustomResourceDefinition's value, which takes an int or a
+  For a value of a policy, `type` writes `type: "{}"`, the cursor between the
+  braces, and `schema` writes a block, `schema:`, `type: object` and
+  `properties:` without a value, which is no properties, as in a CRD, then an
+  empty line indented two more than `properties:`, the cursor at its end,
+  where the first property goes; the entry has no problem while it is so.
+  For a CustomResourceDefinition's value, which takes an int or a
   string, `type: int` and `schema:` with `type: integer`, with `int` or
   `integer` selected, so typing replaces it. The entry is checked as any
   `setType` checks one, with that type. A value an entry already types keeps
@@ -334,8 +344,9 @@ object with these keys:
   only the document at that line (an example's `line`), `path`, written as a
   `.cellens` path, to take the value there in each example (the line's
   `path`), and `required: true` to list the fields every example has. It
-  returns the schema, its keys sorted, and the notes on what the examples do
-  not settle, `[]` when none:
+  returns the schema, its keywords in the order the API server writes them
+  and its properties in the order the examples first have them, and the
+  notes on what the examples do not settle, `[]` when none:
 
   ```json
   {"schema": {"type": "object", "properties": {"items": {"type": "array",
