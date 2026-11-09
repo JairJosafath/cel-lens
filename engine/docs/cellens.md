@@ -45,10 +45,44 @@ types:
 | `version` | For a CustomResourceDefinition: the served version the value is in, such as `v1` or `v1beta1`. |
 | `variable` | For a policy: `params`, `object`, `oldObject` or `variables.<name>`. |
 | `path` | Optional: the value, from the root of the object (a CRD) or from the variable (a policy). Field names separated by dots, `[]` for a list's items and `[*]` for a map's values, such as `spec.ports[].config`. Left out, it is the root. |
-| `type` | The type to assume, written as below. |
+| `type` | The type to assume, in CEL's names, written as in [Types](#types). |
 | `kind` | Instead of `type`: a kind, by its apiVersion and kind, such as `apps/v1 Deployment` or a CustomResourceDefinition's `example.com/v1 Limit`. A built-in kind always works; a CustomResourceDefinition's kind is looked up among the CRDs of the workspace, which is the experimental feature `crd-typed-policies`. |
+| `schema` | Instead of `type`: an OpenAPI v3 schema, written as a CustomResourceDefinition's `openAPIV3Schema` ([Schemas](#schemas)). |
+| `go` | Instead of `type`: a Go type, as `<folder of its package, relative to this .cellens>#<TypeName>` ([Go types](#go-types)). |
 
-An entry has exactly one of `type` and `kind`, and one entry per value.
+An entry has exactly one of `type`, `kind`, `schema` and `go`, and one entry
+per value. The same entries, with a schema and a Go type:
+
+```yaml
+types:
+  - file: policy.yaml
+    document: ValidatingAdmissionPolicy replica-limit
+    variable: params
+    schema:                      # as in a CRD's openAPIV3Schema
+      type: object
+      properties:
+        maxReplicas: {type: integer, minimum: 0}
+        team: {type: string}
+  - file: other.yaml
+    document: ValidatingAdmissionPolicy quota
+    variable: params
+    go: ./api/v1#QuotaSpec       # a Go type: folder of its package, relative to this .cellens, and its name
+```
+
+### Which to choose
+
+- `kind` when the value is an object of a kind that exists: a built-in kind,
+  or a custom resource whose CustomResourceDefinition is in the workspace. The
+  type follows the kind.
+- `go` when the value's type is a Go struct of the repository, as in a
+  kubebuilder or controller-gen project: the type follows the Go code, with
+  its doc comments as descriptions in hover.
+- `schema` when there is no such Go type, or the value is shaped by YAML only,
+  and a schema like a CRD's says it best: with descriptions, formats and the
+  `x-kubernetes-` extensions.
+- `type` for a short type that needs nothing more, such as `int` or
+  `{name: string, replicas: int}`; it is also what the editor's one-line box
+  takes.
 
 ## Types
 
@@ -69,13 +103,110 @@ Quote every type that has a struct in it, such as `type: "list({port: int})"`:
 unquoted, YAML reads `{...}` as a mapping, and a `{` after `(` makes the whole
 file unreadable.
 
+## Schemas
+
+`schema` takes a mapping written as the `openAPIV3Schema` of a
+CustomResourceDefinition's version: `type`, `properties`, `items`,
+`additionalProperties`, `required`, `enum`, `format`, `nullable`,
+`description`, `x-kubernetes-int-or-string`,
+`x-kubernetes-preserve-unknown-fields`, `x-kubernetes-list-type`,
+`x-kubernetes-list-map-keys`, `x-kubernetes-map-type`,
+`x-kubernetes-embedded-resource`, the size limits (`maxLength`, `maxItems`,
+`maxProperties` and their minimums) and every other keyword such a schema
+has. It is the schema of the value, not of a whole resource: the rules the API
+server has only for the root of a CRD's schema (an object, not nullable, a
+restricted `metadata`) do not apply.
+
+The engine checks it as the API server checks a CRD when it is created
+(k8s.io/apiextensions-apiserver's own validation): it must be structural,
+every keyword must be one a CRD's schema has, with a value of the right kind,
+and what the API server refuses, such as `type: int`, `uniqueItems: true` or
+`$ref`, is refused. A value YAML reads as a timestamp, such as
+`description: 2020-01-01`, is the string written, as the API server reads it.
+A few more things are refused here: `x-kubernetes-validations`, since a schema
+here gives a value a type, and its rules belong in the CustomResourceDefinition
+or the policy that reads it; and YAML aliases (`*name`) and merge keys (`<<`)
+in a schema, which cel-lens never follows, so a schema that contains itself,
+or aliases that multiply, cannot hold the editor: write the schema out.
+
+The value then gets the type the API server gives a CRD's schema in CEL, with
+the API server's own conversion, so a `schema:` entry and a CRD with that
+schema behave the same: an `x-kubernetes-int-or-string` value is `dyn`, a
+`date-time` string a `timestamp`, and `x-kubernetes-preserve-unknown-fields` is
+ignored: CEL sees only the fields the schema declares. Hover shows the
+descriptions.
+
+## Go types
+
+`go` names a Go type as `<folder>#<TypeName>`: the folder of its package,
+relative to the `.cellens` file's folder and slash-separated (`./api/v1`,
+`../api/v1`, or `.` for the folder itself), then `#` and the type's name. The
+folder must be in the workspace folder the `.cellens` is in (or, for a
+`.cellens` outside every workspace folder, its own folder).
+
+The engine reads the `.go` files of that folder, but its `_test.go` files, with
+Go's parser: nothing is built, no `go` command runs, and no other package is
+read, so the code need not compile. Of those files it reads the ones a
+`go build` on the machine the editor runs on compiles, as their names
+(`_linux.go`, `_arm64.go`) and `//go:build` lines say (`//go:build ignore`
+leaves a file out), and of those the ones of the package most of them are of,
+so a `package main` tool beside the types is left out. It reads at most 20000
+files of at most 1 MiB each, through the workspace folder, so a symbolic link
+cannot lead out of it. It turns the type into a schema as controller-gen does
+for a CustomResourceDefinition, but for pointers:
+
+- a field's `json` tag gives its name; a field without one is left out, as
+  controller-gen refuses it, and so are `json:"-"` and unexported fields;
+- `json:",inline"`, or a tag without a name, puts the fields of the field's
+  struct in the struct's own, as for an embedded `metav1.TypeMeta`;
+- `omitempty` and `omitzero` make a field optional, and so does a pointer,
+  where controller-gen needs `omitempty` or `+optional`; every other field is
+  required;
+- `string`, `bool`, the integers (`int32` and `int64` with their formats), the
+  floats, `[]byte` (a `byte` string), slices, arrays, maps with string keys,
+  structs and the named types of the package map to their schemas, and a type
+  that contains itself stops there. A named type is written out each time a
+  field uses it; past 20000 schemas (core/v1 PodTemplateSpec has about
+  1400), as when each type uses the next twice, the field where that happens
+  and those after it are `dyn`, which CEL does not check, and the entry's
+  warning names that field by its Go name and its path, such as
+  `go: T25.B, at a.a.b of T0: the schema grows past 20000 schemas here, ...`;
+- of other packages, `metav1.ObjectMeta` is an object, `metav1.Time` and
+  `metav1.MicroTime` `date-time` strings, `metav1.Duration` a string,
+  `intstr.IntOrString` and `resource.Quantity` `x-kubernetes-int-or-string`,
+  as controller-gen writes them, and the other types of
+  `k8s.io/apimachinery/pkg/apis/meta/v1` and `k8s.io/api/core/v1` the engine
+  has schemas for (those its built-in kinds are made of, and
+  `metav1.LabelSelector`, `metav1.Condition` and `metav1.ListMeta`) have
+  those schemas;
+- doc comments are the descriptions, without their marker lines.
+
+Markers such as `+kubebuilder:validation:Maximum` or `+optional` are not read:
+the type says what CEL can read, not every rule of the values.
+
+A field the engine cannot turn into a schema, such as one of a type from
+another package, a map with non-string keys, an interface or a func, is left
+out, and the entry gets a warning that names the field and why, such as
+`go: QuotaSpec.Owner: type other.Owner is from package example.com/other,
+which cel-lens does not read: the field is left out`; the rest of the struct
+is used. A Go type that cannot be read at all, as its folder does not exist or
+its package declares no such type, is a warning on the entry, which then types
+nothing. The engine reads the files again when one of the folder's `.go` files
+changed, was added or went: the documents show it when they are next checked,
+such as after an edit.
+
 ## Problems
 
 The reader reports every problem in a `.cellens` with its line and column, and
 says what to do: an unknown key or one written twice, a missing `file` or
-`document`, a file outside the folder, both or neither of `type` and `kind`,
-`version` on a policy or `variable` on a CustomResourceDefinition, a type that
-doesn't parse, two entries for the same value. A type written over several
+`document`, a file outside the folder, more than one or none of `type`,
+`kind`, `schema` and `go`, `version` on a policy or `variable` on a
+CustomResourceDefinition, a type that doesn't parse, a `go` that is not
+`<folder>#<TypeName>`, two entries for the same value. A schema the API server
+would refuse as a CustomResourceDefinition's schema is a problem at the line
+of the offending key, in the API server's words, after the path in the schema:
+`schema: properties[max].type: Unsupported value: "int": supported values:
+"array", "boolean", "integer", "number", "object", "string"`. A type written over several
 lines, or with escapes, gets its problem on the value, with the character
 counted in the message. An entry with a problem is left out; the others still
 count.
@@ -95,7 +226,8 @@ where the value is `dyn` without it:
 
 - In a CustomResourceDefinition, an `x-kubernetes-int-or-string` value, the
   one value a rule sees as `dyn`. The API server validates such a value as an
-  integer or a string, so give it `int` (or `uint`) or `string`: another type,
+  integer or a string, so give it `int` (or `uint`) or `string`, or a schema
+  or Go type that is an integer or a string without a format: another type,
   even `timestamp` or `bytes`, is a problem on the entry. A value that keeps
   unknown fields with `x-kubernetes-preserve-unknown-fields` is no `dyn` to a
   rule: the API server lets a rule read only the fields its schema declares,
@@ -133,23 +265,30 @@ server does not type check a MutatingAdmissionPolicy, so there its entries
 give completion and hover only.
 
 Completion after a typed value offers its fields, and hover shows the type as
-the entry writes it, with `Typed from .cellens, line 5`. The line above each
-rule (inline info, see [engine.md](engine.md)) shows each value the rule reads
-that an entry types, `self.spec.port: int · Edit | Remove`, each `dyn` value an
-entry could type, `self.spec.port: dyn · Give it a type`, and a value whose
-entry does not apply, `params: dyn · Edit | Remove`; their commands carry the
-entry's `file`, `document`, `version` or `variable` and `path`, and the
-`.cellens` the entry is in or would go in. Hover on a policy
+the entry writes it, a schema's or a Go type's as a `type:` entry would write
+it (`{maxReplicas: int, team: string}`), with where it comes from: `Typed from
+.cellens, line 5`, `Typed from the schema at .cellens, line 8`, or `Typed from
+the Go type QuotaSpec in api/v1/quota_types.go:12, named in .cellens, line 5`.
+The line above each rule (inline info, see [engine.md](engine.md)) shows each
+value the rule reads that an entry types, `self.spec.port: int · Edit |
+Remove` (a schema or a Go type in the same short form as a `type:`, such as
+`params: {maxReplicas, team} · Edit`), each `dyn` value an entry could type,
+`self.spec.port: dyn · Give it a type`, and a value whose entry does not
+apply, `params: dyn · Edit | Remove`; their commands carry the entry's `file`,
+`document`, `version` or `variable` and `path`, its `type`, `kind`, `schema`
+or `go`, and the `.cellens` the entry is in or would go in. Hover on a policy
 variable whose expression reads an assumed value still shows the type it has
 without the `.cellens`.
 
 The problems of a `.cellens` are diagnostics on that file, at the entry's
-line: those of the format above as errors, and as warnings an entry whose
+line: those of the format above as errors, a schema the API server would
+refuse included, and as warnings an entry whose
 file does not exist or is no regular file, whose file has no such document,
 version, variable or value, whose type an `x-kubernetes-int-or-string` value
 cannot have, whose value Kubernetes already types or no rule
-may read, whose kind is not found, or whose value another `.cellens` already
-types: the one first by its path gives the type. A symbolic link to a
+may read, whose kind or Go type is not found, whose Go type leaves a field
+out, or whose value another `.cellens` already types: the one first by its
+path gives the type. A symbolic link to a
 `.cellens` is not followed, and a file over 1 MiB is not read.
 
 ## Writing entries from the editor
@@ -173,14 +312,18 @@ folder), starting with the comment
 A `.cellens` below a hidden folder or `node_modules` counts only while it is
 open, as the search for them skips those folders. The entry is refused,
 before any edit, when it would get a problem: a type that does not parse, or
-that the value cannot have, a value Kubernetes already types, a file or
-document that does not exist, a kind that is not found.
+that the value cannot have, a schema the API server would refuse, a value
+Kubernetes already types, a file or document that does not exist, a kind or a
+Go type that is not found. A Go type that leaves a field out is not refused:
+its entry gets the warning. A Go type's folder is written relative to the
+`.cellens` the entry goes in, which may not be the one the command named.
 
 The edit changes only the entry's own lines, so every other line, comments
 included, stays as a person wrote it:
 
-- A changed type replaces the `type:` or `kind:` of the entry, keeping a
-  comment after it on its line, and the comments around and inside the entry.
+- A changed type replaces the `type:`, `kind:`, `schema:` or `go:` of the
+  entry, keeping a comment after it on its line, and the comments around and
+  inside the entry but those inside a schema it replaces.
 - A new entry goes before the first entry that sorts after it, by `file`, then
   `document`, then `version` or `variable`, then `path`, and after the last one
   otherwise, above the comment lines directly above the entry it goes before,
@@ -189,7 +332,11 @@ included, stays as a person wrote it:
   entries.
 - Types are written in the form above (`{name: string, replicas: int}`), quoted
   when they have a struct or a comma in them, or anything YAML would read
-  otherwise, such as `true`.
+  otherwise, such as `true`. A Go type is written plain, as
+  `go: ./api/v1#QuotaSpec`. A schema is written as a block of YAML below
+  `schema:`, indented two more than the key, with its keys in the order the
+  command gives them, each value plain unless YAML would read it otherwise
+  (`"true"`), and a value of several lines as a `|-` block.
 - Removing a type removes the entry with its comments: the comment lines
   directly above its `-`, those inside it, and those right after it, indented
   more than its `-`. A comment after a blank line is not the entry's above

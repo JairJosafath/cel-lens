@@ -134,3 +134,52 @@ func docs(t reflect.Type) map[string]string {
 func ObjectMeta() *spec.Schema {
 	return schemaOf(reflect.TypeFor[metav1.ObjectMeta]())
 }
+
+// GoType returns the schema of the Go type name of the package with the
+// import path pkgPath, built as those of the built-in kinds are, when it is a
+// type a built-in kind is made of, such as ResourceRequirements of
+// k8s.io/api/core/v1, or one of the common types of
+// k8s.io/apimachinery/pkg/apis/meta/v1: TypeMeta, ObjectMeta, ListMeta,
+// LabelSelector and Condition, and those they are made of. It reports false
+// for any other type. Each call looks for the type afresh, among a few
+// thousand: callers that ask often keep what it returns.
+func GoType(pkgPath, name string) (*spec.Schema, bool) {
+	roots := []reflect.Type{
+		reflect.TypeFor[metav1.TypeMeta](), reflect.TypeFor[metav1.ObjectMeta](), reflect.TypeFor[metav1.ListMeta](),
+		reflect.TypeFor[metav1.LabelSelector](), reflect.TypeFor[metav1.Condition](),
+	}
+	for _, t := range scheme.Scheme.AllKnownTypes() {
+		roots = append(roots, t)
+	}
+	seen := map[reflect.Type]bool{}
+	for _, r := range roots {
+		if t, ok := findType(r, pkgPath, name, seen); ok {
+			return schemaOf(t), true
+		}
+	}
+	return nil, false
+}
+
+// findType looks for the named type name of package pkgPath among t and the
+// types t is made of that seen does not have yet, and adds those to seen.
+func findType(t reflect.Type, pkgPath, name string, seen map[reflect.Type]bool) (reflect.Type, bool) {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array || t.Kind() == reflect.Map {
+		t = t.Elem()
+	}
+	if seen[t] {
+		return nil, false
+	}
+	seen[t] = true
+	if t.Name() == name && t.PkgPath() == pkgPath {
+		return t, true
+	}
+	if t.Kind() != reflect.Struct {
+		return nil, false
+	}
+	for f := range t.Fields() {
+		if found, ok := findType(f.Type, pkgPath, name, seen); ok {
+			return found, true
+		}
+	}
+	return nil, false
+}

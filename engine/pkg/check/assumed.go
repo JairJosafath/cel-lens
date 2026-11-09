@@ -49,6 +49,11 @@ type AssumedType struct {
 	// 12; messages name them as .cellens:12.
 	Source string
 	Line   int
+	// From says, for hover, what gives the type, in place of Source and
+	// Line, when that is more than the entry there: such as "the schema at
+	// .cellens, line 14" or "the Go type QuotaSpec in
+	// api/v1/quota_types.go:12, named in .cellens, line 10"; empty otherwise.
+	From string
 }
 
 // origin is where t is written, as messages name it: .cellens:12.

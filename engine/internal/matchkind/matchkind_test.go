@@ -178,3 +178,33 @@ func TestKinds(t *testing.T) {
 		t.Errorf("Kinds(37) lists apps/v1 Deployment at %d, want it with the description %q", i, want)
 	}
 }
+
+// TestGoType checks that the types built-in kinds are made of, and the
+// common types of meta/v1, have their schemas by import path and name (#15).
+func TestGoType(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		pkg, name string
+		ok        bool
+		field     string
+	}{
+		{"k8s.io/api/core/v1", "ResourceRequirements", true, "limits"},
+		{"k8s.io/api/core/v1", "Container", true, "image"},
+		{"k8s.io/apimachinery/pkg/apis/meta/v1", "Condition", true, "lastTransitionTime"},
+		{"k8s.io/apimachinery/pkg/apis/meta/v1", "LabelSelector", true, "matchLabels"},
+		{"k8s.io/api/core/v1", "NoSuchType", false, ""},
+		{"example.com/api/v1", "Container", false, ""},
+	} {
+		s, ok := matchkind.GoType(tc.pkg, tc.name)
+		if ok != tc.ok {
+			t.Errorf("GoType(%s, %s) = %v, want %v", tc.pkg, tc.name, ok, tc.ok)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if _, has := s.Properties[tc.field]; !has {
+			t.Errorf("GoType(%s, %s) has no property %s", tc.pkg, tc.name, tc.field)
+		}
+	}
+}

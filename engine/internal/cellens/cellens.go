@@ -16,11 +16,17 @@
 //	    variable: params
 //	    type: "{name: string, replicas: int}"
 //
-// Parse reads a file and reports every problem in it with its line; nothing
+// A type is written in one of four forms: type: in CEL's names, kind: a
+// Kubernetes kind, schema: an OpenAPI v3 schema as a CustomResourceDefinition's
+// openAPIV3Schema, or go: a Go type of the workspace.
+//
+// Parse reads a file and reports every problem in it with its line, and
+// CheckSchemas adds what the API server would refuse in its schemas; nothing
 // here reads the workspace or knows which values are dyn.
 package cellens
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +38,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/JairJosafath/cel-lens/engine/internal/crdschema"
 )
 
 // FileName is the name of the files this package reads.
@@ -41,7 +49,7 @@ const FileName = ".cellens"
 const CRDKind = "CustomResourceDefinition"
 
 // Entry is one entry of a .cellens file: a value and the type to assume for it.
-// Exactly one of Type and Kind is set.
+// Exactly one of Type, Kind, Schema and Go is set.
 type Entry struct {
 	// Line is the entry's line in the file, from 1.
 	Line int
@@ -62,6 +70,42 @@ type Entry struct {
 	Type *Type
 	// Kind is the kind written with kind:, a built-in kind or a CRD's.
 	Kind *KindRef
+	// Schema is the type written with schema:, as a CRD's openAPIV3Schema.
+	Schema *Schema
+	// Go is the Go type named with go:.
+	Go *GoType
+}
+
+// Schema is a type written as an OpenAPI v3 schema, as the openAPIV3Schema of
+// a CustomResourceDefinition's version is.
+type Schema struct {
+	// Line is the line of the key schema: in the file, from 1; 0 for a schema
+	// ReadSchema read.
+	Line int
+	// Value is the schema in the form YAML decodes a CRD's schema to: maps,
+	// lists and JSON values.
+	Value map[string]any
+	// key and node are the key schema: and the schema as written, in its
+	// order, with its lines; key is nil for a schema ReadSchema read.
+	key, node *yaml.Node
+}
+
+// GoType names a Go type, as go: does: the folder of its package and its name.
+type GoType struct {
+	// Folder is the package's folder, slash-separated and relative to the
+	// .cellens file's folder, cleaned: ".", "api/v1" or "../api/v1".
+	Folder string
+	// Name is the type's name in its package.
+	Name string
+}
+
+// String writes g as go: takes it, such as ./api/v1#QuotaSpec.
+func (g *GoType) String() string {
+	folder := g.Folder
+	if folder != "." && !strings.HasPrefix(folder, "../") && folder != ".." {
+		folder = "./" + folder
+	}
+	return folder + "#" + g.Name
 }
 
 // Document names one document of a YAML file by its kind and metadata.name.
@@ -177,30 +221,37 @@ func (e Entry) valueKey() string {
 	return strings.Join([]string{e.File, e.Document.Kind, e.Document.Name, e.Version, e.Variable, e.Path.String()}, "\x00")
 }
 
-var entryKeys = []string{"file", "document", "version", "variable", "path", "type", "kind"}
+var entryKeys = []string{"file", "document", "version", "variable", "path", "type", "kind", "schema", "go"}
+
+// typeKeys are the keys of an entry that give the type, one of which it has.
+var typeKeys = []string{"type", "kind", "schema", "go"}
 
 func parseEntry(item *yaml.Node, src [][]rune) (Entry, []Problem) {
 	e := Entry{Line: item.Line}
 	if item.Kind != yaml.MappingNode {
-		return e, []Problem{at(item, "an entry is a mapping with file, document, and type or kind")}
+		return e, []Problem{at(item, "an entry is a mapping with file, document, and type, kind, schema or go")}
 	}
 	fields := map[string]*yaml.Node{}
+	keys := map[string]*yaml.Node{}
 	firstAt := map[string]int{}
 	var problems []Problem
 	for i := 0; i+1 < len(item.Content); i += 2 {
 		key, value := item.Content[i], item.Content[i+1]
 		switch {
 		case !slices.Contains(entryKeys, key.Value):
-			problems = append(problems, at(key, fmt.Sprintf("unknown key %q: an entry has file, document, version, variable, path, and type or kind", key.Value)))
+			problems = append(problems, at(key, fmt.Sprintf("unknown key %q: an entry has file, document, version, variable, path, and type, kind, schema or go", key.Value)))
 		case firstAt[key.Value] > 0:
 			problems = append(problems, twice(key, firstAt[key.Value]))
 		case key.Value == "type" && value.Kind == yaml.MappingNode:
-			problems = append(problems, at(value, `quote the type: YAML reads {...} as a mapping, so write type: "{name: string}"`))
-		case value.Kind != yaml.ScalarNode:
+			problems = append(problems, at(value, `quote the type: YAML reads {...} as a mapping, so write type: "{name: string}", or write the type as an OpenAPI schema with schema:`))
+		case key.Value == "schema" && value.Kind != yaml.MappingNode:
+			problems = append(problems, at(value, "schema is a mapping, written as a CustomResourceDefinition's openAPIV3Schema, such as type: object with properties below it"))
+		case key.Value != "schema" && value.Kind != yaml.ScalarNode:
 			problems = append(problems, at(value, key.Value+" is a single value"))
 		default:
 			firstAt[key.Value] = key.Line
 			fields[key.Value] = value
+			keys[key.Value] = key
 		}
 	}
 	if len(problems) > 0 {
@@ -208,7 +259,7 @@ func parseEntry(item *yaml.Node, src [][]rune) (Entry, []Problem) {
 	}
 	problems = append(problems, e.readTarget(item, fields)...)
 	problems = append(problems, e.readValue(item, fields)...)
-	problems = append(problems, e.readType(item, fields, src)...)
+	problems = append(problems, e.readType(item, fields, keys, src)...)
 	return e, problems
 }
 
@@ -283,30 +334,142 @@ func (e *Entry) readValue(item *yaml.Node, fields map[string]*yaml.Node) []Probl
 	return problems
 }
 
-// readType reads type or kind.
-func (e *Entry) readType(item *yaml.Node, fields map[string]*yaml.Node, src [][]rune) []Problem {
-	typ, hasType := fields["type"]
-	kind, hasKind := fields["kind"]
+// readType reads type, kind, schema or go.
+func (e *Entry) readType(item *yaml.Node, fields, keys map[string]*yaml.Node, src [][]rune) []Problem {
+	var given []string // in the order written
+	for _, k := range typeKeys {
+		if _, ok := fields[k]; ok {
+			given = append(given, k)
+		}
+	}
+	slices.SortFunc(given, func(a, b string) int { return keys[a].Line - keys[b].Line })
 	switch {
-	case hasType && hasKind:
-		return []Problem{at(kind, "the entry has both type and kind: keep one")}
-	case hasType:
-		t, err := ParseType(typ.Value)
+	case len(given) == 0:
+		return []Problem{at(item, `the entry has no type: give the value one with type, such as "{name: string}", kind, such as "apps/v1 Deployment", schema, an OpenAPI schema, or go, such as ./api/v1#QuotaSpec`)}
+	case len(given) > 1:
+		second := given[1]
+		n := fields[second]
+		if second == "schema" {
+			n = keys[second]
+		}
+		return []Problem{at(n, fmt.Sprintf("the entry has both %s and %s: keep one", given[0], second))}
+	}
+	switch n := fields[given[0]]; given[0] {
+	case "type":
+		t, err := ParseType(n.Value)
 		var te *TypeError
 		if errors.As(err, &te) {
-			return []Problem{typeProblem(typ, te, src)}
+			return []Problem{typeProblem(n, te, src)}
 		}
 		e.Type = t
-	case hasKind:
-		k, err := ParseKind(kind.Value)
+	case "kind":
+		k, err := ParseKind(n.Value)
 		if err != nil {
-			return []Problem{at(kind, err.Error())}
+			return []Problem{at(n, err.Error())}
 		}
 		e.Kind = k
-	default:
-		return []Problem{at(item, `the entry has neither type nor kind: give the value a type, such as "{name: string}", or a kind, such as "apps/v1 Deployment"`)}
+	case "schema":
+		value, problems := crdschema.Read(n)
+		if len(problems) > 0 {
+			return schemaProblems(keys["schema"], n, problems)
+		}
+		e.Schema = &Schema{Line: keys["schema"].Line, Value: value, key: keys["schema"], node: n}
+	case "go":
+		g, err := ParseGo(n.Value)
+		if err != nil {
+			return []Problem{at(n, err.Error())}
+		}
+		e.Go = g
 	}
 	return nil
+}
+
+// schemaProblems are the problems of the schema node, the value of key, as
+// .cellens problems: each at the key of the schema it is about, or at key
+// for one about the schema as a whole.
+func schemaProblems(key, node *yaml.Node, problems []crdschema.Problem) []Problem {
+	out := make([]Problem, len(problems))
+	for i, p := range problems {
+		n := p.Node
+		if n == node {
+			n = key
+		}
+		out[i] = at(n, "schema: "+p.Message)
+	}
+	return out
+}
+
+// CheckSchemas returns entries without those whose schema the API server
+// would refuse as a CustomResourceDefinition's schema, and a problem for each
+// thing it would refuse, in its words, at the key of the schema it is about
+// (see package crdschema): Parse reads a schema, but does not apply the API
+// server's rules, which may compile CEL and so take ctx. The entries without a
+// schema are kept as they are.
+func CheckSchemas(ctx context.Context, entries []Entry) ([]Entry, []Problem) {
+	var out []Entry
+	var problems []Problem
+	for _, e := range entries {
+		if e.Schema != nil && e.Schema.key != nil {
+			if ps := crdschema.Validate(ctx, e.Schema.node, e.Schema.Value); len(ps) > 0 {
+				problems = append(problems, schemaProblems(e.Schema.key, e.Schema.node, ps)...)
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out, problems
+}
+
+// ReadSchema reads a schema written as JSON, or YAML, as schema: takes it, and
+// checks it as CheckSchemas does. It returns the schema, or what is wrong with
+// it, each problem saying where in the schema; ctx is as for CheckSchemas.
+func ReadSchema(ctx context.Context, data []byte) (*Schema, []string) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, []string{"the schema is not JSON: " + strings.TrimPrefix(err.Error(), "yaml: ")}
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, []string{"a schema is an object, as a CustomResourceDefinition's openAPIV3Schema, such as {\"type\": \"object\", \"properties\": {...}}"}
+	}
+	n := doc.Content[0]
+	value, problems := crdschema.Read(n)
+	if len(problems) == 0 {
+		problems = crdschema.Validate(ctx, n, value)
+	}
+	if len(problems) > 0 {
+		msgs := make([]string, len(problems))
+		for i, p := range problems {
+			msgs[i] = p.Message
+		}
+		return nil, msgs
+	}
+	return &Schema{Value: value, node: n}, nil
+}
+
+// goName is a Go identifier.
+var goName = regexp.MustCompile(`^[\p{L}_][\p{L}\p{Nd}_]*$`)
+
+// ParseGo reads a Go type as go: takes it: the folder of its package, relative
+// to the .cellens file's folder and slash-separated, then # and its name, such
+// as ./api/v1#QuotaSpec. The folder may lead above the .cellens file's folder,
+// as ../api/v1; whether it stays in the workspace is for the reader of the
+// package to say.
+func ParseGo(s string) (*GoType, error) {
+	folder, name, ok := strings.Cut(strings.TrimSpace(s), "#")
+	bad := func(why string) error {
+		return fmt.Errorf("go %q: %s: write the folder of the type's package, relative to this .cellens, then # and the type's name, such as ./api/v1#QuotaSpec", s, why)
+	}
+	switch {
+	case !ok:
+		return nil, bad("# and the type's name are missing")
+	case folder == "":
+		return nil, bad("the folder is missing")
+	case !goName.MatchString(name):
+		return nil, bad(fmt.Sprintf("%q is no Go type name", name))
+	case strings.Contains(folder, "\\") || driveLetter.MatchString(folder) || path.IsAbs(folder):
+		return nil, bad("the folder is not relative and slash-separated")
+	}
+	return &GoType{Folder: path.Clean(folder), Name: name}, nil
 }
 
 // ParseKind reads a kind as kind: takes it: its apiVersion and kind,

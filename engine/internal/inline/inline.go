@@ -76,8 +76,9 @@ type Value struct {
 	// (Target.Variable, such as variables.max) or its first name (self).
 	Name string
 	// Type is the type a .cellens entry gives it, as the entry writes it,
-	// such as "{name: string}" or "apps/v1 Deployment"; empty for a value that
-	// is dyn.
+	// such as "{name: string}" or "apps/v1 Deployment", or for a schema or a
+	// Go type as a type: entry would write it, dyn included where the schema
+	// leaves one; empty for a value that is dyn.
 	Type string
 	// Entry reports whether a .cellens entry names the value, so Edit and
 	// Remove act on it: always when Type is set, and for a value still dyn
@@ -107,10 +108,13 @@ type Target struct {
 	Path string `json:"path,omitempty"`
 	// Value is the value as the expression reads it, for the client to show.
 	Value string `json:"value"`
-	// Type or Kind is what the entry gives the value now; neither is set for a
-	// value that is dyn.
-	Type string `json:"type,omitempty"`
-	Kind string `json:"kind,omitempty"`
+	// Type, Kind, Schema or Go is what the entry gives the value now, as
+	// the entry writes it, a schema as a JSON object; none is set for a value
+	// no entry names.
+	Type   string         `json:"type,omitempty"`
+	Kind   string         `json:"kind,omitempty"`
+	Schema map[string]any `json:"schema,omitempty"`
+	Go     string         `json:"go,omitempty"`
 }
 
 // Part is one part of a line: its text and the command it runs when
@@ -277,16 +281,52 @@ func shorterNames(name, root string) []string {
 // shortType writes the type t, as a .cellens entry or the API server writes
 // it, in at most limit characters: a struct by its field names, as
 // {name, replicas}, with "…" for those that do not fit, and anything longer
-// cut with "…". A text that is no .cellens type, such as a kind, is only cut.
+// cut with "…". A struct with a type no entry writes in it, such as dyn, is
+// written by its field names too; another text that is no .cellens type, such
+// as a kind, is only cut.
 func shortType(t string, limit int) string {
 	parsed, err := cellens.ParseType(t)
 	if err != nil {
+		if names, ok := topFields(t); ok {
+			return fieldNames(names, limit)
+		}
 		return cut(t, limit)
 	}
 	if parsed.Name == "struct" {
-		return fieldNames(parsed.Fields, limit)
+		names := make([]string, len(parsed.Fields))
+		for i, f := range parsed.Fields {
+			names[i] = f.Name
+		}
+		return fieldNames(names, limit)
 	}
 	return cut(brief(parsed), limit)
+}
+
+// topFields returns the field names of t, a struct written as {name: T, ...}
+// whose types need not parse, and whether t is one.
+func topFields(t string) ([]string, bool) {
+	if !strings.HasPrefix(t, "{") || !strings.HasSuffix(t, "}") {
+		return nil, false
+	}
+	inner := t[1 : len(t)-1]
+	var names []string
+	depth, start := 0, 0
+	for i, r := range inner + "," {
+		switch {
+		case r == '{' || r == '(':
+			depth++
+		case r == '}' || r == ')':
+			depth--
+		case r == ',' && depth == 0:
+			name, _, ok := strings.Cut(inner[start:min(i, len(inner))], ":")
+			if name = strings.TrimSpace(name); !ok || name == "" {
+				return nil, strings.TrimSpace(inner) == "" && names == nil
+			}
+			names = append(names, name)
+			start = i + 1
+		}
+	}
+	return names, depth == 0
 }
 
 // brief writes t with each struct in it by its field names.
@@ -306,13 +346,9 @@ func brief(t *cellens.Type) string {
 	return t.Name
 }
 
-// fieldNames writes the names of fields as {a, b}, in at most limit
-// characters: {a, …} when not all fit.
-func fieldNames(fields []cellens.Field, limit int) string {
-	names := make([]string, len(fields))
-	for i, f := range fields {
-		names[i] = f.Name
-	}
+// fieldNames writes names, those of a struct's fields, as {a, b}, in at most
+// limit characters: {a, …} when not all fit.
+func fieldNames(names []string, limit int) string {
 	all := "{" + strings.Join(names, ", ") + "}"
 	if utf8.RuneCountInString(all) <= limit {
 		return all

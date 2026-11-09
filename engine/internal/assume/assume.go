@@ -12,6 +12,7 @@ package assume
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 )
 
@@ -178,6 +179,44 @@ func TypeName(s map[string]any) string {
 	default:
 		return t
 	}
+}
+
+// maxTextDepth is how many levels of objects TypeText writes with their
+// fields; deeper ones are object.
+const maxTextDepth = 3
+
+// TypeText writes the type of a value of schema s as a .cellens type: entry
+// writes one, such as {name: string, ports: list({port: int})}: an object
+// with properties as its fields, in name order, a map as map(string, T), a
+// list as list(T), and the names TypeName gives otherwise, dyn included. An
+// object more than three levels down is written object.
+func TypeText(s map[string]any) string { return typeText(s, 0) }
+
+func typeText(s map[string]any, depth int) string {
+	if IsDyn(s) {
+		return "dyn"
+	}
+	switch t, _ := s["type"].(string); t {
+	case "array":
+		items, _ := s["items"].(map[string]any)
+		return "list(" + typeText(items, depth) + ")"
+	case "object":
+		values, _ := s["additionalProperties"].(map[string]any)
+		props, _ := s["properties"].(map[string]any)
+		switch {
+		case values != nil && props == nil:
+			return "map(string, " + typeText(values, depth) + ")"
+		case depth >= maxTextDepth:
+			return "object"
+		}
+		fields := make([]string, 0, len(props))
+		for _, name := range slices.Sorted(maps.Keys(props)) {
+			p, _ := props[name].(map[string]any)
+			fields = append(fields, name+": "+typeText(p, depth+1))
+		}
+		return "{" + strings.Join(fields, ", ") + "}"
+	}
+	return TypeName(s)
 }
 
 // keptKeys are the keys of a dyn value's schema that At keeps when it places a

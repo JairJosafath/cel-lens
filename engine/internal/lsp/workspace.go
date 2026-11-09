@@ -523,7 +523,7 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		case isLens(c.URI) && c.Type == fileDeleted:
 			lensChanged = ss.dropLens(key) || lensChanged
 		case isLens(c.URI):
-			lensChanged = ss.readLens(c.URI) || lensChanged
+			lensChanged = ss.readLens(ctx, c.URI) || lensChanged
 		case c.Type == fileDeleted:
 			lensChanged = ss.dropLensesUnder(key) || lensChanged
 		case c.Type == fileCreated:

@@ -83,17 +83,39 @@ type valueArgs struct {
 	Value string  `json:"value"`
 	Type  *string `json:"type"`
 	Kind  *string `json:"kind"`
+	// Schema is an OpenAPI schema, a JSON object; null counts as left out.
+	Schema json.RawMessage `json:"schema"`
+	// Go names a Go type as go: does, relative to the folder of Cellens.
+	Go *string `json:"go"`
 }
 
 // namesValue reports whether a names a value, not only a type.
 func (a valueArgs) namesValue() bool { return a.Cellens != "" || a.File != "" || a.Document != "" }
 
+// hasSchema reports whether a gives a schema.
+func (a valueArgs) hasSchema() bool {
+	return len(a.Schema) > 0 && !bytes.Equal(bytes.TrimSpace(a.Schema), []byte("null"))
+}
+
+// types are the keys of a that give a type: type, kind, schema and go, in
+// that order.
+func (a valueArgs) types() []string {
+	var out []string
+	for i, given := range []bool{a.Type != nil, a.Kind != nil, a.hasSchema(), a.Go != nil} {
+		if given {
+			out = append(out, []string{"type", "kind", "schema", "go"}[i])
+		}
+	}
+	return out
+}
+
 func invalid(msg string) error { return &rpcError{jsonrpc.CodeInvalidParams, msg} }
 
 func failed(msg string) error { return &rpcError{jsonrpc.CodeRequestFailed, msg} }
 
-// executeCommand runs a command of workspace/executeCommand. typeChoices and
-// checkType answer at once. setType and removeType send the client a
+// executeCommand runs a command of workspace/executeCommand. checkType
+// answers at once, and typeChoices once the Go types of the workspace are
+// listed, in the background (see listGoTypes). setType and removeType send the client a
 // workspace/applyEdit and answer when it answers (see answered): nothing is
 // written to disk but by the client.
 func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, reply func(any, error) error) error {
@@ -114,7 +136,10 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 	var err error
 	switch p.Command {
 	case commandTypeChoices:
-		return reply(ss.typeChoices(), nil)
+		if !msg.IsNotification() {
+			ss.listGoTypes(ctx, msg.ID, ss.typeChoices())
+		}
+		return nil
 	case commandCheckType:
 		problem, err := ss.checkType(ctx, a)
 		return reply(problem, err)
@@ -154,10 +179,22 @@ func stability(version string) string {
 	return "ga"
 }
 
+// typeChoices is the answer of typeChoices: the kinds a kind: entry can name
+// and the Go types a go: entry can name.
+type typeChoices struct {
+	KubernetesVersion string       `json:"kubernetesVersion"`
+	BuiltIn           []typeChoice `json:"builtIn"`
+	CRDs              []typeChoice `json:"crds"`
+	CRDsNote          string       `json:"crdsNote,omitempty"`
+	GoTypes           []goChoice   `json:"goTypes"`
+	GoTypesNote       string       `json:"goTypesNote,omitempty"`
+}
+
 // typeChoices are the kinds a kind: entry can name: the built-in kinds of the
 // Kubernetes version in use, and the kinds of the CRDs the session knows,
-// which it reads only while crd-typed-policies is on.
-func (ss *session) typeChoices() any {
+// which it reads only while crd-typed-policies is on. listGoTypes adds the Go
+// types.
+func (ss *session) typeChoices() typeChoices {
 	builtIn := []typeChoice{}
 	for _, k := range matchkind.Kinds(ss.kube.Minor()) {
 		gv := k.GVK.GroupVersion().String()
@@ -176,12 +213,7 @@ func (ss *session) typeChoices() any {
 	} else {
 		note = fmt.Sprintf("cel-lens reads the CustomResourceDefinitions of the workspace, and a kind: entry can name one, only with the experimental feature %s on", feature.CRDTypedPolicies)
 	}
-	return struct {
-		KubernetesVersion string       `json:"kubernetesVersion"`
-		BuiltIn           []typeChoice `json:"builtIn"`
-		CRDs              []typeChoice `json:"crds"`
-		CRDsNote          string       `json:"crdsNote,omitempty"`
-	}{ss.kube.String(), builtIn, crds, note}
+	return typeChoices{KubernetesVersion: ss.kube.String(), BuiltIn: builtIn, CRDs: crds, CRDsNote: note, GoTypes: []goChoice{}}
 }
 
 // oneLine is the first sentence of the first line of desc, or fallback when
@@ -204,18 +236,47 @@ type typeProblem struct {
 	// Unicode code points; 0, and left out, for a type that is wrong as a
 	// whole for the value.
 	Column int `json:"column,omitempty"`
+	// Warning is true for what an entry would get on its line while it
+	// still applies: the fields a Go type leaves out.
+	Warning bool `json:"warning,omitempty"`
 }
 
-// checkType says what is wrong with the type of a, or nil when nothing is: a
-// type that does not parse, and, when a names a value, what its entry would
-// get on the .cellens.
+// checkType says what is wrong with the type, schema or Go type of a, or nil
+// when nothing is: a type that does not parse, a schema the API server would
+// refuse, a Go type that cannot be read, and, when a names a value, what its
+// entry would get on the .cellens. A Go type is read relative to the
+// .cellens of a, which is all a needs to name to check it alone.
 func (ss *session) checkType(ctx context.Context, a valueArgs) (*typeProblem, error) {
-	if a.Type == nil {
-		return nil, invalid(commandCheckType + ` takes {type: "..."}, and the keys of a value to check the type for it`)
+	types := slices.DeleteFunc(a.types(), func(k string) bool { return k == "kind" })
+	switch {
+	case len(types) == 0:
+		return nil, invalid(commandCheckType + ` takes {type: "..."}, {schema: {...}} or {go: "./api/v1#QuotaSpec"}, and the keys of a value to check the type for it`)
+	case len(types) > 1:
+		return nil, invalid(fmt.Sprintf("%s: give one of type, schema and go, not %s", commandCheckType, strings.Join(types, " and ")))
 	}
-	t, err := cellens.ParseType(*a.Type)
-	if te := (*cellens.TypeError)(nil); errors.As(err, &te) {
-		return &typeProblem{Message: te.Message, Column: te.Offset + 1}, nil
+	var e cellens.Entry
+	switch types[0] {
+	case "type":
+		t, err := cellens.ParseType(*a.Type)
+		if te := (*cellens.TypeError)(nil); errors.As(err, &te) {
+			return &typeProblem{Message: te.Message, Column: te.Offset + 1}, nil
+		}
+		e.Type = t
+	case "schema":
+		s, problems := cellens.ReadSchema(ctx, a.Schema)
+		if len(problems) > 0 {
+			return &typeProblem{Message: "schema: " + strings.Join(problems, "; schema: ")}, nil
+		}
+		e.Schema = s
+	case "go":
+		g, err := cellens.ParseGo(*a.Go)
+		if p := parseProblem(err); p != nil {
+			return p, nil
+		}
+		e.Go = g
+		if a.File == "" && a.Document == "" {
+			return ss.checkGo(ctx, a, g)
+		}
 	}
 	if !a.namesValue() {
 		return nil, nil
@@ -224,21 +285,64 @@ func (ss *session) checkType(ctx context.Context, a valueArgs) (*typeProblem, er
 	if err != nil {
 		return nil, err
 	}
-	v.entry.Type = t
-	msg, err := ss.valueProblem(ctx, v)
-	if err != nil || msg == "" {
+	v.setType(e)
+	msg, notes, err := ss.valueProblem(ctx, v)
+	switch {
+	case err != nil || msg != "":
+		if err != nil {
+			return nil, err
+		}
+		return &typeProblem{Message: msg}, nil
+	case len(notes) > 0:
+		return &typeProblem{Message: strings.Join(notes, "; "), Warning: true}, nil
+	}
+	return nil, nil
+}
+
+// parseProblem is the problem of a type that err says does not parse, nil
+// for none.
+func parseProblem(err error) *typeProblem {
+	if err == nil {
+		return nil
+	}
+	return &typeProblem{Message: err.Error()}
+}
+
+// checkGo says what is wrong with the Go type g, relative to the .cellens of
+// a, alone: why it cannot be read, or, as a warning, the fields it leaves out.
+func (ss *session) checkGo(ctx context.Context, a valueArgs, g *cellens.GoType) (*typeProblem, error) {
+	key, err := ss.lensArg(commandCheckType, a.Cellens)
+	if err != nil {
 		return nil, err
 	}
-	return &typeProblem{Message: msg}, nil
+	typ, msg := ss.goType(ctx, key, g)
+	switch {
+	case msg != "":
+		return &typeProblem{Message: msg}, nil
+	case len(typ.Problems) > 0:
+		return &typeProblem{Message: "go: " + strings.Join(typ.Problems, "; go: "), Warning: true}, nil
+	}
+	return nil, nil
 }
 
 // valueRef is a value a command names: the key of the .cellens file its keys
 // are relative to, the key of the YAML file it is in, its entry, and its name
-// for messages.
+// for messages; for an entry with a Go type, also the key of that type's
+// folder, which in writes relative to the .cellens it goes in.
 type valueRef struct {
 	lens, file string
 	entry      cellens.Entry
 	name       string
+	goFolder   string
+}
+
+// setType gives the entry of v the type of e, one of its type, kind, schema
+// and Go type.
+func (v *valueRef) setType(e cellens.Entry) {
+	v.entry.Type, v.entry.Kind, v.entry.Schema, v.entry.Go = e.Type, e.Kind, e.Schema, e.Go
+	if e.Go != nil {
+		v.goFolder = path.Join(path.Dir(v.lens), e.Go.Folder)
+	}
 }
 
 // readValue reads the value a names, as an entry of the .cellens it names
@@ -246,11 +350,9 @@ type valueRef struct {
 // the editor has open, so a command reads and edits files of the workspace
 // only.
 func (ss *session) readValue(command string, a valueArgs) (valueRef, error) {
-	if u, err := url.Parse(a.Cellens); err != nil || u.Scheme != "file" || !isLens(a.Cellens) {
-		return valueRef{}, invalid(fmt.Sprintf("%s: cellens %q is not the file URI of a .cellens, such as file:///repo/.cellens", command, a.Cellens))
-	}
-	if !ss.inWorkspace(crdKey(a.Cellens)) {
-		return valueRef{}, invalid(fmt.Sprintf("%s: cellens %q is in no workspace folder and beside no file open in the editor", command, a.Cellens))
+	key, err := ss.lensArg(command, a.Cellens)
+	if err != nil {
+		return valueRef{}, err
 	}
 	e, problems := cellens.ReadValue(map[string]string{"file": a.File, "document": a.Document, "version": a.Version, "variable": a.Variable, "path": a.Path})
 	if len(problems) > 0 {
@@ -260,7 +362,6 @@ func (ss *session) readValue(command string, a valueArgs) (valueRef, error) {
 		}
 		return valueRef{}, invalid(command + ": " + strings.Join(msgs, "; "))
 	}
-	key := crdKey(a.Cellens)
 	v := valueRef{lens: key, file: path.Join(path.Dir(key), e.File), entry: e, name: a.Value}
 	if v.name == "" {
 		v.name = strings.TrimSuffix(e.Variable+"."+e.Path.String(), ".")
@@ -269,6 +370,19 @@ func (ss *session) readValue(command string, a valueArgs) (valueRef, error) {
 		}
 	}
 	return v, nil
+}
+
+// lensArg returns the key of the .cellens file with the URI uri, the
+// argument cellens of command, which must be in a workspace folder or beside
+// a file the editor has open.
+func (ss *session) lensArg(command, uri string) (string, error) {
+	if u, err := url.Parse(uri); err != nil || u.Scheme != "file" || !isLens(uri) {
+		return "", invalid(fmt.Sprintf("%s: cellens %q is not the file URI of a .cellens, such as file:///repo/.cellens", command, uri))
+	}
+	if !ss.inWorkspace(crdKey(uri)) {
+		return "", invalid(fmt.Sprintf("%s: cellens %q is in no workspace folder and beside no file open in the editor", command, uri))
+	}
+	return crdKey(uri), nil
 }
 
 // inWorkspace reports whether the .cellens file with the key is below a
@@ -295,37 +409,48 @@ func (ss *session) inWorkspace(key string) bool {
 }
 
 // in returns the entry of v as the .cellens file with the key writes it: its
-// file relative to that file's folder, which is at or above it.
+// file relative to that file's folder, which is at or above it, and its Go
+// type's folder relative to that folder.
 func (v valueRef) in(lensKey string) cellens.Entry {
 	e := v.entry
 	dir := path.Dir(lensKey)
-	if dir != "/" {
-		dir += "/"
+	prefix := dir
+	if prefix != "/" {
+		prefix += "/"
 	}
-	e.File = strings.TrimPrefix(v.file, dir)
+	e.File = strings.TrimPrefix(v.file, prefix)
+	if e.Go != nil {
+		g := *e.Go
+		if rel, err := filepath.Rel(filepath.FromSlash(dir), filepath.FromSlash(v.goFolder)); err == nil {
+			g.Folder = filepath.ToSlash(rel)
+		}
+		e.Go = &g
+	}
 	return e
 }
 
 // valueProblem says why the entry of v would not apply to its value, as the
 // warning on its line of the .cellens would: its file cannot be read or has
-// no such document or value, the value is not dyn, its kind is not known, or
-// its type does not fit the value. It is "" when the entry would apply.
-func (ss *session) valueProblem(ctx context.Context, v valueRef) (string, error) {
+// no such document or value, the value is not dyn, its kind or Go type is not
+// known, or its type does not fit the value. It is "" when the entry would
+// apply. notes are what the entry would get on its line all the same: the
+// fields its Go type leaves out.
+func (ss *session) valueProblem(ctx context.Context, v valueRef) (msg string, notes []string, err error) {
 	l := &lens{key: v.lens}
 	e := v.in(v.lens)
 	data, err := ss.targetText(v.file)
 	if err != nil {
-		return fmt.Sprintf("file %s %s", e.File, unreadable(err)), nil
+		return fmt.Sprintf("file %s %s", e.File, unreadable(err)), nil, nil
 	}
-	t, msg := ss.assumedType(l, e)
+	t, notes, msg := ss.assumedType(ctx, l, e)
 	if msg != "" {
-		return msg, nil
+		return msg, nil, nil
 	}
 	problems, err := check.AssumedTypeProblems(ctx, data, check.WithAssumedTypes([]check.AssumedType{t}), check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds))
 	if err != nil || len(problems) == 0 {
-		return "", err
+		return "", notes, err
 	}
-	return problems[0].Message, nil
+	return problems[0].Message, nil, nil
 }
 
 // workspaceEdit is a workspace/applyEdit a command asks of the client: its
@@ -343,11 +468,12 @@ type workspaceEdit struct {
 // of the workspace folder, or of the file's own folder outside every one. It
 // refuses what an entry would get a problem for.
 func (ss *session) setType(ctx context.Context, a valueArgs) (*workspaceEdit, error) {
+	types := a.types()
 	switch {
-	case a.Type != nil && a.Kind != nil:
-		return nil, invalid(commandSetType + ": give type or kind, not both")
-	case a.Type == nil && a.Kind == nil:
-		return nil, invalid(commandSetType + `: give the type, such as type: "{name: string}", or the kind, such as kind: "apps/v1 Deployment"`)
+	case len(types) > 1:
+		return nil, invalid(fmt.Sprintf("%s: give one of type, kind, schema and go, not %s", commandSetType, strings.Join(types, " and ")))
+	case len(types) == 0:
+		return nil, invalid(commandSetType + `: give the type, such as type: "{name: string}", the kind, such as kind: "apps/v1 Deployment", the schema, such as schema: {"type": "object", "properties": {...}}, or the Go type, such as go: "./api/v1#QuotaSpec"`)
 	case !ss.edits.apply:
 		return nil, failed("the editor cannot apply an edit for cel-lens (workspace/applyEdit), which is how cel-lens writes .cellens: write the entry by hand")
 	}
@@ -355,20 +481,28 @@ func (ss *session) setType(ctx context.Context, a valueArgs) (*workspaceEdit, er
 	if err != nil {
 		return nil, err
 	}
-	if a.Type != nil {
-		t, err := cellens.ParseType(*a.Type)
-		if err != nil {
+	var e cellens.Entry
+	switch types[0] {
+	case "type":
+		if e.Type, err = cellens.ParseType(*a.Type); err != nil {
 			return nil, invalid(commandSetType + ": type: " + err.Error())
 		}
-		v.entry.Type = t
-	} else {
-		k, err := cellens.ParseKind(*a.Kind)
-		if err != nil {
+	case "kind":
+		if e.Kind, err = cellens.ParseKind(*a.Kind); err != nil {
 			return nil, invalid(commandSetType + ": " + err.Error())
 		}
-		v.entry.Kind = k
+	case "schema":
+		var problems []string
+		if e.Schema, problems = cellens.ReadSchema(ctx, a.Schema); len(problems) > 0 {
+			return nil, invalid(commandSetType + ": schema: " + strings.Join(problems, "; schema: "))
+		}
+	case "go":
+		if e.Go, err = cellens.ParseGo(*a.Go); err != nil {
+			return nil, invalid(commandSetType + ": " + err.Error())
+		}
 	}
-	if msg, err := ss.valueProblem(ctx, v); err != nil || msg != "" {
+	v.setType(e)
+	if msg, _, err := ss.valueProblem(ctx, v); err != nil || msg != "" {
 		if err != nil {
 			return nil, err
 		}
@@ -463,6 +597,9 @@ func (ss *session) cancel(params json.RawMessage) error {
 	}
 	if !decode(params, &p) {
 		return nil
+	}
+	if done, err := ss.cancelGoList(p.ID); done || err != nil {
+		return err
 	}
 	for reqID, pe := range ss.pending {
 		if !pe.cancelled && bytes.Equal(bytes.TrimSpace(pe.id), bytes.TrimSpace(p.ID)) {

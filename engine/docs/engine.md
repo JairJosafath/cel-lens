@@ -55,7 +55,8 @@ number also brings the total under its budget). No fix is offered when there is 
 - **Types from `.cellens`**: the server finds the `.cellens` files of the
   workspace folders, and follows them as they are opened, edited, saved,
   created or deleted (it registers a watcher for `**/.cellens`). A `dyn` value
-  an entry names gets the entry's type in diagnostics, hover and completion;
+  an entry names gets the entry's type, a CEL type, a kind, an OpenAPI schema
+  or a Go type of the workspace, in diagnostics, hover and completion;
   a problem only that type shows is a warning that names the `.cellens` file and
   line, and the problems of a `.cellens` are published on it. See
   [cellens.md](cellens.md).
@@ -113,8 +114,10 @@ number also brings the total under its budget). No fix is offered when there is 
   "document": "CustomResourceDefinition widgets.example.com", "version": "v1",
   "path": "spec.port", "value": "self.spec.port"}`, with `variable` (`params`,
   `object`, `oldObject` or `variables.<name>`) in place of `version` for a
-  policy, no `path` for the root, and the entry's `type` or `kind` when an
-  entry names the value. `cellens` is the URI of the `.cellens` the entry is in
+  policy, no `path` for the root, and the entry's `type`, `kind`, `schema` (a
+  JSON object) or `go` when an entry names the value. A schema or a Go type
+  shows on the line as the type a `type:` entry would write, `params:
+  {maxReplicas, team} · Edit`. `cellens` is the URI of the `.cellens` the entry is in
   or would go in: the nearest one the server knows in a folder at or above the
   file, else the one at the root of the file's workspace folder, else the one
   beside the file; `file` is relative to its folder. A document that is no
@@ -154,11 +157,12 @@ type or kind chosen. Each takes one argument, an object with these keys:
 | `cellens` | The URI of the `.cellens` file that `file` is relative to |
 | `file`, `document`, `version` or `variable`, `path` | The value, as an entry of that `.cellens` names it ([cellens.md](cellens.md)); a `path` left out, or `""`, is the root |
 | `value` | The value's CEL, such as `self.spec.config`, for messages and the edit's label |
-| `type` or `kind` | The type or kind to check or set; `null` counts as left out |
+| `type`, `kind`, `schema` or `go` | The type to check or set: a type as `type:` writes it, a kind, an OpenAPI schema as a JSON object, or a Go type as `go:` writes it, relative to the folder of `cellens`; `null` counts as left out |
 
 - `cel-lens.typeChoices` takes no argument and returns the kinds a `kind:`
   entry can name, each with a one-line description: the first sentence of its
-  schema's description, or where it comes from when it has none.
+  schema's description, or where it comes from when it has none; and the Go
+  types a `go:` entry can name.
 
   ```json
   {
@@ -167,7 +171,8 @@ type or kind chosen. Each takes one argument, an object with these keys:
                  "description": "Deployment enables declarative updates for Pods and ReplicaSets.",
                  "stability": "ga"}],
     "crds": [{"apiVersion": "example.com/v1", "group": "example.com", "version": "v1", "kind": "Widget",
-              "description": "A widget."}]
+              "description": "A widget."}],
+    "goTypes": [{"folder": "file:///repo/api/v1", "name": "QuotaSpec", "doc": "QuotaSpec is the quota of a team."}]
   }
   ```
 
@@ -183,18 +188,45 @@ type or kind chosen. Each takes one argument, an object with these keys:
   CustomResourceDefinitions the server knows define, from the workspace scan
   and the open documents, sorted the same way. The server reads the workspace's
   CRDs, and a `kind:` entry can name one, only while `crd-typed-policies` is
-  on: off, `crds` is `[]` and `crdsNote` says why.
-- `cel-lens.checkType` with `type` returns `null` when the type is fine. One
-  that does not parse gets the message and the character it is at, from 1, in
-  Unicode code points: `{"type": "{name: strin}"}` returns
+  on: off, `crds` is `[]` and `crdsNote` says why. `goTypes` lists the
+  exported struct types with a field with a `json` tag, and no type
+  parameters, that the `.go` files of the workspace folders declare, but
+  `_test.go` files, sorted by folder and name: `folder` is the file URI of the
+  package's folder, which a `go:` entry names relative to its `.cellens`, and
+  `doc` the first sentence of the type's doc comment, `""` without one. The
+  walk runs in the background, so the server answers other requests
+  meanwhile, and `typeChoices` answers when it ends (a request while it runs
+  waits for the same walk; `$/cancelRequest` answers one `RequestCancelled`).
+  It skips hidden folders, `node_modules`, `vendor` and `testdata`, and the
+  files a `go build` on this machine leaves out, looks at most at 20000 `.go`
+  files of at most 1 MiB each, read through the workspace folder, parses only
+  those with a `json` tag in them, and reads again only those whose size or
+  time changed since the last walk; it runs whatever the experimental
+  features. It lists at most 1000 types, the first by folder and name, and
+  then `goTypesNote` says so.
+- `cel-lens.checkType` with `type`, `schema` or `go`, one of them, returns
+  `null` when the type is fine. A type that does not parse gets the message
+  and the character it is at, from 1, in Unicode code points:
+  `{"type": "{name: strin}"}` returns
   `{"message": "unknown type \"strin\": use string, int, ...", "column": 8}`.
+  A schema the API server would refuse gets what it refuses, in its words,
+  after the place in the schema:
+  `{"message": "schema: properties[max].type: Unsupported value: \"int\": ..."}`.
+  A Go type is read relative to the folder of `cellens`, which is all the
+  argument needs to name besides it; one that cannot be read gets why, and one
+  that leaves fields out gets them with `"warning": true`, as the entry would
+  still apply: `{"message": "go: QuotaSpec.Owner: type other.Owner is from
+  package example.com/other, which cel-lens does not read: the field is left
+  out", "warning": true}`.
   When the argument also names a value, the type is checked for it as an
   entry would be, and what the entry would get on its line of the `.cellens`
   comes back without `column`, such as
   `{"message": "spec.config is x-kubernetes-int-or-string, an int or a string to a rule: give it int or string"}`.
   A `kind` in the argument is not checked.
-- `cel-lens.setType` with a value and its `type` or `kind`, not both, writes
-  its entry, and returns `{"cellens": "file:///repo/.cellens", "change": "added"}`:
+- `cel-lens.setType` with a value and one of `type`, `kind`, `schema` and
+  `go` writes its entry, a schema as a block of YAML below `schema:`, a Go
+  type's folder relative to the `.cellens` the entry goes in, and returns
+  `{"cellens": "file:///repo/.cellens", "change": "added"}`:
   the `.cellens` it changed and how, `added`, `replaced` or `created`. Which
   `.cellens` the entry goes in, and how its text changes, is in
   [cellens.md](cellens.md#writing-entries-from-the-editor).
@@ -222,9 +254,11 @@ the edit is applied. A client that cancels a waiting command
 (`$/cancelRequest`) gets `RequestCancelled` (-32800), and its answer to the
 edit is then ignored. The `cellens` of the argument must be in a workspace
 folder, or in the folder of a file the editor has open; another is refused. A wrong argument, or an entry that would get
-a problem on the `.cellens`, such as a type that does not parse or a struct for
-an `x-kubernetes-int-or-string` value, is refused before any edit with
-`InvalidParams` (-32602) and the reason.
+a problem on the `.cellens`, such as a type that does not parse, a schema the
+API server would refuse, a Go type that cannot be read or a struct for an
+`x-kubernetes-int-or-string` value, is refused before any edit with
+`InvalidParams` (-32602) and the reason. A Go type that leaves fields out is
+written: its entry gets the warning.
 
 ## Typed `object` and `oldObject`
 

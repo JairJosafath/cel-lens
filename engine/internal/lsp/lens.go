@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,8 +50,9 @@ type lens struct {
 func isLens(uri string) bool { return path.Base(crdKey(uri)) == cellens.FileName }
 
 // putLens records the .cellens file at uri with its text, open when the
-// editor has it, and reports whether its text changed.
-func (ss *session) putLens(uri string, text []byte, open bool) bool {
+// editor has it, and reports whether its text changed. Its schemas are
+// checked as the API server checks a CRD's, with ctx.
+func (ss *session) putLens(ctx context.Context, uri string, text []byte, open bool) bool {
 	key := crdKey(uri)
 	ss.touchLens(key)
 	if l, ok := ss.lenses[key]; ok && bytes.Equal(l.text, text) {
@@ -62,10 +64,16 @@ func (ss *session) putLens(uri string, text []byte, open bool) bool {
 	}
 	ss.lensChanges++
 	entries, problems := cellens.Parse(text)
+	entries, refused := cellens.CheckSchemas(ctx, entries)
+	if len(refused) > 0 {
+		problems = append(problems, refused...)
+		slices.SortStableFunc(problems, func(a, b cellens.Problem) int { return cmp.Or(a.Line-b.Line, a.Column-b.Column) })
+	}
 	if ss.lenses == nil {
 		ss.lenses = map[string]*lens{}
 	}
 	ss.lenses[key] = &lens{uri: uri, key: key, text: text, entries: entries, problems: problems, open: open}
+	ss.pruneGoReads()
 	return true
 }
 
@@ -73,7 +81,7 @@ func (ss *session) putLens(uri string, text []byte, open bool) bool {
 // when it cannot be read or is no regular file: a symbolic link is not
 // followed, as the search does not follow one. It reports whether that
 // changed it.
-func (ss *session) readLens(uri string) bool {
+func (ss *session) readLens(ctx context.Context, uri string) bool {
 	p, ok := diskPath(uri)
 	if !ok {
 		return ss.dropLens(crdKey(uri))
@@ -85,7 +93,7 @@ func (ss *session) readLens(uri string) bool {
 	if err != nil {
 		return ss.dropLens(crdKey(uri))
 	}
-	return ss.putLens(uri, data, false)
+	return ss.putLens(ctx, uri, data, false)
 }
 
 // dropLens forgets the .cellens file with the key and reports whether the
@@ -97,6 +105,7 @@ func (ss *session) dropLens(key string) bool {
 		ss.lensChanges++
 	}
 	delete(ss.lenses, key)
+	ss.pruneGoReads()
 	return had
 }
 
@@ -309,7 +318,7 @@ func (ss *session) finishLensSearch(ctx context.Context, found lensFound) error 
 		if l := ss.lenses[key]; sc.touched[key] || l != nil && l.open {
 			continue
 		}
-		changed = ss.putLens(pathURI(filepath.FromSlash(key)), data, false) || changed
+		changed = ss.putLens(ctx, pathURI(filepath.FromSlash(key)), data, false) || changed
 	}
 	queued := slices.DeleteFunc(ss.lensQueued, func(f string) bool { return !isDir(f) })
 	batches, ended := ss.lensQueuedBatches, sc.batches
@@ -338,8 +347,8 @@ func (l *lens) target(e cellens.Entry) string { return path.Join(path.Dir(l.key)
 
 // assumedFor returns the types the .cellens files assume in the document at
 // uri, in the order of the files' keys and then of their entries. An entry
-// whose kind is not found is left out.
-func (ss *session) assumedFor(uri string) []check.AssumedType {
+// whose kind or Go type is not found is left out.
+func (ss *session) assumedFor(ctx context.Context, uri string) []check.AssumedType {
 	key := crdKey(uri)
 	var out []check.AssumedType
 	for _, l := range ss.sortedLenses() {
@@ -350,7 +359,7 @@ func (ss *session) assumedFor(uri string) []check.AssumedType {
 			if _, _, dup := ss.earlier(l, e); dup {
 				continue
 			}
-			if t, msg := ss.assumedType(l, e); msg == "" {
+			if t, _, msg := ss.assumedType(ctx, l, e); msg == "" {
 				out = append(out, t)
 			}
 		}
@@ -392,9 +401,11 @@ func (ss *session) sortedLenses() []*lens {
 }
 
 // assumedType is the entry e of l as check takes it, or why it is not: its
-// kind is no built-in kind and no CustomResourceDefinition the session knows.
-func (ss *session) assumedType(l *lens, e cellens.Entry) (check.AssumedType, string) {
-	t := check.AssumedType{
+// kind is no built-in kind and no CustomResourceDefinition the session knows,
+// or its Go type cannot be read. notes are what the entry gets on its line
+// all the same: the fields its Go type leaves out.
+func (ss *session) assumedType(ctx context.Context, l *lens, e cellens.Entry) (t check.AssumedType, notes []string, msg string) {
+	t = check.AssumedType{
 		Kind: e.Document.Kind, Name: e.Document.Name, Version: e.Version, Variable: e.Variable,
 		Source: ss.lensSource(l), Line: e.Line,
 	}
@@ -408,23 +419,39 @@ func (ss *session) assumedType(l *lens, e cellens.Entry) (check.AssumedType, str
 			t.Path = append(t.Path, assume.Values)
 		}
 	}
-	if e.Type != nil {
+	switch {
+	case e.Type != nil:
 		t.Schema, t.Type = e.Type.Schema(), e.Type.String()
-		return t, ""
+		return t, nil, ""
+	case e.Schema != nil:
+		t.Schema, t.Type = e.Schema.Value, assume.TypeText(e.Schema.Value)
+		t.From = fmt.Sprintf("the schema at %s, line %d", t.Source, e.Schema.Line)
+		return t, nil, ""
+	case e.Go != nil:
+		typ, msg := ss.goType(ctx, l.key, e.Go)
+		if msg != "" {
+			return t, nil, msg
+		}
+		t.Schema, t.Type = typ.Schema, assume.TypeText(typ.Schema)
+		t.From = fmt.Sprintf("the Go type %s in %s:%d, named in %s, line %d", e.Go.Name, typ.File, typ.Line, t.Source, e.Line)
+		for _, p := range typ.Problems {
+			notes = append(notes, "go: "+p)
+		}
+		return t, notes, ""
 	}
 	t.Type = e.Kind.APIVersion + " " + e.Kind.Kind
 	if s, ok := ss.builtInKind(e.Kind.APIVersion, e.Kind.Kind); ok {
 		t.Schema = s
-		return t, ""
+		return t, nil, ""
 	}
 	if !ss.features.Has(feature.CRDTypedPolicies) {
-		return t, fmt.Sprintf("kind %s is no built-in kind, and typing from a CustomResourceDefinition of the workspace is the experimental feature %s, which is off", t.Type, feature.CRDTypedPolicies)
+		return t, nil, fmt.Sprintf("kind %s is no built-in kind, and typing from a CustomResourceDefinition of the workspace is the experimental feature %s, which is off", t.Type, feature.CRDTypedPolicies)
 	}
 	if s, ok := ss.crds.Schema(e.Kind.APIVersion, e.Kind.Kind); ok {
 		t.Schema = s
-		return t, ""
+		return t, nil, ""
 	}
-	return t, fmt.Sprintf("kind %s is no built-in kind, and no CustomResourceDefinition of the workspace defines it", t.Type)
+	return t, nil, fmt.Sprintf("kind %s is no built-in kind, and no CustomResourceDefinition of the workspace defines it", t.Type)
 }
 
 // builtInKind returns the schema of the built-in kind, as schemaMap makes it,
@@ -525,7 +552,10 @@ func (ss *session) entryDiagnostics(ctx context.Context, l *lens, lines [][]rune
 			warn(e, fmt.Sprintf("a second type for this value: %s:%d gives it one: keep one", ss.lensSource(o), oe.Line))
 			continue
 		}
-		t, msg := ss.assumedType(l, e)
+		t, notes, msg := ss.assumedType(ctx, l, e)
+		for _, n := range notes {
+			warn(e, n)
+		}
 		if msg != "" {
 			warn(e, msg)
 			continue

@@ -139,13 +139,20 @@ func (ss *session) inlineValues(uri string, values []assist.Value) []inline.Valu
 		case ok:
 			iv.Entry = true
 			iv.Target.Cellens, iv.Target.File = l.uri, e.File
-			if e.Kind != nil {
+			switch {
+			case e.Kind != nil:
 				iv.Target.Kind = e.Kind.APIVersion + " " + e.Kind.Kind
-			} else {
+			case e.Type != nil:
 				iv.Target.Type = e.Type.String()
+			case e.Schema != nil:
+				iv.Target.Schema = e.Schema.Value
+			case e.Go != nil:
+				iv.Target.Go = e.Go.String()
 			}
-			if v.Type != "" {
-				iv.Type = iv.Target.Kind + iv.Target.Type
+			// A schema or Go type shows as the type a type: entry would
+			// write, which v.Type has; the others as the entry writes them.
+			if t := iv.Target.Kind + iv.Target.Type; t != "" && v.Type != "" {
+				iv.Type = t
 			}
 		case v.Type != "":
 			continue // typed by no entry the session knows

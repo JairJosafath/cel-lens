@@ -99,6 +99,16 @@ type session struct {
 	// kinds are the schemas of the built-in kinds kind: entries name, made
 	// once, by apiVersion and kind; nil for one that is no built-in kind.
 	kinds map[string]map[string]any
+	// goReads are the Go types go: entries name, as last read, by the key of
+	// their folder, # and their name (see goType).
+	goReads map[string]goRead
+	// goList is the listing of the workspace's Go types in progress for
+	// typeChoices, nil when none; goFiles is what the last one read of each
+	// .go file, which the next reuses while the file stays as it was.
+	goList  *goListing
+	goFiles map[string]goFile
+	// goLister lists the Go types for typeChoices; nil means goChoices.
+	goLister func(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, known map[string]goFile) goListed
 	// lensShown are the diagnostics last sent for each .cellens file, by URI.
 	lensShown map[string][]map[string]any
 	// inlineOff is true while the client's setting inlineInfo is false: the
@@ -213,6 +223,7 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	defer stop()
 	defer ss.stopScan()
 	defer ss.stopLensSearch()
+	defer func() { _ = ss.stopGoList(false) }() // the connection is closing
 	for {
 		var r readResult
 		var scanned <-chan *check.CRDs
@@ -222,6 +233,10 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 		var lensesFound <-chan lensFound
 		if ss.lensSearch != nil {
 			lensesFound = ss.lensSearch.done
+		}
+		var goListed <-chan goListed
+		if ss.goList != nil {
+			goListed = ss.goList.done
 		}
 		select {
 		case <-ctx.Done():
@@ -233,6 +248,11 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 			continue
 		case found := <-scanned:
 			if err := ss.endScan(ctx, found); err != nil {
+				return err
+			}
+			continue
+		case listed := <-goListed:
+			if err := ss.finishGoList(listed); err != nil {
 				return err
 			}
 			continue
@@ -329,6 +349,9 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		ss.shutdown = true
 		ss.stopScan()
 		ss.stopLensSearch()
+		if err := ss.stopGoList(true); err != nil {
+			return err
+		}
 		if err := ss.dropPending(); err != nil {
 			return err
 		}
@@ -580,7 +603,7 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 	}
 	d := p.TextDocument
 	if isLens(d.URI) {
-		ss.putLens(d.URI, []byte(d.Text), true)
+		ss.putLens(ctx, d.URI, []byte(d.Text), true)
 		ss.lenses[crdKey(d.URI)].version = d.Version
 		return ss.publishAll(ctx, "")
 	}
@@ -604,7 +627,7 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 	uri := p.TextDocument.URI
 	text := []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
 	if isLens(uri) {
-		changed := ss.putLens(uri, text, true)
+		changed := ss.putLens(ctx, uri, text, true)
 		ss.lenses[crdKey(uri)].version = p.TextDocument.Version
 		if !changed {
 			return nil
@@ -631,7 +654,7 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 		if l := ss.lenses[crdKey(uri)]; l != nil {
 			l.open = false
 		}
-		if !ss.readLens(uri) {
+		if !ss.readLens(ctx, uri) {
 			return nil
 		}
 		return ss.publishAll(ctx, "")
@@ -668,7 +691,7 @@ func (ss *session) publish(ctx context.Context, uri string) error {
 	doc := ss.docs[uri]
 	doc.checked = false // the Kubernetes version may have changed
 	doc.codeLenses = nil
-	if assumed := ss.assumedFor(uri); !reflect.DeepEqual(assumed, doc.assumed) {
+	if assumed := ss.assumedFor(ctx, uri); !reflect.DeepEqual(assumed, doc.assumed) {
 		doc.assumed, doc.parsed = assumed, nil
 	}
 	diags, err := ss.diagnostics(ctx, uri, doc)

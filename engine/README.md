@@ -124,10 +124,11 @@ Experimental:
 How the types of `object`, `params` and the policy variables are found is in
 [docs/type-sources.md](docs/type-sources.md), which also reports how many
 expressions of real policies still get `dyn`, and why.
-Where a value stays `dyn`, a `.cellens` file can say what it looks like
-([docs/cellens.md](docs/cellens.md)); the language server then checks, completes
-and explains it with that type, and what only that type shows is a warning that
-names the `.cellens` line.
+Where a value stays `dyn`, a `.cellens` file can say what it looks like, as a
+CEL type, a Kubernetes kind, an OpenAPI schema written as a CRD's, or a Go type
+of the repository ([docs/cellens.md](docs/cellens.md)); the language server then
+checks, completes and explains it with that type, and what only that type shows
+is a warning that names the `.cellens` line.
 
 ## Other editors
 

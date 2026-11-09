@@ -29,7 +29,11 @@ func WithAssumedTypes(types []check.AssumedType) Option {
 // placed from t, and its root with the name of t.
 func marked(t check.AssumedType) map[string]any {
 	s := assume.Copy(t.Schema)
-	mark(s, fmt.Sprintf("Typed from %s, line %d: Kubernetes leaves this value dyn.", t.Source, t.Line))
+	from := t.From
+	if from == "" {
+		from = fmt.Sprintf("%s, line %d", t.Source, t.Line)
+	}
+	mark(s, "Typed from "+from+": Kubernetes leaves this value dyn.")
 	if t.Type != "" {
 		s[assumedTypeKey] = t.Type
 	}

@@ -118,6 +118,23 @@ func TestLine(t *testing.T) {
 			want: []part{{"self: Widget.spec.template · compiles", show}, {"self.…config: {name, …} · Edit", inline.EditType}, {"Remove", inline.RemoveType}},
 		},
 		{
+			// #15: a schema or Go type is written as a type: entry writes one,
+			// with dyn where the schema leaves one, and shown the same way.
+			name: "schema with a dyn field",
+			rule: inline.Rule{Subject: "object", SubjectType: "dyn", Values: []inline.Value{{Name: "params", Type: "{maxReplicas: int, surge: dyn, team: string}", Entry: true, Target: inline.Target{Variable: "params", Go: "./api/v1#QuotaSpec"}}}},
+			want: []part{{"object: dyn · compiles", show}, {"params: {maxReplicas, surge, team} · Edit", inline.EditType}, {"Remove", inline.RemoveType}},
+		},
+		{
+			name: "schema with a dyn field, cut to fit",
+			rule: inline.Rule{Subject: "self", SubjectType: "Widget.spec.template", Values: []inline.Value{{Name: "self.spec.config", Type: "{name: dyn, replicas: {a: dyn}, labels: map(string, dyn), annotations: map(string, string)}", Entry: true}}},
+			want: []part{{"self: Widget.spec.template · compiles", show}, {"self.…config: {name, …} · Edit", inline.EditType}, {"Remove", inline.RemoveType}},
+		},
+		{
+			name: "scalar schema",
+			rule: inline.Rule{Subject: "self", SubjectType: "W", Values: []inline.Value{{Name: "self.port", Type: "int", Entry: true}}},
+			want: []part{{"self: W · compiles", show}, {"self.port: int · Edit", inline.EditType}, {"Remove", inline.RemoveType}},
+		},
+		{
 			name: "long subject type",
 			rule: inline.Rule{Subject: "object", SubjectType: "apps/v1 Deployment, apps/v1 StatefulSet, apps/v1 DaemonSet", Problems: 2},
 			want: []part{{"object: apps/v1 Deployment, apps/v1 StatefulSet… · 2 problems", show}},

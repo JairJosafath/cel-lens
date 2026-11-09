@@ -3,6 +3,7 @@ package cellens
 import (
 	"bytes"
 	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/JairJosafath/cel-lens/engine/internal/crdschema"
 )
 
 // Header is the comment that starts a .cellens file cel-lens writes into an
@@ -46,9 +49,11 @@ func Has(text []byte, e Entry) bool {
 	return err == nil && l.find(e) >= 0
 }
 
-// Set returns the edit that gives the value e names the type or kind of e in
-// text, the text of a .cellens file. When text has an entry for the value, only
-// the key type or kind of that entry changes. Otherwise e is added as a new
+// Set returns the edit that gives the value e names the type of e (its type,
+// kind, schema or Go type) in text, the text of a .cellens file. When text has
+// an entry for the value, only the key type, kind, schema or go of that entry
+// changes, and its value: a schema is written as a block of YAML below its
+// key, in the order of its keys, quoting only what YAML would read otherwise. Otherwise e is added as a new
 // entry before the first that sorts after it, by file, document, version or
 // variable, and path, or after the last one, in the indentation the entries
 // have; an empty text starts with Header. Every other line stays as it is, its
@@ -180,7 +185,7 @@ func (l *layout) check(ed Edit, e Entry, remove bool) error {
 	}
 	i := after.find(e)
 	switch {
-	case i < 0 || typeLine(e) != typeLine(entryType(after.items[i].node)):
+	case i < 0 || typeKey(e) != typeKey(entryType(after.items[i].node)):
 		return errLayout
 	case len(mine) == 0 && len(mineAfter) != 1, len(mine) > 0 && !slices.Equal(mine, mineAfter):
 		return errLayout
@@ -202,22 +207,23 @@ func (l *layout) otherKeys() []string {
 	return out
 }
 
-// content is what the entry n holds, as YAML reads it, without its type and
-// kind when bare is true.
+// content is what the entry n holds, as YAML reads it, without its type,
+// kind, schema and go when bare is true.
 func content(n *yaml.Node, bare bool) string {
 	var v any
 	if err := n.Decode(&v); err != nil {
 		return "not read: " + err.Error()
 	}
 	if m, ok := v.(map[string]any); ok && bare {
-		delete(m, "type")
-		delete(m, "kind")
+		for _, k := range typeKeys {
+			delete(m, k)
+		}
 	}
 	return fmt.Sprintf("%#v", v)
 }
 
-// entryType returns an Entry with the type or kind the entry n has, as
-// written, or neither.
+// entryType returns an Entry with the type, kind, schema or Go type the entry
+// n has, as written, or none.
 func entryType(n *yaml.Node) Entry {
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		switch k, v := n.Content[i].Value, n.Content[i+1]; {
@@ -229,9 +235,30 @@ func entryType(n *yaml.Node) Entry {
 			if kind, err := ParseKind(v.Value); err == nil {
 				return Entry{Kind: kind}
 			}
+		case k == "go" && v.Kind == yaml.ScalarNode:
+			if g, err := ParseGo(v.Value); err == nil {
+				return Entry{Go: g}
+			}
+		case k == "schema" && v.Kind == yaml.MappingNode:
+			if value, problems := crdschema.Read(v); len(problems) == 0 {
+				return Entry{Schema: &Schema{Value: value}}
+			}
 		}
 	}
 	return Entry{Kind: &KindRef{}}
+}
+
+// typeKey is the type of e, to compare: the line typeText writes, with a
+// schema as its canonical JSON.
+func typeKey(e Entry) string {
+	if e.Schema == nil {
+		return typeText(e, 0, "\n")
+	}
+	js, err := json.Marshal(e.Schema.Value)
+	if err != nil {
+		return "schema not read: " + err.Error()
+	}
+	return "schema: " + string(js)
 }
 
 // readLayout finds the parts of text.
@@ -567,15 +594,23 @@ func (l *layout) replaceType(it span, e Entry) (Edit, error) {
 	}
 	var key, val *yaml.Node
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		if k := n.Content[i]; k.Value == "type" || k.Value == "kind" {
+		if k := n.Content[i]; slices.Contains(typeKeys, k.Value) {
 			key, val = k, n.Content[i+1]
 			break
 		}
 	}
 	if key == nil {
-		return l.insertAt(it.end, spaces(n.Column-1)+typeLine(e)+l.eol), nil
+		return l.insertAt(it.end, spaces(n.Column-1)+typeText(e, n.Column-1, l.eol)+l.eol), nil
 	}
-	return Edit{Start: l.offset(key.Line, key.Column), End: l.valueEnd(key, val, it), Text: typeLine(e)}, nil
+	ed := Edit{Start: l.offset(key.Line, key.Column), End: l.valueEnd(key, val, it), Text: typeText(e, key.Column-1, l.eol)}
+	// A comment after a value on the key's line stays on that line, after the
+	// key, when the new value takes lines of its own below it.
+	first, below, multi := strings.Cut(ed.Text, l.eol)
+	lineEnd := l.lineStart(key.Line-1) + len(l.line(key.Line-1))
+	if rest := string(l.text[min(ed.End, lineEnd):lineEnd]); multi && ed.End <= lineEnd && strings.TrimSpace(rest) != "" {
+		ed.Text, ed.End = first+rest+l.eol+below, lineEnd
+	}
+	return ed, nil
 }
 
 // valueEnd returns the offset where val, the value of key in the entry it,
@@ -595,9 +630,15 @@ func (l *layout) valueEnd(key, val *yaml.Node, it span) int {
 			return lineAt + end
 		}
 	}
-	// The value goes on over the lines below the key that are indented more.
+	// The value goes on over the lines below the key that are indented more:
+	// a comment among them is the value's in a block scalar, and in a block
+	// mapping or list up to the line its last node starts at.
 	last := key.Line - 1
-	for j := key.Line; j < it.end && (l.blank(j) || l.indent(j) >= key.Column && (block || !l.comment(j))); j++ {
+	inside := maxLine(val) - 1
+	if val.Kind != yaml.MappingNode && val.Kind != yaml.SequenceNode {
+		inside = -1
+	}
+	for j := key.Line; j < it.end && (l.blank(j) || l.indent(j) >= key.Column && (block || j <= inside || !l.comment(j))); j++ {
 		if !l.blank(j) {
 			last = j
 		}
@@ -681,7 +722,7 @@ func entryText(e Entry, dash, key int, eol string) string {
 	if len(e.Path) > 0 {
 		lines = append(lines, "path: "+scalar(e.Path.String()))
 	}
-	lines = append(lines, typeLine(e))
+	lines = append(lines, typeText(e, key, eol))
 	var b strings.Builder
 	for i, line := range lines {
 		if i == 0 {
@@ -694,20 +735,67 @@ func entryText(e Entry, dash, key int, eol string) string {
 	return b.String()
 }
 
-// typeLine writes the type or kind of e as its key and value.
-func typeLine(e Entry) string {
-	if e.Type != nil {
+// typeText writes the type of e as its key and value, for a key at column
+// indent, from 0: one line, without its indent, but for a schema, whose lines
+// below the key are indented two more than it, and end with eol but the last.
+func typeText(e Entry, indent int, eol string) string {
+	switch {
+	case e.Type != nil:
 		return "type: " + scalar(e.Type.String())
+	case e.Go != nil:
+		return "go: " + scalar(e.Go.String())
+	case e.Schema != nil:
+		lines := schemaLines(e.Schema)
+		for i, line := range lines {
+			lines[i] = spaces(indent+2) + line
+		}
+		return strings.Join(append([]string{"schema:"}, lines...), eol)
 	}
 	return "kind: " + scalar(e.Kind.APIVersion+" "+e.Kind.Kind)
+}
+
+// schemaLines writes the schema s as a block of YAML, one line each, without
+// indent: its keys in the order written, or by name for a schema without
+// its YAML, and each value plain when YAML reads it back as it is.
+func schemaLines(s *Schema) []string {
+	n := s.node
+	if n == nil {
+		n = new(yaml.Node)
+		if err := n.Encode(s.Value); err != nil {
+			return []string{"# not written: " + err.Error()}
+		}
+	}
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(blockStyle(n)); err != nil {
+		return []string{"# not written: " + err.Error()}
+	}
+	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+}
+
+// blockStyle returns a copy of n, a schema crdschema.Read took, so without
+// aliases, written in block style, without quotes or comments, so the encoder
+// quotes only what it must.
+func blockStyle(n *yaml.Node) *yaml.Node {
+	c := *n
+	c.Style &^= yaml.FlowStyle | yaml.DoubleQuotedStyle | yaml.SingleQuotedStyle | yaml.TaggedStyle
+	c.HeadComment, c.LineComment, c.FootComment = "", "", ""
+	c.Anchor = ""
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, ch := range n.Content {
+		c.Content[i] = blockStyle(ch)
+	}
+	return &c
 }
 
 func spaces(n int) string { return strings.Repeat(" ", max(n, 0)) }
 
 // plainWords are the values written without quotes: words of letters, digits
-// and _$/.()[]*- separated by single spaces. Every type with a struct or a
-// comma in it is quoted, so a person reads it as written.
-var plainWords = regexp.MustCompile(`^[A-Za-z0-9_$/.()\[\]*-]+( [A-Za-z0-9_$/.()\[\]*-]+)*$`)
+// and _$/.()[]*-, and # inside a word, as in ./api/v1#QuotaSpec, separated by
+// single spaces. Every type with a struct or a comma in it is quoted, so a
+// person reads it as written.
+var plainWords = regexp.MustCompile(`^[A-Za-z0-9_$/.()\[\]*-][A-Za-z0-9_$/.()\[\]*#-]*( [A-Za-z0-9_$/.()\[\]*-][A-Za-z0-9_$/.()\[\]*#-]*)*$`)
 
 // scalar writes s as a YAML value: plain when it is a plainWords value YAML
 // reads back as that string, double-quoted otherwise.

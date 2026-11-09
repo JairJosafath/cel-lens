@@ -430,7 +430,7 @@ types:
 	c := start(t)
 	initializeIn(t, c, n.dir, editing())
 	edit, _, rerr := c.command("cel-lens.setType", with(with(configArgs(n.sub, "crd.yaml"), "type", "int"), "kind", "v1 Pod"), applied)
-	if edit != nil || rerr == nil || !strings.Contains(rerr.Message, "give type or kind, not both") {
+	if edit != nil || rerr == nil || !strings.Contains(rerr.Message, "give one of type, kind, schema and go, not type and kind") {
 		t.Errorf("setType with type and kind = edit %v, error %+v, want no edit and an error: both are given", edit != nil, rerr)
 	}
 	// A kind of null is no kind, as the client may pass the arguments of

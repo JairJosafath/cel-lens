@@ -55,14 +55,14 @@ func TestFindLenses(t *testing.T) {
 func TestLensSearchKeepsEdits(t *testing.T) {
 	t.Parallel()
 	ss := newSession(t)
-	ss.putLens("file:///ws/gone/.cellens", []byte("types:\n"), false)
-	ss.putLens("file:///ws/locked/.cellens", []byte("types:\n"), false)
-	ss.putLens("file:///other/.cellens", []byte("types:\n"), false)
-	ss.putLens("file:///ws/open/.cellens", []byte("types: # editor\n"), true)
+	ss.putLens(t.Context(), "file:///ws/gone/.cellens", []byte("types:\n"), false)
+	ss.putLens(t.Context(), "file:///ws/locked/.cellens", []byte("types:\n"), false)
+	ss.putLens(t.Context(), "file:///other/.cellens", []byte("types:\n"), false)
+	ss.putLens(t.Context(), "file:///ws/open/.cellens", []byte("types: # editor\n"), true)
 	release := make(chan struct{})
 	ss.fsys = func(string) fs.FS { <-release; return fstest.MapFS{} }
 	ss.searchLenses(context.Background(), []string{"/ws"})
-	ss.putLens("file:///ws/edited/.cellens", []byte("types: # edited\n"), false)
+	ss.putLens(t.Context(), "file:///ws/edited/.cellens", []byte("types: # edited\n"), false)
 	close(release)
 	found := <-ss.lensSearch.done
 	found.files["/ws/edited/.cellens"] = []byte("types: # disk\n")
@@ -341,7 +341,7 @@ func TestFilesAreReadSafely(t *testing.T) {
 			}
 			ss := newSession(t)
 			ss.folders = []string{ws}
-			if ss.readLens(pathURI(lens)) || len(ss.lenses) != 0 {
+			if ss.readLens(t.Context(), pathURI(lens)) || len(ss.lenses) != 0 {
 				t.Errorf("readLens(%s) recorded it, want it refused", lens)
 			}
 			if _, err := ss.readFile(crd); err == nil {
@@ -385,7 +385,7 @@ func BenchmarkLensKeystroke(b *testing.B) {
 				b.Fatal(err)
 			}
 			ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}, folders: []string{dir}}
-			ss.putLens(pathURI(filepath.Join(dir, ".cellens")), []byte(lens.String()), true)
+			ss.putLens(ctx, pathURI(filepath.Join(dir, ".cellens")), []byte(lens.String()), true)
 			doc := pathURI(filepath.Join(dir, "crd0.yaml"))
 			open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": doc, "version": 1, "text": batchCRD}})
 			if err := ss.didOpen(ctx, open); err != nil {

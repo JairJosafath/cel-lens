@@ -44,7 +44,7 @@ func TestCodeLensesKept(t *testing.T) {
 		name   string
 		change func()
 	}{
-		{"a .cellens changes", func() { ss.putLens("file:///.cellens", []byte("types: []\n"), true) }},
+		{"a .cellens changes", func() { ss.putLens(t.Context(), "file:///.cellens", []byte("types: []\n"), true) }},
 		{"the document is checked again", func() {
 			if err := ss.publish(ctx, cacheURI); err != nil {
 				t.Fatal(err)

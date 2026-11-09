@@ -423,6 +423,11 @@ func FuzzSetRemove(f *testing.F) {
 		"types:\n  -\n    file: a.yaml\n    document: CustomResourceDefinition a.example.com\n    version: v1\n    type: |\n      int\n",
 		"types:\n  - file: a.yaml\n    document: CustomResourceDefinition a.example.com\n    version: v1\n    path: spec.size\n    type: \"{a: \\\"x\\\"}\" # q\n",
 		"x: 1\ntypes:\n  - file: a.yaml\n    document: CustomResourceDefinition a.example.com\n    version: v1\n    path: spec.size\n    kind: v1 Pod\ny: 2\n",
+		"types:\n  - file: a.yaml\n    document: CustomResourceDefinition a.example.com\n    version: v1\n    path: spec.size\n    schema:\n      # c\n      type: integer\n      description: |\n        x\n    # after\n",
+		"types:\n  - file: a.yaml\n    document: CustomResourceDefinition a.example.com\n    version: v1\n    path: spec.size\n    go: ./api#Q # c\n",
+		"types:\n  - file: a.yaml\n    document: CustomResourceDefinition a.example.com\n    version: v1\n    path: spec.size\n    schema: &a {type: object, properties: {x: *a}}\n",
+		"types:\n  - file: a.yaml\n    document: CustomResourceDefinition a.example.com\n    version: v1\n    path: spec.size\n    schema:\n      type: object\n      properties: &p {b: {type: object, properties: *p}}\n",
+		aliasBomb(),
 	} {
 		f.Add(s)
 	}
@@ -465,4 +470,119 @@ func FuzzSetRemove(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestSetSchemaAndGo checks that Set writes a schema as a block of YAML below
+// its key, in the order given, quoting only what YAML would read otherwise,
+// and a Go type plain, keeping the comments around them (#15).
+func TestSetSchemaAndGo(t *testing.T) {
+	t.Parallel()
+	params := map[string]string{"file": "p.yaml", "document": "ValidatingAdmissionPolicy p", "variable": "params"}
+	withSchema := func(js string) cellens.Entry {
+		e := entry(t, params, "int", "")
+		s, problems := cellens.ReadSchema(t.Context(), []byte(js))
+		if len(problems) > 0 {
+			t.Fatalf("ReadSchema(%s) problems = %v", js, problems)
+		}
+		e.Type, e.Schema = nil, s
+		return e
+	}
+	withGo := func(g string) cellens.Entry {
+		e := entry(t, params, "int", "")
+		gt, err := cellens.ParseGo(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Type, e.Go = nil, gt
+		return e
+	}
+	const head = "types:\n  - file: p.yaml\n    document: ValidatingAdmissionPolicy p\n    variable: params\n"
+	const limits = `{"type": "object", "description": "The limits: for a team.", "properties": {"maxReplicas": {"type": "integer", "minimum": 0}, "team": {"type": "string", "enum": ["true", "b"]}}, "required": ["team"]}`
+	const limitsYAML = `    schema:
+      type: object
+      description: 'The limits: for a team.'
+      properties:
+        maxReplicas:
+          type: integer
+          minimum: 0
+        team:
+          type: string
+          enum:
+            - "true"
+            - b
+      required:
+        - team
+`
+	tests := []struct {
+		name string
+		text string
+		e    cellens.Entry
+		want string
+	}{
+		{
+			name: "a new entry with a schema",
+			text: "",
+			e:    withSchema(limits),
+			want: cellens.Header + "\n" + head + limitsYAML,
+		},
+		{
+			name: "a type becomes a schema, keeping its line comment",
+			text: head + "    type: int  # was\n# end\n",
+			e:    withSchema(`{"type": "integer", "minimum": 1}`),
+			want: head + "    schema:  # was\n      type: integer\n      minimum: 1\n# end\n",
+		},
+		{
+			name: "a schema becomes another, with the comments inside it",
+			text: head + "    # mine\n    schema:\n      # inside\n      type: object\n      properties:\n        a: {type: string}\n    # after\n",
+			e:    withSchema(`{"type": "string"}`),
+			want: head + "    # mine\n    schema:\n      type: string\n    # after\n",
+		},
+		{
+			name: "a schema becomes a type",
+			text: head + "    schema:\n      type: integer\n\n  # next\n",
+			e:    entry(t, params, "int", ""),
+			want: head + "    type: int\n\n  # next\n",
+		},
+		{
+			name: "long and multi-line strings are not folded",
+			text: head + "    type: int\n",
+			e:    withSchema(`{"type": "string", "description": "` + strings.Repeat("word ", 30) + `end", "pattern": "^a\\nb$", "title": "one\ntwo"}`),
+			want: head + "    schema:\n      type: string\n      description: " + strings.Repeat("word ", 30) + "end\n      pattern: ^a\\nb$\n      title: |-\n        one\n        two\n",
+		},
+		{
+			name: "a new entry with a Go type, plain",
+			text: "",
+			e:    withGo("api/v1#QuotaSpec"),
+			want: cellens.Header + "\n" + head + "    go: ./api/v1#QuotaSpec\n",
+		},
+		{
+			name: "a type becomes a Go type of a folder above",
+			text: head + "    type: int # x\n",
+			e:    withGo("../api#Quota"),
+			want: head + "    go: ../api#Quota # x\n",
+		},
+		{
+			name: "a Go type of the folder itself",
+			text: head + "    go: ./x#Old\n",
+			e:    withGo(".#Quota"),
+			want: head + "    go: .#Quota\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ed, err := cellens.Set([]byte(tt.text), tt.e)
+			if err != nil {
+				t.Fatalf("Set(%q) error = %v", tt.text, err)
+			}
+			got := ed.Apply([]byte(tt.text))
+			if string(got) != tt.want {
+				t.Errorf("Set(%q) gives\n%s\nwant\n%s", tt.text, got, tt.want)
+			}
+			entries, problems := cellens.Parse(got)
+			if len(problems) > 0 || len(entries) != 1 {
+				t.Errorf("Parse(Set(%q)) = %v, %v, want the entry", tt.text, entries, problems)
+			}
+		})
+	}
 }

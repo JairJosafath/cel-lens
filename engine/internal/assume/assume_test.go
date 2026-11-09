@@ -173,3 +173,24 @@ func TestName(t *testing.T) {
 		}
 	}
 }
+
+// TestTypeText checks that a schema's type is written as a .cellens type
+// writes it, for the inline line and hover of a schema: or go: entry (#15).
+func TestTypeText(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, schema, want string }{
+		{"a struct in name order", `{"type": "object", "properties": {"team": {"type": "string"}, "max": {"type": "integer"}}}`, "{max: int, team: string}"},
+		{"lists and maps", `{"type": "object", "properties": {"ports": {"type": "array", "items": {"type": "integer"}}, "labels": {"type": "object", "additionalProperties": {"type": "string"}}}}`, "{labels: map(string, string), ports: list(int)}"},
+		{"formats", `{"type": "string", "format": "date-time"}`, "timestamp"},
+		{"int-or-string is dyn", `{"type": "object", "properties": {"surge": {"x-kubernetes-int-or-string": true, "anyOf": [{"type": "integer"}, {"type": "string"}]}}}`, "{surge: dyn}"},
+		{"an empty object", `{"type": "object"}`, "{}"},
+		{"deep objects", `{"type": "object", "properties": {"a": {"type": "object", "properties": {"b": {"type": "object", "properties": {"c": {"type": "object", "properties": {"d": {"type": "string"}}}}}}}}}`, "{a: {b: {c: object}}}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := assume.TypeText(schemaOf(t, tc.schema)); got != tc.want {
+				t.Errorf("TypeText(%s) = %q, want %q", tc.schema, got, tc.want)
+			}
+		})
+	}
+}

@@ -139,6 +139,9 @@ func TestAssumedTypesHover(t *testing.T) {
 	config := limitType("CustomResourceDefinition", "widgets.example.com", "v1", "", 3, "spec", "config")
 	config.Schema, config.Type = map[string]any{"type": "integer"}, "int"
 	params := limitType("ValidatingAdmissionPolicy", "limits", "", "params", 5)
+	fromSchema, fromGo := params, params
+	fromSchema.From = "the schema at .cellens, line 8"
+	fromGo.From = "the Go type QuotaSpec in api/v1/quota_types.go:12, named in .cellens, line 5"
 	for _, tc := range []struct {
 		name, text, needle string
 		offset             int
@@ -149,6 +152,9 @@ func TestAssumedTypesHover(t *testing.T) {
 		{"field that keeps unknown fields", assumedCRD, "self.spec.open.max", len("self.spec.open.m"), limitType("CustomResourceDefinition", "widgets.example.com", "v1", "", 3, "spec", "open"), nil},
 		{"params", assumedPolicy, "params.spec.max", len("par"), params, []string{"(variable) params: {spec: {max: int}}", "from .cellens, line 5"}},
 		{"params field", assumedPolicy, "params.spec.max", len("params.spec.m"), params, []string{"(field) max: int", "from .cellens, line 5"}},
+		// #15: hover says where a schema or a Go type comes from.
+		{"params from a schema", assumedPolicy, "params.spec.max", len("par"), fromSchema, []string{"(variable) params: {spec: {max: int}}", "Typed from the schema at .cellens, line 8: Kubernetes"}},
+		{"params field from a Go type", assumedPolicy, "params.spec.max", len("params.spec.m"), fromGo, []string{"Typed from the Go type QuotaSpec in api/v1/quota_types.go:12, named in .cellens, line 5"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
