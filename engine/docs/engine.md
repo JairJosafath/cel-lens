@@ -61,7 +61,8 @@ number also brings the total under its budget). No fix is offered when there is 
   line, and the problems of a `.cellens` are published on it. See
   [cellens.md](cellens.md).
 - **Commands** (`workspace/executeCommand`): the type choices for a `dyn`
-  value, the check of a type as it is typed, and setting or removing a
+  value, with the workspace's examples of its kind, the check of a type as it
+  is typed, a schema worked out from examples, and setting or removing a
   `.cellens` entry through `workspace/applyEdit`. See [Commands](#commands).
 
 - **Inline info**: `textDocument/codeLens` (the server declares
@@ -145,12 +146,13 @@ exit code 2. `lsp --help` lists them.
 
 ## Commands
 
-`initialize` declares four commands under `executeCommandProvider`, which a
+`initialize` declares five commands under `executeCommandProvider`, which a
 client runs with `workspace/executeCommand`. The VS Code extension runs them
 from the lines above a rule: their parts run its own commands
 `cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, which ask
 the person for a type and pass these commands the same argument, with the
-type or kind chosen. Each takes one argument, an object with these keys:
+type or kind chosen. Each but `cel-lens.inferType` takes one argument, an
+object with these keys:
 
 | Key | What it is |
 | --- | --- |
@@ -159,10 +161,10 @@ type or kind chosen. Each takes one argument, an object with these keys:
 | `value` | The value's CEL, such as `self.spec.config`, for messages and the edit's label |
 | `type`, `kind`, `schema` or `go` | The type to check or set: a type as `type:` writes it, a kind, an OpenAPI schema as a JSON object, or a Go type as `go:` writes it, relative to the folder of `cellens`; `null` counts as left out |
 
-- `cel-lens.typeChoices` takes no argument and returns the kinds a `kind:`
-  entry can name, each with a one-line description: the first sentence of its
-  schema's description, or where it comes from when it has none; and the Go
-  types a `go:` entry can name.
+- `cel-lens.typeChoices` takes no argument, or a line's (below), and returns
+  the kinds a `kind:` entry can name, each with a one-line description: the
+  first sentence of its schema's description, or where it comes from when it
+  has none; and the Go types a `go:` entry can name.
 
   ```json
   {
@@ -195,8 +197,8 @@ type or kind chosen. Each takes one argument, an object with these keys:
   package's folder, which a `go:` entry names relative to its `.cellens`, and
   `doc` the first sentence of the type's doc comment, `""` without one. The
   walk runs in the background, so the server answers other requests
-  meanwhile, and `typeChoices` answers when it ends (a request while it runs
-  waits for the same walk; `$/cancelRequest` answers one `RequestCancelled`).
+  meanwhile, and `typeChoices` answers when it ends (see "Commands in the
+  background" below).
   It skips hidden folders, `node_modules`, `vendor` and `testdata`, and the
   files a `go build` on this machine leaves out, looks at most at 20000 `.go`
   files of at most 1 MiB each, read through the workspace folder, parses only
@@ -204,6 +206,37 @@ type or kind chosen. Each takes one argument, an object with these keys:
   time changed since the last walk; it runs whatever the experimental
   features. It lists at most 1000 types, the first by folder and name, and
   then `goTypesNote` says so.
+
+  Given the argument of a line, which names a value, it also lists
+  `examples`: the documents of the workspace of the value's kind, which
+  `cel-lens.inferType` can make a schema from. For a policy's `params` that is
+  the kind `spec.paramKind` names; for `object` and `oldObject` the kinds
+  `spec.matchConstraints.resourceRules` match: a resource the server knows,
+  built in or of a CustomResourceDefinition it has read, by its kind (a
+  built-in one in any version too, for `apiVersions: ["*"]`), and another by
+  the plural Kubernetes guesses from a kind (`widgets` for `Widget`); a
+  subresource matches nothing. Each example gives its file's
+  `uri`, its `file` below the workspace folder, the `line` its document
+  starts at, from 1, and its `apiVersion` and `kind`, in the order of the
+  files' paths:
+
+  ```json
+  "examples": [{"uri": "file:///repo/config/samples/limit.yaml", "file": "config/samples/limit.yaml",
+                "line": 1, "apiVersion": "rules.example.com/v1", "kind": "ReplicaLimit"}]
+  ```
+
+  The search runs in the background with the walk of the Go types, and
+  `typeChoices` answers when both end. It walks the YAML files of the
+  workspace folders as the CRD scan does, whatever the experimental features:
+  it skips hidden folders and
+  `node_modules`, files over 1 MiB, what a symbolic link leads to outside the
+  folder, and stops after 20,000 files; an open file counts with the editor's
+  text. It lists at most 100 examples, and parses only a file whose text has
+  the kind's name, or the group's for a kind it guesses (any file for the core
+  group or `*`). Another value, such
+  as `variables.<name>` or a CustomResourceDefinition's, has no kind, and gets
+  `"examples": []`; without an argument there is no `examples`. The argument
+  is checked as for `checkType`.
 - `cel-lens.checkType` with `type`, `schema` or `go`, one of them, returns
   `null` when the type is fine. A type that does not parse gets the message
   and the character it is at, from 1, in Unicode code points:
@@ -233,6 +266,45 @@ type or kind chosen. Each takes one argument, an object with these keys:
 - `cel-lens.removeType` with a value removes its entry, and returns
   `{"cellens": "file:///repo/.cellens", "change": "removed"}`, or `deleted`
   when the `.cellens` went with it. A value no `.cellens` types is an error.
+- `cel-lens.inferType` works out an OpenAPI v3 schema from examples, in the
+  form of a CustomResourceDefinition's `openAPIV3Schema`, for an entry's
+  `schema:`; [cellens.md](cellens.md#a-schema-from-examples) says how. Its
+  argument is `{"text": "..."}`, YAML or JSON with one or more documents, or
+  a list of objects, at most 1 MiB, and optionally `line`, from 1, to take
+  only the document at that line (an example's `line`), `path`, written as a
+  `.cellens` path, to take the value there in each example (the line's
+  `path`), and `required: true` to list the fields every example has. It
+  returns the schema, its keys sorted, and the notes on what the examples do
+  not settle, `[]` when none:
+
+  ```json
+  {"schema": {"type": "object", "properties": {"items": {"type": "array",
+              "items": {"x-kubernetes-preserve-unknown-fields": true}}}},
+   "notes": ["items: an empty list says nothing about its items"]}
+  ```
+
+  for `{"text": "items: []"}`. It runs in the background, as `typeChoices`
+  does (see below). A text it cannot read, too big, nested deeper
+  than 100 objects and lists, or with no example (at the `line` or `path`
+  given), is refused with `InvalidParams` (-32602) and what is wrong, with the
+  line for YAML that does not parse.
+
+Commands in the background: `typeChoices` and `inferType` do their work off
+the server's message loop, so the server answers other messages meanwhile,
+such as an edit and its diagnostics, and the command answers when its work
+ends. A request with the same arguments as one still running waits for the
+same work and gets the same answer; one with other arguments stops it, and
+the requests that waited for it are answered with `RequestCancelled`
+(-32800), as the editor asks again when what it wants changed. A
+`typeChoices` without a value and one with a value are answered both: one
+never stops the other. `typeChoices` lists the Go types and searches for
+the examples at once. `$/cancelRequest` answers its request with
+`RequestCancelled`; the work goes on while another request waits for it.
+At most four commands' work runs at once, work stopped but still ending
+included; another request is refused with `RequestFailed` (-32803) until
+one has ended, and `shutdown` answers those still running with
+`RequestFailed`. Work that is stopped ends soon: the decoding of
+`inferType` looks every 4,096 values whether it was.
 
 `setType` and `removeType` never write a file. They send the client a
 `workspace/applyEdit`: a text edit on the `.cellens` as it is then (the

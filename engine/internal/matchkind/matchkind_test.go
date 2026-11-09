@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 )
 
@@ -205,6 +207,29 @@ func TestGoType(t *testing.T) {
 		}
 		if _, has := s.Properties[tc.field]; !has {
 			t.Errorf("GoType(%s, %s) has no property %s", tc.pkg, tc.name, tc.field)
+		}
+	}
+}
+
+// TestResourceKind checks that ResourceKind names the kind of a built-in
+// resource, irregular plurals too, and knows no custom resource or
+// subresource (#17).
+func TestResourceKind(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		group, version, resource string
+		want                     string
+	}{
+		{"", "v1", "endpoints", "Endpoints"},
+		{"apps", "v1", "deployments", "Deployment"},
+		{"networking.k8s.io", "v1", "networkpolicies", "NetworkPolicy"},
+		{"example.com", "v1", "widgets", ""},
+		{"apps", "v1", "deployments/scale", ""},
+	} {
+		gvr := schema.GroupVersionResource{Group: tt.group, Version: tt.version, Resource: tt.resource}
+		got, ok := matchkind.ResourceKind(gvr)
+		if got != tt.want || ok != (tt.want != "") {
+			t.Errorf("ResourceKind(%v) = %q, %t, want %q", gvr, got, ok, tt.want)
 		}
 	}
 }

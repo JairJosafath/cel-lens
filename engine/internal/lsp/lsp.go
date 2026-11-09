@@ -102,12 +102,12 @@ type session struct {
 	// goReads are the Go types go: entries name, as last read, by the key of
 	// their folder, # and their name (see goType).
 	goReads map[string]goRead
-	// goList is the listing of the workspace's Go types in progress for
-	// typeChoices, nil when none; goFiles is what the last one read of each
-	// .go file, which the next reuses while the file stays as it was.
-	goList  *goListing
+	// goFiles is what the last listing of the workspace's Go types for
+	// typeChoices read of each .go file, which the next reuses while the
+	// file stays as it was.
 	goFiles map[string]goFile
-	// goLister lists the Go types for typeChoices; nil means goChoices.
+	// goLister lists the Go types for the job of typeChoices (see
+	// answerTypeChoices); nil means goChoices.
 	goLister func(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, known map[string]goFile) goListed
 	// lensShown are the diagnostics last sent for each .cellens file, by URI.
 	lensShown map[string][]map[string]any
@@ -129,6 +129,12 @@ type session struct {
 	edits   editCaps
 	pending map[string]pendingEdit
 	editSeq int
+	// jobs are the commands whose work runs in a goroutine, by number, the
+	// jobSeq-th one last; each sends what it returns on jobDone (see
+	// startJob).
+	jobs    map[int]*job
+	jobSeq  int
+	jobDone chan jobResult
 }
 
 // document is an open file. Only the message loop uses it, so the cached
@@ -223,7 +229,7 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	defer stop()
 	defer ss.stopScan()
 	defer ss.stopLensSearch()
-	defer func() { _ = ss.stopGoList(false) }() // the connection is closing
+	defer ss.stopJobs()
 	for {
 		var r readResult
 		var scanned <-chan *check.CRDs
@@ -234,13 +240,18 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 		if ss.lensSearch != nil {
 			lensesFound = ss.lensSearch.done
 		}
-		var goListed <-chan goListed
-		if ss.goList != nil {
-			goListed = ss.goList.done
+		var jobDone <-chan jobResult
+		if len(ss.jobs) > 0 {
+			jobDone = ss.jobDone
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case r := <-jobDone:
+			if err := ss.finishJob(r); err != nil {
+				return err
+			}
+			continue
 		case found := <-lensesFound:
 			if err := ss.finishLensSearch(ctx, found); err != nil {
 				return err
@@ -248,11 +259,6 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 			continue
 		case found := <-scanned:
 			if err := ss.endScan(ctx, found); err != nil {
-				return err
-			}
-			continue
-		case listed := <-goListed:
-			if err := ss.finishGoList(listed); err != nil {
 				return err
 			}
 			continue
@@ -349,10 +355,10 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		ss.shutdown = true
 		ss.stopScan()
 		ss.stopLensSearch()
-		if err := ss.stopGoList(true); err != nil {
+		if err := ss.dropPending(); err != nil {
 			return err
 		}
-		if err := ss.dropPending(); err != nil {
+		if err := ss.dropJobs(); err != nil {
 			return err
 		}
 		return reply(nil, nil)

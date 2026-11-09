@@ -347,3 +347,111 @@ included, stays as a person wrote it:
 A `.cellens` that is not YAML, or whose `types` is not a list of entries on
 their own lines (`- file: ...`, with the other keys below), is not edited: the
 command says what to fix.
+
+## A schema from examples
+
+Writing a type by hand for something that already exists as an example is
+slow: a kubebuilder project keeps samples in `config/samples/`, and the
+params of a policy are a resource someone writes as YAML. The language server
+works out an OpenAPI v3 schema from one or more examples
+(`cel-lens.inferType`, see [engine.md](engine.md#commands)), in the form of a
+CustomResourceDefinition's `openAPIV3Schema`, for an entry's `schema:`, where
+the person refines it. For a policy's `params`, `object` or `oldObject`, the
+editor can offer the documents of the workspace of the value's kind as
+examples (`examples` of `cel-lens.typeChoices`).
+
+The schema is conservative: Kubernetes would accept every example given,
+and the API server would accept the schema in a CustomResourceDefinition.
+
+- An object gets `properties`, a list `items` merged over all its elements,
+  `true` and `false` `boolean`, a whole number `integer`, any other number
+  `number`, and a string `string` (a date too, which Kubernetes reads as a
+  string). A whole number past what a JSON number holds exactly, such as
+  `18446744073709551615`, is a `number`, as Kubernetes decodes it. With
+  `required: true` in the arguments, an object lists in `required` the
+  fields every example of it has; by default it lists none.
+- An unquoted `yes`, `no`, `on`, `off`, `y` or `n` is a string to cel-lens,
+  as YAML 1.2 reads it, but kubectl reads YAML 1.1, where it is a boolean: a
+  note names the field, so the person quotes it, or types it `boolean`. Such
+  a key, such as `on:`, gets a note too: kubectl sends it as the key `true`
+  or `false`.
+- Where the examples disagree, the schema takes what Kubernetes accepts for
+  both: `integer` and `number` make `number`, `integer` and `string` make
+  `x-kubernetes-int-or-string`, and `null` makes the value `nullable`. Any
+  other mix, such as `boolean` and `string`, leaves the value without a type
+  (`x-kubernetes-preserve-unknown-fields`), with a note naming the value and
+  the kinds seen; the rest is still worked out.
+- An empty list or object, and a value only ever `null`, say nothing about
+  what they hold: the list's `items`, the object and the value keep unknown
+  fields, and a note says so, such as `spec.items: an empty list says nothing
+  about its items`, so the person knows what to fill in.
+- At the root of an example, `apiVersion` and `kind` are typed `string` and
+  `metadata` `{type: object}`, whatever the example holds there, as a
+  CustomResourceDefinition writes them: Kubernetes types `metadata` as
+  ObjectMeta, and the API server refuses a schema that says more of it than
+  `name` and `generateName`. The rest of the object is worked out from the
+  example, `status` too, as the value is the whole object. For a value inside
+  the object, `path` takes only the examples' values there, so `status`, like
+  everything else outside the path, is left out.
+- A text of several YAML documents, a list of objects, or a `v1 List` gives
+  each document or item as an example; `line` takes only the document at that
+  line, as `typeChoices` gives it: from the `---` at or above it to the next,
+  so the other documents need not parse.
+- The text is at most 1 MiB, an example nests at most 100 objects and lists
+  deep, and the examples hold, once their aliases are expanded, at most ten
+  times the values the text writes (10,000 in any case, 1,000,000 at most); a
+  text that is bigger, deeper, not YAML or JSON, or with a key written twice
+  in one object, is refused with what is wrong and its line.
+  The schema's keys come sorted, the same on every run.
+
+Two samples of `config/samples/limits.yaml`:
+
+```yaml
+apiVersion: rules.example.com/v1
+kind: ReplicaLimit
+metadata:
+  name: small
+  labels: {team: a}
+spec:
+  maxReplicas: 3
+  ratio: 0.5
+  port: 8080
+  owner: null
+  teams: []
+---
+apiVersion: rules.example.com/v1
+kind: ReplicaLimit
+metadata:
+  name: large
+spec:
+  maxReplicas: 10
+  ratio: 1
+  port: http
+  owner: platform
+  teams: []
+```
+
+give this schema, with the note `spec.teams: an empty list says nothing
+about its items`:
+
+```yaml
+type: object
+properties:
+  apiVersion: {type: string}
+  kind: {type: string}
+  metadata: {type: object}   # ObjectMeta to Kubernetes, not the samples' fields
+  spec:
+    type: object
+    properties:
+      maxReplicas: {type: integer}
+      owner: {type: string, nullable: true}
+      port: {x-kubernetes-int-or-string: true}
+      ratio: {type: number}
+      teams:
+        type: array
+        items: {x-kubernetes-preserve-unknown-fields: true}
+```
+
+With `path: spec`, the schema is that of `spec` alone, and with `required:
+true` it lists `maxReplicas`, `owner`, `port`, `ratio` and `teams`, which both
+samples have.

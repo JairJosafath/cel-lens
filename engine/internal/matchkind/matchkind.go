@@ -99,6 +99,14 @@ func lookupCustom(custom func(schema.GroupVersionResource) (Kind, bool), gvr sch
 
 func wild(s string) bool { return strings.Contains(s, "*") }
 
+// ResourceKind returns the kind of the built-in resource gvr, such as
+// Endpoints for v1 endpoints, and reports false for a resource that is not
+// built in, such as a custom resource.
+func ResourceKind(gvr schema.GroupVersionResource) (string, bool) {
+	gvk, _, ok := kindOf(gvr)
+	return gvk.Kind, ok
+}
+
 // kindOf finds the kind served as the resource gvr.
 func kindOf(gvr schema.GroupVersionResource) (schema.GroupVersionKind, reflect.Type, bool) {
 	for kind, t := range scheme.Scheme.KnownTypes(gvr.GroupVersion()) {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
 	"github.com/JairJosafath/cel-lens/engine/internal/goschema"
-	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 )
 
 // goRead is a Go type read for go: entries, kept while the .go files of its
@@ -158,100 +156,6 @@ type goListed struct {
 	types []goChoice
 	more  bool
 	files map[string]goFile
-}
-
-// goListing is a listing of Go types running in its own goroutine for
-// typeChoices requests, which wait for it.
-type goListing struct {
-	cancel context.CancelFunc
-	// done delivers what it found, once, when the goroutine ends.
-	done chan goListed
-	// waiting are the requests to answer when it ends.
-	waiting []goWaiter
-}
-
-// goWaiter is a typeChoices request that waits for the listing of Go types:
-// its id and its answer but for the Go types.
-type goWaiter struct {
-	id     json.RawMessage
-	answer typeChoices
-}
-
-// listGoTypes answers the typeChoices request id with answer and the Go types
-// of the workspace once they are listed, in a goroutine, as listing them can
-// take long in a big workspace; a request while one runs waits for the same.
-// The message loop receives what it lists on ss.goList.done (see
-// finishGoList); stopGoList stops it.
-func (ss *session) listGoTypes(ctx context.Context, id json.RawMessage, answer typeChoices) {
-	if ss.goList != nil {
-		ss.goList.waiting = append(ss.goList.waiting, goWaiter{id, answer})
-		return
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	gl := &goListing{cancel: cancel, done: make(chan goListed, 1), waiting: []goWaiter{{id, answer}}}
-	ss.goList = gl
-	list := ss.goLister
-	if list == nil {
-		list = goChoices
-	}
-	dirFS, folders, files := ss.dirFS(), slices.Clone(ss.folders), ss.goFiles
-	go func() { gl.done <- list(ctx, dirFS, folders, files) }()
-}
-
-// finishGoList keeps what the listing read, for the next one, releases its
-// context and answers the requests that wait for it.
-func (ss *session) finishGoList(listed goListed) error {
-	gl := ss.goList
-	ss.goList = nil
-	gl.cancel()
-	ss.goFiles = listed.files
-	for _, w := range gl.waiting {
-		w.answer.GoTypes = listed.types
-		if listed.more {
-			w.answer.GoTypesNote = fmt.Sprintf("cel-lens lists the first %d Go types of the workspace, by folder and name", maxGoChoices)
-		}
-		if err := ss.conn.Reply(w.id, w.answer); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// stopGoList cancels the listing of Go types in progress and waits for it to
-// end; with reply, it answers the requests that wait for it with an error.
-func (ss *session) stopGoList(reply bool) error {
-	gl := ss.goList
-	if gl == nil {
-		return nil
-	}
-	gl.cancel()
-	<-gl.done
-	ss.goList = nil
-	for _, w := range gl.waiting {
-		if !reply {
-			break
-		}
-		if err := ss.conn.ReplyError(w.id, jsonrpc.CodeRequestFailed, "the server shut down before it listed the Go types"); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// cancelGoList answers the typeChoices request id, when it waits for the
-// listing of Go types, as cancelled, and reports whether it did. The listing
-// goes on: what it reads serves the next one.
-func (ss *session) cancelGoList(id json.RawMessage) (bool, error) {
-	if ss.goList == nil {
-		return false, nil
-	}
-	for i, w := range ss.goList.waiting {
-		if bytes.Equal(bytes.TrimSpace(w.id), bytes.TrimSpace(id)) {
-			ss.goList.waiting = slices.Delete(ss.goList.waiting, i, i+1)
-			return true, ss.conn.ReplyError(w.id, jsonrpc.CodeRequestCancelled, "the listing of the Go types was cancelled")
-		}
-	}
-	return false, nil
 }
 
 // goChoices lists the Go struct types a go: entry can name in folders, the

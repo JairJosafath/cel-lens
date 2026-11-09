@@ -350,8 +350,7 @@ func (ss *session) rereadSkipped(ctx context.Context, found *check.CRDs) bool {
 func scanWorkspace(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, limit int, dst *check.CRDs) []message {
 	var notes []message
 	capped := false
-	capAt := -1 // where the file cap warning sits in notes, -1 when none
-	seen := 0
+	capAt := -1              // where the file cap warning sits in notes, -1 when none
 	var oversized []string   // files skipped for their size, in scan order
 	var oversizedBytes int64 // the size of the last one, for the one-file message
 	roots := make([]string, len(folders))
@@ -359,22 +358,95 @@ func scanWorkspace(ctx context.Context, dirFS func(dir string) fs.FS, folders []
 		roots[i] = crdKey(pathURI(dir))
 	}
 	dst.ScanRoots(roots)
+	walkYAML(ctx, dirFS, folders, limit, yamlWalk{
+		unreadable: func(path string, err error) {
+			dst.Incomplete(crdKey(pathURI(path)))
+			notes = append(notes, message{typ: messageWarning, log: true, text: fmt.Sprintf(
+				"cel-lens left the scan of %s incomplete: it could not be read (%v); the CRDs known below it are kept as they were, those below the other folders are rescanned", path, err)})
+		},
+		skipped: func(path string) { dst.SkipDir(crdKey(pathURI(path)), fileExists) },
+		capped: func() {
+			for _, r := range roots {
+				dst.Incomplete(r)
+			}
+			if !capped {
+				capped = true
+				capAt = len(notes)
+				notes = append(notes, message{typ: messageWarning, text: fmt.Sprintf(
+					"cel-lens stopped scanning the workspace for CustomResourceDefinitions after %d YAML files; CRDs in the files left out are not known, so a params type may stay dyn", limit)})
+			}
+		},
+		file: func(dir, rel string, d fs.DirEntry) bool {
+			path := filepath.Join(dir, filepath.FromSlash(rel))
+			dst.List(crdKey(pathURI(path)))
+			info, err := d.Info()
+			if err == nil && info.Size() > maxWorkspaceFileSize {
+				oversized = append(oversized, path)
+				oversizedBytes = info.Size()
+				return true
+			}
+			if err != nil {
+				return true // a file that cannot be read is skipped
+			}
+			// readIn refuses what a symbolic link leads to outside dir, a
+			// device or pipe, and more than the size limit.
+			if data, err := readIn(dir, filepath.FromSlash(rel)); err == nil {
+				dst.Set(ctx, crdKey(pathURI(path)), data)
+			}
+			return true
+		},
+	})
+	// The size note goes before the cap warning, which ends the client's wait.
+	if capAt < 0 {
+		capAt = len(notes)
+	}
+	return slices.Insert(notes, capAt, oversizeNote(oversized, oversizedBytes)...)
+}
+
+// yamlWalk is what walkYAML calls as it walks; a nil function is not called.
+type yamlWalk struct {
+	// unreadable is called for a folder or file that cannot be read, which
+	// the walk skips.
+	unreadable func(path string, err error)
+	// skipped is called for a folder the walk skips by its name (see
+	// skippedFolder).
+	skipped func(path string)
+	// capped is called, in each folder, at the first YAML file past the
+	// limit, where the walk of the folder stops.
+	capped func()
+	// file is called for each YAML file, with the folder of folders it is
+	// below and its slash-separated path relative to it. It returns false to
+	// stop the walk.
+	file func(dir, rel string, d fs.DirEntry) bool
+}
+
+// walkYAML walks the YAML files below folders as the workspace scan reads
+// them, in the order of folders and then of their paths: it skips hidden
+// folders and node_modules, and stops after limit files. dirFS gives the
+// file system of a folder; os.DirFS reads the disk. It stops when ctx is
+// cancelled.
+func walkYAML(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, limit int, w yamlWalk) {
+	seen := 0
+	stopped := false
 	for _, dir := range folders {
-		root := dirFS(dir)
-		_ = fs.WalkDir(root, ".", func(rel string, d fs.DirEntry, err error) error {
+		if stopped {
+			return
+		}
+		_ = fs.WalkDir(dirFS(dir), ".", func(rel string, d fs.DirEntry, err error) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if err != nil {
-				path := filepath.Join(dir, filepath.FromSlash(rel))
-				dst.Incomplete(crdKey(pathURI(path)))
-				notes = append(notes, message{typ: messageWarning, log: true, text: fmt.Sprintf(
-					"cel-lens left the scan of %s incomplete: it could not be read (%v); the CRDs known below it are kept as they were, those below the other folders are rescanned", path, err)})
+				if w.unreadable != nil {
+					w.unreadable(filepath.Join(dir, filepath.FromSlash(rel)), err)
+				}
 				return fs.SkipDir // skip what cannot be read
 			}
 			if d.IsDir() {
 				if rel != "." && skippedFolder(d.Name()) {
-					dst.SkipDir(crdKey(pathURI(filepath.Join(dir, filepath.FromSlash(rel)))), fileExists)
+					if w.skipped != nil {
+						w.skipped(filepath.Join(dir, filepath.FromSlash(rel)))
+					}
 					return fs.SkipDir
 				}
 				return nil
@@ -384,41 +456,18 @@ func scanWorkspace(ctx context.Context, dirFS func(dir string) fs.FS, folders []
 			}
 			seen++
 			if seen > limit {
-				for _, r := range roots {
-					dst.Incomplete(r)
-				}
-				if !capped {
-					capped = true
-					capAt = len(notes)
-					notes = append(notes, message{typ: messageWarning, text: fmt.Sprintf(
-						"cel-lens stopped scanning the workspace for CustomResourceDefinitions after %d YAML files; CRDs in the files left out are not known, so a params type may stay dyn", limit)})
+				if w.capped != nil {
+					w.capped()
 				}
 				return fs.SkipAll
 			}
-			path := filepath.Join(dir, filepath.FromSlash(rel))
-			dst.List(crdKey(pathURI(path)))
-			info, err := d.Info()
-			if err == nil && info.Size() > maxWorkspaceFileSize {
-				oversized = append(oversized, path)
-				oversizedBytes = info.Size()
-				return nil
-			}
-			if err != nil {
-				return nil //nolint:nilerr // a file that cannot be read is skipped
-			}
-			// readIn refuses what a symbolic link leads to outside dir, a
-			// device or pipe, and more than the size limit.
-			if data, err := readIn(dir, filepath.FromSlash(rel)); err == nil {
-				dst.Set(ctx, crdKey(pathURI(path)), data)
+			if w.file != nil && !w.file(dir, rel, d) {
+				stopped = true
+				return fs.SkipAll
 			}
 			return nil
 		})
 	}
-	// The size note goes before the cap warning, which ends the client's wait.
-	if capAt < 0 {
-		capAt = len(notes)
-	}
-	return slices.Insert(notes, capAt, oversizeNote(oversized, oversizedBytes)...)
 }
 
 // maxNamedOversized is how many skipped file names the summary line gives.

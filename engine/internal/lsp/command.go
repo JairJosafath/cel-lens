@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -33,11 +34,12 @@ const (
 	commandCheckType   = "cel-lens.checkType"
 	commandSetType     = "cel-lens.setType"
 	commandRemoveType  = "cel-lens.removeType"
+	commandInferType   = "cel-lens.inferType"
 )
 
 // commandNames are the commands the server runs, as initialize declares them.
 func commandNames() []string {
-	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType}
+	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType}
 }
 
 // editCaps are what the client can do with a workspace/applyEdit.
@@ -114,10 +116,11 @@ func invalid(msg string) error { return &rpcError{jsonrpc.CodeInvalidParams, msg
 func failed(msg string) error { return &rpcError{jsonrpc.CodeRequestFailed, msg} }
 
 // executeCommand runs a command of workspace/executeCommand. checkType
-// answers at once, and typeChoices once the Go types of the workspace are
-// listed, in the background (see listGoTypes). setType and removeType send the client a
-// workspace/applyEdit and answer when it answers (see answered): nothing is
-// written to disk but by the client.
+// answers at once. typeChoices answers once the Go types of the workspace
+// are listed and, with a value, its examples are found, and inferType once
+// its work ends: both run in a goroutine (see startJob). setType and removeType send the client a workspace/applyEdit
+// and answer when it answers (see answered): nothing is written to disk but
+// by the client.
 func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, reply func(any, error) error) error {
 	var p struct {
 		Command   string            `json:"command"`
@@ -127,7 +130,7 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 		return reply(nil, badParams("workspace/executeCommand", err))
 	}
 	var a valueArgs
-	if len(p.Arguments) > 0 && p.Command != commandTypeChoices {
+	if len(p.Arguments) > 0 && p.Command != commandInferType {
 		if err := json.Unmarshal(p.Arguments[0], &a); err != nil {
 			return reply(nil, badParams(p.Command, err))
 		}
@@ -136,10 +139,15 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 	var err error
 	switch p.Command {
 	case commandTypeChoices:
-		if !msg.IsNotification() {
-			ss.listGoTypes(ctx, msg.ID, ss.typeChoices())
-		}
-		return nil
+		return ss.answerTypeChoices(ctx, msg, a, reply)
+	case commandInferType:
+		return ss.startJob(ctx, msg, jobSpec{command: commandInferType, key: string(msg.Params), work: func(ctx context.Context) (any, error) {
+			res, err := inferType(ctx, p.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			return res, nil
+		}})
 	case commandCheckType:
 		problem, err := ss.checkType(ctx, a)
 		return reply(problem, err)
@@ -179,6 +187,73 @@ func stability(version string) string {
 	return "ga"
 }
 
+// answerTypeChoices answers the request msg with the kinds a kind: entry can
+// name, the Go types of the workspace a go: entry can name (see goChoices)
+// and, when a names a value, the documents of the workspace of the value's
+// kind, as examples for inferType (see exampleSearch). A job lists the Go
+// types and searches for the examples, the two at once, off the message
+// loop; a request for the same value while it runs waits for it. Requests
+// without a value and with one are in two slots (see jobSpec), so the editor
+// can ask for both at once.
+func (ss *session) answerTypeChoices(ctx context.Context, msg jsonrpc.Message, a valueArgs, reply func(any, error) error) error {
+	answer := ss.typeChoices()
+	var search *exampleSearch
+	slot, key := "kinds", ""
+	if a.namesValue() {
+		v, err := ss.readValue(commandTypeChoices, a)
+		if err != nil {
+			return reply(nil, err)
+		}
+		s := ss.exampleSearch(ctx, v)
+		search = &s
+		e := v.entry
+		slot, key = "examples", strings.Join([]string{v.file, e.Document.Kind, e.Document.Name, e.Version, e.Variable, e.Path.String()}, "\x00")
+	}
+	list := ss.goLister
+	if list == nil {
+		list = goChoices
+	}
+	dirFS, folders, known := ss.dirFS(), slices.Clone(ss.folders), ss.goFiles
+	return ss.startJob(ctx, msg, jobSpec{
+		command: commandTypeChoices,
+		slot:    slot,
+		key:     key,
+		work: func(ctx context.Context) (any, error) {
+			var found choicesFound
+			var searchErr error
+			var wg sync.WaitGroup
+			if search != nil {
+				wg.Go(func() {
+					examples, err := search.run(ctx)
+					found.examples, searchErr = &examples, err
+				})
+			}
+			found.listed = list(ctx, dirFS, folders, known)
+			wg.Wait()
+			if searchErr != nil {
+				return nil, searchErr
+			}
+			return found, ctx.Err()
+		},
+		settle: func(v any) (any, error) {
+			found, _ := v.(choicesFound) // what work returns
+			ss.goFiles = found.listed.files
+			answer.GoTypes, answer.Examples = found.listed.types, found.examples
+			if found.listed.more {
+				answer.GoTypesNote = fmt.Sprintf("cel-lens lists the first %d Go types of the workspace, by folder and name", maxGoChoices)
+			}
+			return answer, nil
+		},
+	})
+}
+
+// choicesFound is what the job of typeChoices finds: the Go types, and the
+// examples of the value, nil without one.
+type choicesFound struct {
+	listed   goListed
+	examples *[]example
+}
+
 // typeChoices is the answer of typeChoices: the kinds a kind: entry can name
 // and the Go types a go: entry can name.
 type typeChoices struct {
@@ -188,12 +263,15 @@ type typeChoices struct {
 	CRDsNote          string       `json:"crdsNote,omitempty"`
 	GoTypes           []goChoice   `json:"goTypes"`
 	GoTypesNote       string       `json:"goTypesNote,omitempty"`
+	// Examples are the examples of the value typeChoices was given; nil
+	// without one.
+	Examples *[]example `json:"examples,omitempty"`
 }
 
 // typeChoices are the kinds a kind: entry can name: the built-in kinds of the
 // Kubernetes version in use, and the kinds of the CRDs the session knows,
-// which it reads only while crd-typed-policies is on. listGoTypes adds the Go
-// types.
+// which it reads only while crd-typed-policies is on. answerTypeChoices adds
+// the Go types and the examples.
 func (ss *session) typeChoices() typeChoices {
 	builtIn := []typeChoice{}
 	for _, k := range matchkind.Kinds(ss.kube.Minor()) {
@@ -598,7 +676,7 @@ func (ss *session) cancel(params json.RawMessage) error {
 	if !decode(params, &p) {
 		return nil
 	}
-	if done, err := ss.cancelGoList(p.ID); done || err != nil {
+	if found, err := ss.cancelJob(p.ID); found || err != nil {
 		return err
 	}
 	for reqID, pe := range ss.pending {
