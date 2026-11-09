@@ -27,6 +27,9 @@ const (
 	maxWorkspaceFileSize = 1 << 20
 
 	registerWatchersID = "cel-lens-watch-yaml"
+	// registerCompletionID registers completion for YAML files and .cellens
+	// files, each with its trigger characters (see registerCompletion).
+	registerCompletionID = "cel-lens-completion"
 )
 
 // File change types of workspace/didChangeWatchedFiles, and the watch kinds
@@ -74,7 +77,8 @@ type initializeParams struct {
 	Capabilities struct {
 		TextDocument struct {
 			Completion struct {
-				CompletionItem struct {
+				DynamicRegistration bool `json:"dynamicRegistration"`
+				CompletionItem      struct {
 					SnippetSupport        bool `json:"snippetSupport"`
 					InsertTextModeSupport struct {
 						ValueSet []int `json:"valueSet"`
@@ -549,6 +553,58 @@ func (ss *session) registerWatchers() error {
 			},
 		}},
 	})
+}
+
+// completionSelectors are the document selectors of the completion the
+// server registers (see registerCompletion): the YAML files, as isYAML and
+// the watchers take them, by their extension, and the .cellens files. No file
+// matches both, even a .cellens the editor opens as YAML, as VS Code does:
+// a client asks every provider whose selector matches a document and shows
+// the items of each, so such a file would show every item twice.
+var completionSelectors = map[string][]map[string]any{
+	"yaml": {
+		{"scheme": "file", "language": "yaml", "pattern": "**/*.yaml"},
+		{"scheme": "file", "language": "yaml", "pattern": "**/*.yml"},
+	},
+	"cellens": {{"scheme": "file", "pattern": "**/" + cellens.FileName}},
+}
+
+// registerCompletion asks the client, if it can, for completion as two
+// providers with their own trigger characters: one for YAML files, with
+// triggerCharacters, and one for .cellens files, with lensTriggerCharacters,
+// which add the space, so a space typed in a YAML file, in a comment or a CEL
+// string, asks for nothing. initialize then declares no completionProvider,
+// so no document has two providers. It asks once, however often the client
+// says initialized; a client that refuses gets a line in its log
+// (registrationRefused).
+func (ss *session) registerCompletion() error {
+	if !ss.completionRegistration || ss.completionRegistered {
+		return nil
+	}
+	ss.completionRegistered = true
+	return ss.conn.Request(registerCompletionID, "client/registerCapability", map[string]any{
+		"registrations": []map[string]any{
+			{
+				"id": registerCompletionID + "-yaml", "method": "textDocument/completion",
+				"registerOptions": map[string]any{"documentSelector": completionSelectors["yaml"], "triggerCharacters": triggerCharacters},
+			},
+			{
+				"id": registerCompletionID + "-cellens", "method": "textDocument/completion",
+				"registerOptions": map[string]any{"documentSelector": completionSelectors["cellens"], "triggerCharacters": lensTriggerCharacters},
+			},
+		},
+	})
+}
+
+// completionRefused writes to the client's log that it refused the
+// registration of completion, with why: initialize declared none, and the
+// protocol has no way to declare one later, so the session has no
+// completion.
+func (ss *session) completionRefused(why string) error {
+	return ss.warn([]message{{
+		typ: messageError, log: true,
+		text: "cel-lens could not register completion: the editor refused it (" + why + "). This session has no completion, as initialize declared none for an editor that registers it; restart the server to try again.",
+	}})
 }
 
 // didChangeWatchedFiles reads the changed files again, or forgets the deleted

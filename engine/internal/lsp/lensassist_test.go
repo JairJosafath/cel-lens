@@ -3,7 +3,9 @@ package lsp_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -641,5 +643,160 @@ func TestCompletionAfterColonSpace(t *testing.T) {
 		if got := g.completeAfter(text, " "); len(got) != 0 {
 			t.Errorf("completion after a space in %q = %q, want none", text, labels(got))
 		}
+	}
+}
+
+// registration is a client/registerCapability registration of completion.
+type registration struct {
+	ID              string
+	Method          string
+	RegisterOptions struct {
+		DocumentSelector  []map[string]string
+		TriggerCharacters []string
+	}
+}
+
+// selects reports whether the document filter f matches the document at
+// uri, of the language, as a client matches one: every field it has must
+// match. A pattern here is "**/" and a glob of the file's name.
+func selects(t *testing.T, f map[string]string, uri, language string) bool {
+	t.Helper()
+	u, err := url.Parse(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := f["scheme"]; ok && s != u.Scheme {
+		return false
+	}
+	if l, ok := f["language"]; ok && l != language {
+		return false
+	}
+	if p, ok := f["pattern"]; ok {
+		name, ok := strings.CutPrefix(p, "**/")
+		if !ok {
+			t.Fatalf("pattern %q: the test reads only **/<name>", p)
+		}
+		if m, err := path.Match(name, path.Base(u.Path)); err != nil || !m {
+			return false
+		}
+	}
+	return true
+}
+
+// TestCompletionRegistered is #29: a client that registers completion itself
+// gets no completionProvider from initialize, and then, once however often
+// it says initialized, two registrations, one for YAML files without the
+// space among its trigger characters, so a space typed in a YAML file asks
+// for nothing, and one for .cellens files with it. No document the server
+// handles matches both, not even a .cellens VS Code opens as YAML (the
+// review of #29), which would show every item twice. A client that cannot
+// keeps one provider for every file, with the space (TestCompletionTriggers).
+func TestCompletionRegistered(t *testing.T) {
+	t.Parallel()
+	c := start(t)
+	caps := map[string]any{"textDocument": map[string]any{"completion": map[string]any{"dynamicRegistration": true}}}
+	res, rerr := c.call("initialize", map[string]any{"processId": nil, "capabilities": caps, "rootUri": nil})
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	var r struct{ Capabilities map[string]json.RawMessage }
+	if err := json.Unmarshal(res, &r); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := r.Capabilities["completionProvider"]; ok {
+		t.Errorf("initialize completionProvider = %s, want none: the client registers completion", p)
+	}
+	c.notify("initialized", map[string]any{})
+	c.notify("initialized", map[string]any{})
+	c.send(map[string]any{"jsonrpc": "2.0", "id": "after", "method": "textDocument/codeLens", "params": map[string]any{"textDocument": map[string]any{"uri": "file:///none.yaml"}}})
+	var asked []json.RawMessage
+	for {
+		m := c.read("the response to codeLens")
+		if m.Method == "client/registerCapability" {
+			asked = append(asked, m.Params)
+		}
+		if m.Method == "" && string(m.ID) == `"after"` {
+			break
+		}
+	}
+	if len(asked) != 1 {
+		t.Fatalf("registerCapability requests = %d, want 1 for two initialized", len(asked))
+	}
+	var p struct{ Registrations []registration }
+	if err := json.Unmarshal(asked[0], &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Registrations) != 2 || p.Registrations[0].Method != "textDocument/completion" || p.Registrations[1].Method != "textDocument/completion" {
+		t.Fatalf("registrations = %s, want two of textDocument/completion", asked[0])
+	}
+	triggers := map[string][]string{
+		"yaml":    {".", "/", "#", "(", ":"},
+		"cellens": {".", "/", "#", "(", ":", " "},
+	}
+	for _, doc := range []struct{ uri, language, want string }{
+		{"file:///ws/policy.yaml", "yaml", "yaml"},
+		{"file:///ws/deploy/crd.yml", "yaml", "yaml"},
+		{"file:///ws/.cellens", "yaml", "cellens"}, // as VS Code opens it
+		{"file:///ws/sub/.cellens", "plaintext", "cellens"},
+		{"file:///ws/a.cellens.yaml", "yaml", "yaml"},
+		{"untitled:Untitled-1", "yaml", ""},
+	} {
+		var got []string
+		for _, reg := range p.Registrations {
+			for _, f := range reg.RegisterOptions.DocumentSelector {
+				if selects(t, f, doc.uri, doc.language) {
+					got = append(got, reg.ID)
+					break
+				}
+			}
+		}
+		if doc.want == "" {
+			if len(got) != 0 {
+				t.Errorf("%s (%s) matches %q, want none", doc.uri, doc.language, got)
+			}
+			continue
+		}
+		if !slices.Equal(got, []string{"cel-lens-completion-" + doc.want}) {
+			t.Errorf("%s (%s) matches %q, want only cel-lens-completion-%s", doc.uri, doc.language, got, doc.want)
+		}
+	}
+	for _, reg := range p.Registrations {
+		kind := strings.TrimPrefix(reg.ID, "cel-lens-completion-")
+		if !slices.Equal(reg.RegisterOptions.TriggerCharacters, triggers[kind]) {
+			t.Errorf("trigger characters of %s = %q, want %q", reg.ID, reg.RegisterOptions.TriggerCharacters, triggers[kind])
+		}
+	}
+}
+
+// TestCompletionRegistrationRefused is the review of #29: when the client
+// refuses the registration of completion, its log says so, and that the
+// session has none, as initialize declared none.
+func TestCompletionRegistrationRefused(t *testing.T) {
+	t.Parallel()
+	c := start(t)
+	initializeIn(t, c, "", map[string]any{"textDocument": map[string]any{"completion": map[string]any{"dynamicRegistration": true}}})
+	for {
+		m := c.read("client/registerCapability")
+		if m.Method == "client/registerCapability" {
+			c.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32603, "message": "no completion here"}})
+			break
+		}
+	}
+	for {
+		m := c.read("window/logMessage")
+		if m.Method != "window/logMessage" {
+			continue
+		}
+		var p struct {
+			Type    int
+			Message string
+		}
+		if err := json.Unmarshal(m.Params, &p); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(p.Message, "could not register completion") || !strings.Contains(p.Message, "no completion here") || !strings.Contains(p.Message, "has no completion") {
+			continue
+		}
+		return
 	}
 }

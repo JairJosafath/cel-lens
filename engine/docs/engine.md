@@ -44,11 +44,25 @@ Server Protocol on stdin and stdout, for any editor:
   a short description.
 - **Completion** inside an expression: `self`/`oldSelf` or `object`/`request`/...,
   the fields of the type before a dot, and the Kubernetes CEL functions. The
-  server's `triggerCharacters` are `.`, `/`, `#`, `(`, `:` and the space: in a
-  YAML file only `.` gives items, and a request for another of them
-  (`context.triggerKind` 2) gets `null` at once. The protocol has one list for
-  every document, so a client asks after a space in every file; only in a
-  `.cellens`, after a key's colon, does the space give items.
+  trigger characters are `.`, `/`, `#`, `(` and `:` for YAML files, and the
+  same and the space for `.cellens` files: in a YAML file only `.` gives
+  items, and a request for another of them (`context.triggerKind` 2) gets
+  `null` at once. A client whose `textDocument.completion` has
+  `dynamicRegistration` gets no `completionProvider` from `initialize`, and
+  after `initialized` the server registers completion twice, once
+  (`client/registerCapability`): for YAML files on disk,
+  `{"scheme": "file", "language": "yaml", "pattern": "**/*.yaml"}` and the
+  same for `**/*.yml`, with the five, and for
+  `{"scheme": "file", "pattern": "**/.cellens"}` with the space too, so a
+  space typed in a YAML file, in a comment or a CEL string, asks for
+  nothing. No file matches both, not even a `.cellens` the editor opens as
+  YAML, as VS Code does: a client asks each provider that matches and shows
+  the items of each. A client that refuses the registration gets a line in
+  its log (`window/logMessage`) saying the session has no completion, as
+  `initialize` declared none. Another
+  client gets `completionProvider` with all six for every file, as the
+  protocol has one list then: it asks after a space in every file, and gets
+  `null` at once but in a `.cellens` after a key's colon.
 
 - **Quick fixes** (the light bulb): "Change to `maxReplicas`" for a misspelled
   field, function or macro when exactly one name valid there is within two edits

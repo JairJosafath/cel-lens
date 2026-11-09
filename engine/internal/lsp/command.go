@@ -737,10 +737,14 @@ func (ss *session) applyEdit(id json.RawMessage, edit *workspaceEdit) error {
 
 // answered handles the client's response to a request of the server: the
 // command waiting for a workspace/applyEdit gets its result when the client
-// applied the edit, and an error saying so when it did not.
+// applied the edit, and an error saying so when it did not; a refused
+// registration of completion is written to the client's log.
 func (ss *session) answered(msg jsonrpc.Message) error {
 	var id string
 	_ = json.Unmarshal(msg.ID, &id) // a number is no id the server sent: id stays ""
+	if id == registerCompletionID && msg.Error != nil {
+		return ss.completionRefused(msg.Error.Message)
+	}
 	p, ok := ss.pending[id]
 	if !ok {
 		return nil

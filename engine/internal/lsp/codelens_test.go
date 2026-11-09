@@ -623,3 +623,35 @@ func TestCodeLensInferredVariable(t *testing.T) {
 		}
 	}
 }
+
+// TestCodeLensSchemaOrder is #29: the schema a line's target carries is the
+// entry's, written as the engine writes every schema: the keywords of each
+// schema in the order the API server writes them, whatever the .cellens
+// writes, and the properties in the order the .cellens writes them, as the
+// raw JSON of the answer shows (a map would hide both).
+func TestCodeLensSchemaOrder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	policy := fileURI(filepath.Join(dir, "policy.yaml"))
+	c := start(t)
+	initializeIn(t, c, dir, map[string]any{})
+	c.openAll(fileURI(filepath.Join(dir, ".cellens")), `types:
+  - file: policy.yaml
+    document: ValidatingAdmissionPolicy limits
+    variable: params
+    schema:
+      properties:
+        x: {x-kubernetes-int-or-string: true, description: anything}
+        max: {minimum: 0, type: integer}
+      required: [max]
+      type: object
+`, policy, inlinePolicy)
+	res, rerr := c.call("textDocument/codeLens", map[string]any{"textDocument": map[string]any{"uri": policy}})
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	want := `"schema":{"type":"object","required":["max"],"properties":{"x":{"description":"anything","x-kubernetes-int-or-string":true},"max":{"type":"integer","minimum":0}}}`
+	if !strings.Contains(string(res), `"variable":"params"`) || !strings.Contains(string(res), want) {
+		t.Errorf("code lenses = %s,\nwant params's target with %s", res, want)
+	}
+}

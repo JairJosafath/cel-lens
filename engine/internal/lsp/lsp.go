@@ -125,6 +125,10 @@ type session struct {
 	// inlineOff is true while the client's setting inlineInfo is false: the
 	// server then answers no code lenses.
 	inlineOff bool
+	// completionRegistration is true when the client registers completion
+	// itself, a provider for YAML files and one for .cellens files;
+	// completionRegistered once the server asked it to.
+	completionRegistration, completionRegistered bool
 	// snippets is true when the client takes snippets in completion items,
 	// asIs when it takes their text with the indentation it has
 	// (insertTextMode asIs).
@@ -378,7 +382,10 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	case msg.Method == "workspace/didChangeConfiguration":
 		return ss.didChangeConfiguration(ctx, msg.Params)
 	case msg.Method == "initialized":
-		return ss.registerWatchers()
+		if err := ss.registerWatchers(); err != nil {
+			return err
+		}
+		return ss.registerCompletion()
 	case msg.Method == "$/cancelRequest":
 		return ss.cancel(msg.Params)
 	case msg.Method == "$/setTrace":
@@ -453,6 +460,7 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	if decode(params, &p) && p.InitializationOptions != nil {
 		_, problems, _ = ss.configure(p.InitializationOptions)
 	}
+	ss.completionRegistration = p.Capabilities.TextDocument.Completion.DynamicRegistration
 	if err := reply(ss.initializeResult(), nil); err != nil {
 		return err
 	}
@@ -581,7 +589,8 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	return nil
 }
 
-func (ss *session) initializeResult() any {
+// initializeInfo is initializeResult without completion.
+func (ss *session) initializeInfo() map[string]any {
 	type info struct {
 		Name    string `json:"name"`
 		Version string `json:"version,omitempty"`
@@ -599,9 +608,6 @@ func (ss *session) initializeResult() any {
 			"codeActionProvider":     map[string]any{"codeActionKinds": []string{quickFix}},
 			"codeLensProvider":       map[string]any{},
 			"executeCommandProvider": map[string]any{"commands": commandNames()},
-			"completionProvider": map[string]any{
-				"triggerCharacters": triggerCharacters,
-			},
 			"experimental": map[string]any{"celLens": map[string]any{
 				"kubernetesVersion":           kubeversion.Default().String(),
 				"supportedKubernetesVersions": supported,
@@ -612,6 +618,18 @@ func (ss *session) initializeResult() any {
 		},
 		"serverInfo": info{"cel-lens-core", ss.version},
 	}
+}
+
+// initializeResult is the answer to initialize: the server's capabilities,
+// completion among them unless the client registers it (registerCompletion),
+// the Kubernetes version and the server's name.
+func (ss *session) initializeResult() any {
+	res := ss.initializeInfo()
+	if !ss.completionRegistration {
+		caps, _ := res["capabilities"].(map[string]any)
+		caps["completionProvider"] = map[string]any{"triggerCharacters": lensTriggerCharacters}
+	}
+	return res
 }
 
 type textDocumentItem struct {
@@ -809,12 +827,17 @@ func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, erro
 }
 
 // triggerCharacters are the characters after which the client asks for
-// completion: a dot in CEL and in a .cellens path, and in a .cellens the /
-// of a file or folder, the # of a Go type, the ( of a list or map type, the
-// colon after a key and the space after that colon. The protocol has one
-// list for every document, so a client asks after each of them everywhere:
-// the server answers null at once where one gives nothing (see completion).
-var triggerCharacters = []string{".", "/", "#", "(", ":", " "}
+// completion in a YAML file: a dot in CEL, and the characters of a .cellens
+// but the space, which a client that cannot register completion per kind of
+// file (registerCompletion) has for every file. In a .cellens they are a dot
+// in a path, the / of a file or folder, the # of a Go type, the ( of a list
+// or map type and the colon after a key; lensTriggerCharacters add the space
+// after that colon. The server answers null at once where one gives nothing
+// (see completion).
+var (
+	triggerCharacters     = []string{".", "/", "#", "(", ":"}
+	lensTriggerCharacters = []string{".", "/", "#", "(", ":", " "}
+)
 
 // triggerCharacter is the protocol's CompletionTriggerKind for a character.
 const triggerCharacter = 2
