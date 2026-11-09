@@ -282,10 +282,11 @@ object with these keys:
   `cel-lens.inferType` can make a schema from. For a policy's `params` that is
   the kind `spec.paramKind` names; for `object` and `oldObject` the kinds
   `spec.matchConstraints.resourceRules` match: a resource the server knows,
-  built in or of a CustomResourceDefinition it has read, by its kind (a
-  built-in one in any version too, for `apiVersions: ["*"]`), and another by
-  the plural Kubernetes guesses from a kind (`widgets` for `Widget`); a
-  subresource matches nothing. Each example gives its file's
+  built in or of a CustomResourceDefinition it has read, by its kind, and
+  another by the plural Kubernetes guesses from a kind (`widgets` for
+  `Widget`); a subresource matches nothing. A kind is one in any version of
+  its API group (`example.com/v2 Widget` for `example.com/v1`), as the API
+  server converts an object to the version the rule or `paramKind` names. Each example gives its file's
   `uri`, its `file` below the workspace folder, the `line` its document
   starts at, from 1, and its `apiVersion` and `kind`, in the order of the
   files' paths:
@@ -307,6 +308,23 @@ object with these keys:
   as `variables.<name>` or a CustomResourceDefinition's, has no kind, and gets
   `"examples": []`; without an argument there is no `examples`. The argument
   is checked as for `checkType`.
+
+  With a value, it also answers `valueKinds`: the kinds the root of the
+  value can be, the value itself or the object it is in, whatever its
+  `path`, each an `apiVersion` and a `kind`. For `params` that is the kind
+  `spec.paramKind` names; for `object` and `oldObject` the kinds the policy's
+  resource rules match, when the server knows them all, as its type checker
+  resolves them (a built-in kind, or one of a CustomResourceDefinition it has
+  read; a wildcard leaves them not known). It is `[]` when they are not
+  known, and for a value with no kind; without a value there is no
+  `valueKinds`. A client can tell from it whether a pasted example is a whole
+  resource the value is in or the value itself, without parsing it: see
+  `roots` of `cel-lens.inferType`.
+
+  ```json
+  "valueKinds": [{"apiVersion": "example.com/v1", "kind": "Widget"},
+                 {"apiVersion": "apps/v1", "kind": "Deployment"}]
+  ```
 - `cel-lens.checkType` with `type`, `schema` or `go`, one of them, returns
   `null` when the type is fine. A type that does not parse gets the message
   and the character it is at, from 1, in Unicode code points:
@@ -367,16 +385,34 @@ object with these keys:
   a list of objects, at most 1 MiB, and optionally `line`, from 1, to take
   only the document at that line (an example's `line`), `path`, written as a
   `.cellens` path, to take the value there in each example (the line's
-  `path`), and `required: true` to list the fields every example has. It
-  returns the schema, its keywords in the order the API server writes them
-  and its properties in the order the examples first have them, and the
-  notes on what the examples do not settle, `[]` when none:
+  `path`), `required: true` to list the fields every example has, and
+  `value`, the value the schema is for, as the argument of a line names it
+  (what `typeChoices` takes). It returns the schema, its keywords in the order
+  the API server writes them and its properties in the order the examples
+  first have them, the notes on what the examples do not settle, `[]` when
+  none, and `roots`: for each example, in order, the `apiVersion` and `kind`
+  at its root, `null` for one without both, before `path` takes the value
+  in it:
 
   ```json
   {"schema": {"type": "object", "properties": {"items": {"type": "array",
               "items": {"x-kubernetes-preserve-unknown-fields": true}}}},
-   "notes": ["items: an empty list says nothing about its items"]}
+   "notes": ["items: an empty list says nothing about its items"],
+   "roots": [null]}
   ```
+
+  With `value` and `path`, when the value's kinds are known (`valueKinds` of
+  `typeChoices`), an example whose root is of none of them, by API group and
+  kind in any version, as for `examples`, such as a pasted
+  value without `apiVersion` and `kind`, or a document of another kind, is
+  taken as the value itself, not as an object the value is in, and a note,
+  before the others, says so: `the value: the example at line 6 has no
+  apiVersion and kind, so it is not of rules.example.com/v1 ReplicaLimit: it
+  is taken as the value at spec itself`, with the line the example is
+  written at (an alias's own). An example of one of them gives
+  the value at `path`, as every example does when the kinds are not known or
+  there is no `value`. A `value` that cannot be read is `InvalidParams`, as
+  for `checkType`.
 
   for `{"text": "items: []"}`. It runs in the background, as `typeChoices`
   does (see below). A text it cannot read, too big, nested deeper

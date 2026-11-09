@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
+	"github.com/JairJosafath/cel-lens/engine/internal/infer"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
@@ -147,8 +148,12 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 	case commandTypeChoices:
 		return ss.answerTypeChoices(ctx, msg, a, reply)
 	case commandInferType:
+		kinds, err := ss.inferKinds(ctx, p.Arguments)
+		if err != nil {
+			return reply(nil, err)
+		}
 		return ss.startJob(ctx, msg, jobSpec{command: commandInferType, key: string(msg.Params), work: func(ctx context.Context) (any, error) {
-			res, err := inferType(ctx, p.Arguments)
+			res, err := inferType(ctx, p.Arguments, kinds)
 			if err != nil {
 				return nil, err
 			}
@@ -213,6 +218,8 @@ func (ss *session) answerTypeChoices(ctx context.Context, msg jsonrpc.Message, a
 		if err != nil {
 			return reply(nil, err)
 		}
+		kinds := ss.valueKinds(ctx, v)
+		answer.ValueKinds = &kinds
 		s := ss.exampleSearch(ctx, v)
 		search = &s
 		e := v.entry
@@ -275,6 +282,9 @@ type typeChoices struct {
 	// Examples are the examples of the value typeChoices was given; nil
 	// without one.
 	Examples *[]example `json:"examples,omitempty"`
+	// ValueKinds are the kinds the root of that value can be (see
+	// valueKinds), empty when they are not known; nil without a value.
+	ValueKinds *[]infer.Kind `json:"valueKinds,omitempty"`
 }
 
 // typeChoices are the kinds a kind: entry can name: the built-in kinds of the

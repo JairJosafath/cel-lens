@@ -168,40 +168,83 @@ type kindMatch struct {
 	words []string
 }
 
+// policyOf returns the part of the policy the value of v is in that says
+// the kinds of its params, object and oldObject; false for a value of no
+// policy variable with a kind, params, object or oldObject, or a policy that
+// cannot be read.
+func (ss *session) policyOf(ctx context.Context, v valueRef) (policyKinds, bool) {
+	e := v.entry
+	if e.Document.Kind == cellens.CRDKind || e.Variable != "params" && e.Variable != "object" && e.Variable != "oldObject" {
+		return policyKinds{}, false
+	}
+	data, err := ss.targetText(v.file)
+	if err != nil {
+		return policyKinds{}, false
+	}
+	docs, _, err := extract.Documents(ctx, v.file, data)
+	if err != nil {
+		return policyKinds{}, false
+	}
+	for _, d := range docs {
+		var p policyKinds
+		if d.Node.Decode(&p) == nil && p.Kind == e.Document.Kind && p.Metadata.Name == e.Document.Name {
+			return p, true
+		}
+	}
+	return policyKinds{}, false
+}
+
 // exampleKinds returns which documents are examples of the value of v (see
 // examples), or nil when the value has no kind, or its policy cannot be
 // read.
 func (ss *session) exampleKinds(ctx context.Context, v valueRef) *kindMatch {
-	e := v.entry
-	if e.Document.Kind == cellens.CRDKind || e.Variable != "params" && e.Variable != "object" && e.Variable != "oldObject" {
+	p, ok := ss.policyOf(ctx, v)
+	if !ok {
 		return nil
 	}
-	data, err := ss.targetText(v.file)
-	if err != nil {
+	if v.entry.Variable != "params" {
+		return ss.ruleKinds(p)
+	}
+	pk := p.Spec.ParamKind
+	if pk == nil || pk.APIVersion == "" || pk.Kind == "" {
 		return nil
 	}
-	docs, _, err := extract.Documents(ctx, v.file, data)
-	if err != nil {
-		return nil
+	want := infer.Kind{APIVersion: pk.APIVersion, Kind: pk.Kind}
+	return &kindMatch{
+		match: func(apiVersion, kind string) bool {
+			return infer.Kind{APIVersion: apiVersion, Kind: kind}.Group() == want.Group() && kind == want.Kind
+		},
+		words: []string{pk.Kind},
 	}
-	for _, d := range docs {
-		var p policyKinds
-		if d.Node.Decode(&p) != nil || p.Kind != e.Document.Kind || p.Metadata.Name != e.Document.Name {
-			continue
+}
+
+// valueKinds returns the kinds the root of the value of v can be, the value
+// or the object it is in: for params the kind spec.paramKind names, for
+// object and oldObject the kinds the policy's resource rules match, when the
+// session knows them all, as the type checker resolves them; none, never
+// nil, for another value, a policy whose kinds are not all known, or one
+// that cannot be read.
+func (ss *session) valueKinds(ctx context.Context, v valueRef) []infer.Kind {
+	out := []infer.Kind{}
+	p, ok := ss.policyOf(ctx, v)
+	switch {
+	case !ok:
+	case v.entry.Variable == "params":
+		if pk := p.Spec.ParamKind; pk != nil && pk.APIVersion != "" && pk.Kind != "" {
+			out = append(out, infer.Kind{APIVersion: pk.APIVersion, Kind: pk.Kind})
 		}
-		if e.Variable != "params" {
-			return ss.ruleKinds(p)
+	default:
+		var rules []matchkind.Rule
+		for _, r := range p.Spec.MatchConstraints.ResourceRules {
+			rules = append(rules, matchkind.Rule{Groups: r.APIGroups, Versions: r.APIVersions, Resources: r.Resources})
 		}
-		pk := p.Spec.ParamKind
-		if pk == nil || pk.APIVersion == "" || pk.Kind == "" {
-			return nil
-		}
-		return &kindMatch{
-			match: func(apiVersion, kind string) bool { return apiVersion == pk.APIVersion && kind == pk.Kind },
-			words: []string{pk.Kind},
+		if kinds, ok := ss.crds.Resolve(rules); ok {
+			for _, k := range kinds {
+				out = append(out, infer.Kind{APIVersion: k.GVK.GroupVersion().String(), Kind: k.GVK.Kind})
+			}
 		}
 	}
-	return nil
+	return out
 }
 
 // kindRule is one group, version and resource a resource rule matches, "*"
@@ -246,7 +289,9 @@ func (ss *session) ruleKinds(p policyKinds) *kindMatch {
 			return false
 		}
 		for _, r := range rules {
-			if r.group != "*" && r.group != gv.Group || r.version != "*" && r.version != gv.Version {
+			// The version is not compared: the API server converts an
+			// object to the version of the rule, as for inferType.
+			if r.group != "*" && r.group != gv.Group {
 				continue
 			}
 			switch {
@@ -291,18 +336,47 @@ func ruleWords(rules []kindRule) []string {
 
 // inferArgs are the arguments of inferType: the examples' text, the line of
 // the one document to take, from 1, the path of the value in each example,
-// as a .cellens path writes it, and whether to list required fields.
+// as a .cellens path writes it, whether to list required fields, and the
+// value the schema is for, as typeChoices takes it (see valueKinds).
 type inferArgs struct {
-	Text     *string `json:"text"`
-	Line     int     `json:"line"`
-	Path     string  `json:"path"`
-	Required bool    `json:"required"`
+	Text     *string         `json:"text"`
+	Line     int             `json:"line"`
+	Path     string          `json:"path"`
+	Required bool            `json:"required"`
+	Value    json.RawMessage `json:"value"`
+}
+
+// inferKinds returns the kinds of the value the arguments of inferType name
+// with value, as valueKinds gives them; none without one. It reads the
+// session, so it runs on the message loop, before the job. Arguments that
+// are no object, or a value that cannot be read, are InvalidParams.
+func (ss *session) inferKinds(ctx context.Context, args []json.RawMessage) ([]infer.Kind, error) {
+	if len(args) == 0 {
+		return nil, nil // inferType says what is missing
+	}
+	var a inferArgs
+	if err := json.Unmarshal(args[0], &a); err != nil {
+		return nil, badParams(commandInferType, err)
+	}
+	if len(a.Value) == 0 || string(a.Value) == "null" {
+		return nil, nil
+	}
+	var va valueArgs
+	if err := json.Unmarshal(a.Value, &va); err != nil {
+		return nil, badParams(commandInferType+": value", err)
+	}
+	v, err := ss.readValue(commandInferType, va)
+	if err != nil {
+		return nil, err
+	}
+	return ss.valueKinds(ctx, v), nil
 }
 
 // inferType works out the OpenAPI schema of the examples args give, for a
-// schema: entry (see package infer). A wrong argument, or a text it cannot
-// read, is InvalidParams with the reason.
-func inferType(ctx context.Context, args []json.RawMessage) (*infer.Result, error) {
+// schema: entry (see package infer), for a value whose root can be one of
+// kinds (inferKinds). A wrong argument, or a text it cannot read, is
+// InvalidParams with the reason.
+func inferType(ctx context.Context, args []json.RawMessage, kinds []infer.Kind) (*infer.Result, error) {
 	var a inferArgs
 	if len(args) > 0 {
 		if err := json.Unmarshal(args[0], &a); err != nil {
@@ -327,7 +401,7 @@ func inferType(ctx context.Context, args []json.RawMessage) (*infer.Result, erro
 			steps = append(steps, assume.Values)
 		}
 	}
-	res, err := infer.Schema(ctx, []byte(*a.Text), infer.Options{Required: a.Required, Line: a.Line, Path: steps})
+	res, err := infer.Schema(ctx, []byte(*a.Text), infer.Options{Required: a.Required, Line: a.Line, Path: steps, Kinds: kinds})
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}

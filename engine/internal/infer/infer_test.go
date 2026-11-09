@@ -567,3 +567,81 @@ func FuzzSchema(f *testing.F) {
 		}
 	})
 }
+
+// TestSchemaRootsAndKinds is #25: Schema gives the apiVersion and kind at the
+// root of each example, nil for one without both, for the items of a list
+// and of a v1 List too; with Kinds and Path, an example of none of the kinds
+// is the value itself, with a note naming its line, and one of a kind gives
+// the value at the path.
+func TestSchemaRootsAndKinds(t *testing.T) {
+	t.Parallel()
+	const text = "apiVersion: v1\nkind: List\nitems:\n  - {apiVersion: v1, kind: Pod, spec: {a: 1}}\n  - {b: 2}\n---\n- {apiVersion: x/v1, kind: Gadget, spec: {c: 3}}\n---\nd: 4\n"
+	res, err := infer.Schema(t.Context(), []byte(text), infer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := make([]string, len(res.Roots))
+	for i, r := range res.Roots {
+		if r != nil {
+			roots[i] = r.String()
+		}
+	}
+	if want := []string{"v1 Pod", "", "x/v1 Gadget", ""}; !slices.Equal(roots, want) {
+		t.Errorf("Schema(text) roots = %q, want %q", roots, want)
+	}
+	res, err = infer.Schema(t.Context(), []byte(text), infer.Options{Path: []string{"spec"}, Kinds: []infer.Kind{{APIVersion: "v1", Kind: "Pod"}, {APIVersion: "x/v1", Kind: "Gadget"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sorted(t, string(res.Schema)), sorted(t, `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"},"c":{"type":"integer"},"d":{"type":"integer"}}}`); got != want {
+		t.Errorf("Schema(text, spec, kinds) = %s, want %s", got, want)
+	}
+	wantNotes := []string{
+		"the value: the example at line 5 has no apiVersion and kind, so it is not of v1 Pod or x/v1 Gadget: it is taken as the value at spec itself",
+		"the value: the example at line 9 has no apiVersion and kind, so it is not of v1 Pod or x/v1 Gadget: it is taken as the value at spec itself",
+	}
+	if !slices.Equal(res.Notes, wantNotes) {
+		t.Errorf("Schema(text, spec, kinds) notes = %q, want %q", res.Notes, wantNotes)
+	}
+	// The review of #25: a kind is one in any version of its group, as the
+	// API server converts it, and not in another group; an alias's note
+	// names its own line, not its anchor's.
+	deployments := []infer.Kind{{APIVersion: "apps/v1", Kind: "Deployment"}}
+	for _, tc := range []struct {
+		name, text string
+		want       string
+		notes      []string
+	}{
+		{
+			"another version", "apiVersion: apps/v1beta1\nkind: Deployment\nmetadata: {name: a}\nspec: {replicas: 3}\n",
+			`{"type":"object","properties":{"replicas":{"type":"integer"}}}`, nil,
+		},
+		{
+			"another group", "apiVersion: other.example.com/v1\nkind: Deployment\nspec: {replicas: 3}\n",
+			`{"type":"object","properties":{"apiVersion":{"type":"string"},"kind":{"type":"string"},"spec":{"type":"object","properties":{"replicas":{"type":"integer"}}}}}`,
+			[]string{"the value: the example at line 1 is of kind other.example.com/v1 Deployment, not of apps/v1 Deployment: it is taken as the value at spec itself"},
+		},
+		{
+			"an alias", "- &a {replicas: 3}\n- *a\n",
+			`{"type":"object","properties":{"replicas":{"type":"integer"}}}`,
+			[]string{
+				"the value: the example at line 1 has no apiVersion and kind, so it is not of apps/v1 Deployment: it is taken as the value at spec itself",
+				"the value: the example at line 2 has no apiVersion and kind, so it is not of apps/v1 Deployment: it is taken as the value at spec itself",
+			},
+		},
+	} {
+		res, err := infer.Schema(t.Context(), []byte(tc.text), infer.Options{Path: []string{"spec"}, Kinds: deployments})
+		if err != nil {
+			t.Fatalf("Schema(%s) error = %v", tc.name, err)
+		}
+		if got, want := sorted(t, string(res.Schema)), sorted(t, tc.want); got != want {
+			t.Errorf("Schema(%s) = %s, want %s", tc.name, got, want)
+		}
+		if tc.notes == nil {
+			tc.notes = []string{}
+		}
+		if !slices.Equal(res.Notes, tc.notes) {
+			t.Errorf("Schema(%s) notes = %q, want %q", tc.name, res.Notes, tc.notes)
+		}
+	}
+}

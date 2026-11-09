@@ -72,7 +72,21 @@ type Options struct {
 	// assume.Values for a map's values. An example with no value there
 	// counts for nothing.
 	Path []string
+	// Kinds, when not empty, are the kinds the root of an example of the
+	// value can be, in any version of their API group: with Path, an example
+	// whose root is none of them, as a pasted value is, is taken as the
+	// value at Path itself, not as an object the value is in, and a note
+	// says so.
+	Kinds []Kind
 }
+
+// Kind is an apiVersion and a kind, such as apps/v1 and Deployment.
+type Kind struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+}
+
+func (k Kind) String() string { return k.APIVersion + " " + k.Kind }
 
 // Result is the schema Schema works out, and what it could not settle.
 type Result struct {
@@ -84,9 +98,14 @@ type Result struct {
 	Schema json.RawMessage `json:"schema"`
 	// Notes say where the examples did not settle a type, each starting
 	// with the value's path, such as "spec.items: an empty list says nothing
-	// about its items", in the order of the schema's values; empty, never
-	// nil, when there are none.
+	// about its items", in the order of the schema's values, after those
+	// that say which examples are taken as the value itself (see
+	// Options.Kinds); empty, never nil, when there are none.
 	Notes []string `json:"notes"`
+	// Roots are the apiVersion and kind at the root of each example, in
+	// the order of the examples, nil for one without both, before Path
+	// takes the value in it.
+	Roots []*Kind `json:"roots"`
 }
 
 // root names the value itself in notes, where its path is empty.
@@ -120,14 +139,20 @@ func Schema(ctx context.Context, text []byte, opts Options) (Result, error) {
 	}
 	dec := newDecoder(docs)
 	var examples []any
+	var lines []int // the line of each example, from 1
 	for _, d := range docs {
 		v, err := dec.value(ctx, d.Node, 0)
 		if err != nil {
 			return Result{}, err
 		}
-		examples = append(examples, unwrap(v)...)
+		exs := unwrap(v)
+		examples, lines = append(examples, exs...), append(lines, exampleLines(d.Node, len(exs))...)
 	}
-	examples = at(examples, opts.Path)
+	res := Result{Notes: []string{}, Roots: make([]*Kind, len(examples))}
+	for i, ex := range examples {
+		res.Roots[i] = rootOf(ex)
+	}
+	examples = values(examples, lines, res.Roots, opts, &res.Notes)
 	switch {
 	case len(examples) > 0:
 	case len(opts.Path) > 0:
@@ -145,13 +170,113 @@ func Schema(ctx context.Context, text []byte, opts Options) (Result, error) {
 		}
 		in.add(&top, ex, "", len(opts.Path) == 0)
 	}
-	res := Result{Notes: []string{}}
 	schema, err := crdschema.JSON(crdschema.Arrange(in.schema(&top, "", &res.Notes)))
 	if err != nil {
 		return Result{}, fmt.Errorf("write the schema: %w", err)
 	}
 	res.Schema = schema
 	return res, nil
+}
+
+// exampleLines returns the line, from 1, where each of the n examples the
+// document doc gives (see unwrap) is written: the line of each item of a
+// list, or of a v1 List's items, an alias's own line where the example, or
+// the list of them, is one, not its anchor's, and else the document's.
+func exampleLines(doc *yaml.Node, n int) []int {
+	root := doc
+	if len(doc.Content) > 0 {
+		root = doc.Content[0]
+	}
+	list := root // the node of the list whose items are the examples
+	if root.Kind == yaml.MappingNode && scalarValue(root, "apiVersion") == "v1" && scalarValue(root, "kind") == "List" {
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value == "items" {
+				list = root.Content[i+1]
+			}
+		}
+	}
+	out := make([]int, n)
+	for i := range out {
+		switch {
+		case list.Kind == yaml.SequenceNode && len(list.Content) == n:
+			out[i] = list.Content[i].Line
+		case list != root:
+			out[i] = list.Line
+		default:
+			out[i] = root.Line
+		}
+	}
+	return out
+}
+
+// scalarValue is the value of key in the mapping m when it is a scalar, or "".
+func scalarValue(m *yaml.Node, key string) string {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key && m.Content[i+1].Kind == yaml.ScalarNode {
+			return m.Content[i+1].Value
+		}
+	}
+	return ""
+}
+
+// sameKind reports whether a and b are the same kind of the same API group,
+// in any version: the API server converts an object to the version a rule or
+// paramKind names, so an example in another version is one of the kind.
+func sameKind(a, b Kind) bool { return a.Kind == b.Kind && a.Group() == b.Group() }
+
+// Group is the API group of k's apiVersion: what comes before its /, and ""
+// for the core group, as of v1.
+func (k Kind) Group() string {
+	group, _, ok := strings.Cut(k.APIVersion, "/")
+	if !ok {
+		return ""
+	}
+	return group
+}
+
+// rootOf is the apiVersion and kind at the root of the example ex, nil when
+// it has not both, as strings.
+func rootOf(ex any) *Kind {
+	o, ok := ex.(*object)
+	if !ok {
+		return nil
+	}
+	apiVersion, _ := plain(o.fields["apiVersion"]).(string)
+	kind, _ := plain(o.fields["kind"]).(string)
+	if apiVersion == "" || kind == "" {
+		return nil
+	}
+	return &Kind{APIVersion: apiVersion, Kind: kind}
+}
+
+// values returns the values of examples, whose lines are lines and whose
+// roots are roots, that the schema is worked out from: the examples
+// themselves without opts.Path, else the value at the path in each, but for
+// an example whose root is none of opts.Kinds, when they are known, which is
+// the value itself, as notes then says.
+func values(examples []any, lines []int, roots []*Kind, opts Options, notes *[]string) []any {
+	if len(opts.Path) == 0 {
+		return examples
+	}
+	var out []any
+	for i, ex := range examples {
+		r := roots[i]
+		if len(opts.Kinds) == 0 || r != nil && slices.ContainsFunc(opts.Kinds, func(k Kind) bool { return sameKind(k, *r) }) {
+			out = append(out, at([]any{ex}, opts.Path)...)
+			continue
+		}
+		out = append(out, ex)
+		kinds := make([]string, len(opts.Kinds))
+		for j, k := range opts.Kinds {
+			kinds[j] = k.String()
+		}
+		what := "has no apiVersion and kind, so it is not"
+		if r != nil {
+			what = "is of kind " + r.String() + ", not"
+		}
+		*notes = append(*notes, fmt.Sprintf("%s: the example at line %d %s of %s: it is taken as the value at %s itself", root, lines[i], what, strings.Join(kinds, " or "), pathString(opts.Path)))
+	}
+	return out
 }
 
 // documentAt returns text with only the document at line, from 1, left: the
