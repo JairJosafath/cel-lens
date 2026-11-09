@@ -115,19 +115,28 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
   names these parts' commands, `cel-lens.showRule`, `cel-lens.listValues`,
   `cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, so they are not
   in the Command Palette.
-- **Types for `dyn` values:** **Give it a type** opens a picker of a struct to write
-  and the kinds there are; **Edit** opens the input box filled with the type, or the
-  picker on the kind; **Remove** removes the entry at once. The extension asks, and
-  the engine writes `.cellens`: it runs the engine's commands `cel-lens.typeChoices`,
-  `cel-lens.checkType` (as the person types, cancelling the check of older text),
-  `cel-lens.setType` and `cel-lens.removeType` with `workspace/executeCommand`, and
-  the engine sends the edit back through `workspace/applyEdit`, so it lands in the
-  editor and Undo takes it back. The language client would register each command the
-  engine lists as a VS Code command, and the engine's `cel-lens.removeType` has the
-  name of the line's part; a second registration throws, so the client registers
-  none of them (`CelLensClient.registerFeature`) and the extension sends the requests
-  itself. The flow is in `src/type_flow.ts`, `src/type_input.ts` and
-  `src/value_types.ts`, which do not import `vscode`.
+- **Types for `dyn` values:** **Give it a type** and **Edit** open a picker:
+  **Write a schema in .cellens…**, **Use a Go type…** (a second picker of the
+  Go types of the `.cellens`'s workspace folder, with a Back button) and **Write a
+  short type in .cellens…**, then the kinds there are; a CRD's value gets `int` and
+  `string` only. An engine that lists no Go types, or refuses `snippet`, is too old:
+  the flow says so, with a button to `cel-lens.serverPath`.
+  **Remove** removes the entry at once. The extension asks, and the engine writes
+  `.cellens`: it runs the engine's commands `cel-lens.typeChoices` (cancelled once the
+  flow ends, as the Go walk may still run), `cel-lens.setType` and
+  `cel-lens.removeType` with `workspace/executeCommand`, and the engine sends the edit
+  back through `workspace/applyEdit`, so it lands in the editor and Undo takes it
+  back. A Go type, a kind, `int` or `string` is set at once; the two lines that write
+  in `.cellens` send `setType` a `snippet` instead, and the engine answers where the
+  cursor goes once its edit is applied, at a new entry or at the one the value has,
+  so the extension opens `.cellens` there beside the rule
+  (`window.showTextDocument` with `ViewColumn.Beside`, or the group that already
+  shows it). The language client would register each command the engine lists as a
+  VS Code command, and the engine's `cel-lens.removeType` has the name of the line's
+  part; a second registration throws, so the client registers none of them
+  (`CelLensClient.registerFeature`) and the extension sends the requests itself. The
+  flow is in `src/type_flow.ts` and `src/value_types.ts`, which do not import
+  `vscode`, and `src/type_commands.ts` shows it.
 
 ### Kubernetes version
 

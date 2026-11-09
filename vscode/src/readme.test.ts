@@ -158,25 +158,59 @@ describe('README.md as the store page', () => {
     const lines = (readmeSection(README, 'What it looks like') ?? '').trimStart().split('\n');
     const [placeholder, , line] = lines.slice(4);
     expect(placeholder).toMatch(
-      /^<!-- Picture to take: images\/give-type\.png, the picker titled `Give params a type`.+`Write a struct…` first.+ -->$/,
+      /^<!-- Picture to take: images\/give-type\.png, the picker titled `Give params a type`.+`Write a schema in \.cellens…`, `Use a Go type…` and `Write a short type in \.cellens…` first.+ -->$/,
     );
     expect(line).toContain('**Give it a type**');
   });
 
   it.each([
     '**Give it a type**',
-    '**Write a struct…**',
+    'opens `.cellens` beside the rule',
+    'in the editor group that already shows it',
+    "the engine's completion, hover and problems as you type",
     '`{name: string, replicas: int}`',
-    'as you type',
-    'Escape changes nothing',
-    '`int` or `string`',
-    '**Edit**',
-    '**Pick a kind…** button',
+    '`go: ./api/v1#QuotaSpec`',
+    '`kind: apps/v1 Deployment`',
+    'offers `int` and `string` only',
+    'A schema, a short type, a Go type or a kind would not fit it',
+    'of the workspace folder of the `.cellens`',
+    'its **Back** button returns to the first',
+    'with a button to `cel-lens.serverPath`',
+    '**Edit** opens the same picker on what the value has',
+    'open `.cellens` at its entry',
     '**Remove**',
     '**Undo** in the `.cellens` editor',
     '**cel-lens: Give a Value a Type…**',
   ])('says how to give a value a type: %s', (text) => {
     expect(readmeSection(README, 'Give a value a type')).toContain(text);
+  });
+
+  it('says how to give a type in each of the four forms, in the order of the picker, each under its heading with a picture for a person to take', () => {
+    const section = readmeSection(README, 'Give a value a type') ?? '';
+    const forms = section.split(/^(?=### )/m).slice(1);
+
+    expect(forms.map((form) => form.split('\n')[0])).toEqual([
+      '### A schema',
+      '### A Go type',
+      '### A short type',
+      '### A kind',
+      '### A value of a CRD',
+      '### Edit or remove a type',
+    ]);
+    expect(readmePicturePlaceholders(section)).toEqual([
+      'images/give-type-schema.png',
+      'images/give-type-go.png',
+      'images/give-type-short.png',
+      'images/give-type-kind.png',
+    ]);
+    expect(
+      forms.slice(0, 4).map((form) => readmePicturePlaceholders(form.split('\n')[2] ?? '')),
+    ).toEqual(readmePicturePlaceholders(section).map((file) => [file]));
+    expect(forms.slice(0, 3).map((form) => /\*\*([^*]+)\*\*/.exec(form)?.[1])).toEqual([
+      'Write a schema in .cellens…',
+      'Use a Go type…',
+      'Write a short type in .cellens…',
+    ]);
   });
 
   it('says where the palette shows the commands, as their when clauses in package.json do', () => {

@@ -117,20 +117,40 @@ describe('CHANGELOG.md', () => {
     expect(sections.length).toBeGreaterThan(1);
   });
 
+  /** The Added part of the Unreleased section. */
+  function unreleasedAdded(): string | undefined {
+    const unreleased = CHANGELOG.split(/^(?=## \[)/m)[1] ?? '';
+    return unreleased.split(/^(?=### )/m).find((part) => part.startsWith('### Added'));
+  }
+
   it.each([
     '`cel-lens.inlineInfo`',
     '**cel-lens: Toggle Inline Info**',
     '**Give it a type**',
-    '**Write a struct…**',
-    '`{name: string, replicas: int}`',
+    '**Write a schema in .cellens…** (OpenAPI), **Use a Go type…** and **Write a short type in .cellens…** first',
+    'open `.cellens` beside the rule',
+    'in the editor group that already shows it',
+    "with the engine's completion, hover and problems",
+    'each with its folder and doc comment',
+    'A Go type or a kind is written at once',
+    'the Go struct types of the workspace folder of the `.cellens`',
+    'has a **Back** button to it',
+    'A value of a CRD is offered `int` and `string` only',
+    'says so once, with a button to `cel-lens.serverPath`',
+    'where the two lines that write in `.cellens` open it at the entry',
     '**Remove** removes the entry at once',
-    '**Pick a kind…** button',
     '**cel-lens: Give a Value a Type…**',
+    'how to give a type in each of the four forms',
   ])('names %s under Added in the Unreleased section', (text) => {
-    const unreleased = CHANGELOG.split(/^(?=## \[)/m)[1] ?? '';
-    const added = unreleased.split(/^(?=### )/m).find((part) => part.startsWith('### Added'));
-    expect(added).toContain(text);
+    expect(unreleasedAdded()).toContain(text);
   });
+
+  it.each(['input box', 'Write a struct…', 'Pick a kind…'])(
+    'names no %s, which no release had, in the Unreleased section',
+    (text) => {
+      expect(unreleasedAdded()).not.toContain(text);
+    },
+  );
 
   it.each(
     sections.slice(0, sections.findIndex(({ version }) => version === OLDEST_PUBLIC_VERSION) + 1),

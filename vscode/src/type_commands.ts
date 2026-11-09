@@ -1,19 +1,18 @@
 import * as vscode from 'vscode';
 
-import { SHOW_LOGS_LABEL } from './button_labels';
+import { OPEN_ENGINE_SETTING_LABEL, SHOW_LOGS_LABEL } from './button_labels';
 import { EXPERIMENTAL_SETTING } from './experimental';
 import { readInlineInfo } from './inline_info_setting';
-import type {
-  FlowLog,
-  PickRequest,
-  Picked,
-  TypeFlow,
-  TypeUi,
-  WriteEnd,
-  WriteRequest,
+import { openServerPathSetting } from './open_server_setting';
+import {
+  BACK,
+  type FlowLog,
+  type PickRequest,
+  type Picked,
+  type TypeFlow,
+  type TypeUi,
 } from './type_flow';
-import { TypeInput } from './type_input';
-import { PICK_KIND_TOOLTIP, type PickLine } from './value_types';
+import { OUTDATED_ENGINE_MESSAGE, type PickLine, type TextRange } from './value_types';
 
 /** What `cel-lens: Give a Value a Type…` says without a YAML file open. */
 export const OPEN_YAML_MESSAGE = 'Open a Kubernetes YAML file to give one of its values a type.';
@@ -38,9 +37,10 @@ function shownItem<T>(line: PickLine<T>): ShownItem<T> {
 
 /**
  * Shows the lines, matching what is typed on their descriptions and details too, as GitLens does.
- * Lines still to come show the first ones at once, busy until the others are there.
+ * Lines still to come show the first ones at once, busy until the others are there. The filter
+ * starts with what the request gives, and a step after another has a Back button to it.
  */
-function pick<T>(request: PickRequest<T>): Promise<Picked<T> | undefined> {
+function pick<T>(request: PickRequest<T>): Promise<Picked<T> | typeof BACK | undefined> {
   return new Promise((resolve) => {
     const quickPick = vscode.window.createQuickPick<ShownItem<T>>();
     const isActive = request.active;
@@ -57,6 +57,16 @@ function pick<T>(request: PickRequest<T>): Promise<Picked<T> | undefined> {
     quickPick.placeholder = request.placeholder;
     quickPick.matchOnDescription = true;
     quickPick.matchOnDetail = true;
+    quickPick.value = request.filter ?? '';
+    if (request.back === true) {
+      quickPick.buttons = [vscode.QuickInputButtons.Back];
+      quickPick.onDidTriggerButton((button) => {
+        if (button === vscode.QuickInputButtons.Back) {
+          resolve(BACK);
+          quickPick.hide();
+        }
+      });
+    }
     if (request.lines instanceof Promise) {
       showLines(request.first ?? []);
       quickPick.busy = true;
@@ -89,82 +99,44 @@ function pick<T>(request: PickRequest<T>): Promise<Picked<T> | undefined> {
 }
 
 /**
- * Shows the input box until Enter sets the type, Escape closes it or its Pick a kind… button
- * turns to the picker; it checks the type as it is typed.
+ * Opens `.cellens` in the editor group that already shows it, else beside the active editor,
+ * which is the rule's, so the rule stays in view; the focus goes to the selection, and the editor
+ * is no preview, so it stays open while the person types.
  */
-function write(request: WriteRequest): Promise<WriteEnd> {
-  return new Promise((resolve) => {
-    const box = vscode.window.createInputBox();
-    const pickKind: vscode.QuickInputButton = {
-      iconPath: new vscode.ThemeIcon('symbol-class'),
-      tooltip: PICK_KIND_TOOLTIP,
-    };
-    box.title = request.title;
-    box.placeholder = request.placeholder;
-    box.prompt = request.prompt;
-    box.value = request.value;
-    box.buttons = [pickKind];
-    let closed = false;
-    let end: WriteEnd = 'closed';
-    const input = new TypeInput(
-      {
-        get value() {
-          return box.value;
-        },
-        setProblem: (message) => {
-          if (!closed) {
-            box.validationMessage = message;
-          }
-        },
-        setBusy: (busy) => {
-          if (!closed) {
-            box.busy = busy;
-          }
-        },
-        setEnabled: (enabled) => {
-          if (!closed) {
-            box.enabled = enabled;
-          }
-        },
-        close: () => {
-          box.hide();
-        },
-      },
-      request,
-    );
-    const listeners = [
-      box.onDidChangeValue((text) => {
-        input.changed(text);
-      }),
-      box.onDidAccept(() => {
-        void input.accepted(); // Never rejects: it shows what goes wrong in the box.
-      }),
-      box.onDidTriggerButton((button) => {
-        if (button === pickKind) {
-          end = 'pickKind';
-          box.hide();
-        }
-      }),
-      box.onDidHide(() => {
-        closed = true;
-        input.dispose();
-        for (const listener of listeners) {
-          listener.dispose();
-        }
-        box.dispose();
-        resolve(end);
-      }),
-    ];
-    box.show();
-    input.changed(box.value);
+async function openCellens(cellens: string, selection: TextRange): Promise<void> {
+  const uri = vscode.Uri.parse(cellens);
+  const shown = vscode.window.visibleTextEditors.find(
+    (editor) => editor.document.uri.toString() === uri.toString(),
+  );
+  await vscode.window.showTextDocument(uri, {
+    viewColumn: shown?.viewColumn ?? vscode.ViewColumn.Beside,
+    selection: new vscode.Range(
+      selection.start.line,
+      selection.start.character,
+      selection.end.line,
+      selection.end.character,
+    ),
+    preserveFocus: false,
+    preview: false,
   });
 }
 
-/** Shows the flow with VS Code's quick pick, input box and notifications. */
+/** Shows the flow with VS Code's quick pick, editors and notifications. */
 export function typeUi(log: Pick<vscode.LogOutputChannel, 'show'>): TypeUi {
   return {
     pick,
-    write,
+    openCellens,
+    workspaceFolder(uri) {
+      return vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(uri))?.uri.toString();
+    },
+    workspacePath(uri) {
+      // VS Code writes a workspace folder itself as its full path: its name says it shorter.
+      const folder = vscode.Uri.parse(uri);
+      const root = vscode.workspace.getWorkspaceFolder(folder);
+      return root?.uri.toString() === folder.toString()
+        ? root.name
+        : vscode.workspace.asRelativePath(folder);
+    },
     async inform(message) {
       await vscode.window.showInformationMessage(message);
     },
@@ -181,6 +153,20 @@ export function typeUi(log: Pick<vscode.LogOutputChannel, 'show'>): TypeUi {
         'workbench.action.openSettings',
         `cel-lens.${EXPERIMENTAL_SETTING}`,
       );
+    },
+    openServerPathSetting,
+    async showOutdatedEngine() {
+      if (
+        (await vscode.window.showErrorMessage(
+          OUTDATED_ENGINE_MESSAGE,
+          OPEN_ENGINE_SETTING_LABEL,
+        )) === OPEN_ENGINE_SETTING_LABEL
+      ) {
+        await openServerPathSetting();
+      }
+    },
+    showLogs() {
+      log.show();
     },
   };
 }

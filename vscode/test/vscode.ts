@@ -215,10 +215,16 @@ export const quickPicks: {
     matchOnDescription: boolean;
     matchOnDetail: boolean;
     busy: boolean;
+    /** The tooltips of its buttons. */
+    buttons: string[];
+    /** What its filter started with. */
+    value: string;
     /** The labels of the lines it showed at once. */
     labels: string[];
   }[];
   next: string | undefined;
+  /** The labels the next quick picks window.createQuickPick made pick, in order; then `next`. */
+  queue: string[];
   /** What the user types in the filter of the next quick pick window.createQuickPick made. */
   typed: string;
   acceptAtOnce: boolean;
@@ -228,12 +234,22 @@ export const quickPicks: {
   options: [],
   created: [],
   next: undefined,
+  queue: [],
   typed: '',
   acceptAtOnce: false,
 };
 
-/** The documents shown with window.showTextDocument, oldest first, with the selection asked for. */
-export const shownDocuments: { uri: string; selection: unknown }[] = [];
+/** The error the next calls to window.showTextDocument reject with, if any. */
+export const showFailure: { error: Error | undefined } = { error: undefined };
+
+/** The documents shown with window.showTextDocument, oldest first, with the options asked for. */
+export const shownDocuments: {
+  uri: string;
+  selection: unknown;
+  viewColumn?: number;
+  preserveFocus?: boolean;
+  preview?: boolean;
+}[] = [];
 
 /** The members of vscode.QuickPick the code under test uses; the stand-in is checked against them. */
 type UsedQuickPick<T extends vscode.QuickPickItem> = Pick<
@@ -247,12 +263,22 @@ type UsedQuickPick<T extends vscode.QuickPickItem> = Pick<
   | 'items'
   | 'activeItems'
   | 'selectedItems'
+  | 'buttons'
+  | 'onDidTriggerButton'
   | 'onDidAccept'
   | 'onDidHide'
   | 'show'
   | 'hide'
   | 'dispose'
 >;
+
+/** The Back button of a step of several quick picks. */
+export const QuickInputButtons = {
+  Back: { iconPath: { id: 'arrow-left' }, tooltip: 'Back' },
+} satisfies Pick<typeof vscode.QuickInputButtons, 'Back'>;
+
+/** What `quickPicks.queue` or `next` takes for a click on the Back button. */
+export const PRESS_BACK = '← Back';
 
 /**
  * A quick pick that, once shown, moves the highlight to the `next` label and
@@ -271,7 +297,9 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
   private busyNow = false;
   private waiting = false;
   activeItems: T[] = [];
+  buttons: readonly vscode.QuickInputButton[] = [];
   private itemList: T[] = [];
+  private readonly buttonListeners = new Set<(button: vscode.QuickInputButton) => void>();
   private readonly acceptListeners = new Set<() => void>();
   private readonly hideListeners = new Set<() => void>();
 
@@ -296,6 +324,11 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
     }
   }
 
+  onDidTriggerButton(listener: (button: vscode.QuickInputButton) => void): Disposable {
+    this.buttonListeners.add(listener);
+    return new Disposable(() => this.buttonListeners.delete(listener));
+  }
+
   onDidAccept(listener: () => void): Disposable {
     this.acceptListeners.add(listener);
     return new Disposable(() => this.acceptListeners.delete(listener));
@@ -313,6 +346,8 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
       matchOnDescription: this.matchOnDescription,
       matchOnDetail: this.matchOnDetail,
       busy: this.busyNow,
+      buttons: this.buttons.map((button) => button.tooltip ?? ''),
+      value: this.value,
       labels: this.itemList.map((item) => item.label),
     });
     if (this.busyNow) {
@@ -322,12 +357,23 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
     }
   }
 
-  /** What the user does once the lines are there: picks the `next` label, or Escape. */
+  /** What the user does once the lines are there: types, picks the label queued or `next`, or Escape. */
   private act(): void {
     quickPicks.shown.push(this.itemList);
     quickPicks.active.push([...this.activeItems]);
-    this.value = quickPicks.typed;
-    const target = this.itemList.find((item) => item.label === quickPicks.next);
+    if (quickPicks.typed !== '') {
+      this.value = quickPicks.typed;
+      quickPicks.typed = '';
+    }
+    const label = quickPicks.queue.length > 0 ? quickPicks.queue.shift() : quickPicks.next;
+    const back = this.buttons.find((button) => button === QuickInputButtons.Back);
+    if (label === PRESS_BACK && back !== undefined) {
+      for (const listener of this.buttonListeners) {
+        listener(back);
+      }
+      return;
+    }
+    const target = this.itemList.find((item) => item.label === label);
     if (target !== undefined) {
       this.activeItems = [target];
     }
@@ -348,127 +394,17 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
   }
 
   dispose(): void {
-    this.acceptListeners.clear();
-    this.hideListeners.clear();
-  }
-}
-
-/** The members of vscode.InputBox the code under test uses; the stand-in is checked against them. */
-type UsedInputBox = Pick<
-  vscode.InputBox,
-  | 'title'
-  | 'placeholder'
-  | 'prompt'
-  | 'value'
-  | 'validationMessage'
-  | 'busy'
-  | 'enabled'
-  | 'buttons'
-  | 'onDidTriggerButton'
-  | 'onDidChangeValue'
-  | 'onDidAccept'
-  | 'onDidHide'
-  | 'show'
-  | 'hide'
-  | 'dispose'
->;
-
-/** Every input box window.createInputBox made, oldest first. */
-export const inputBoxes: FakeInputBox[] = [];
-
-/** An input box a test drives as a person would: it types, presses Enter or Escape. */
-export class FakeInputBox implements UsedInputBox {
-  title: string | undefined;
-  placeholder: string | undefined;
-  prompt: string | undefined;
-  value = '';
-  validationMessage: string | vscode.InputBoxValidationMessage | undefined;
-  busy = false;
-  enabled = true;
-  buttons: readonly vscode.QuickInputButton[] = [];
-  visible = false;
-  disposed = false;
-  private readonly buttonListeners = new Set<(button: vscode.QuickInputButton) => void>();
-  private readonly changeListeners = new Set<(value: string) => void>();
-  private readonly acceptListeners = new Set<() => void>();
-  private readonly hideListeners = new Set<() => void>();
-
-  onDidTriggerButton(listener: (button: vscode.QuickInputButton) => void): Disposable {
-    this.buttonListeners.add(listener);
-    return new Disposable(() => this.buttonListeners.delete(listener));
-  }
-
-  onDidChangeValue(listener: (value: string) => void): Disposable {
-    this.changeListeners.add(listener);
-    return new Disposable(() => this.changeListeners.delete(listener));
-  }
-
-  onDidAccept(listener: () => void): Disposable {
-    this.acceptListeners.add(listener);
-    return new Disposable(() => this.acceptListeners.delete(listener));
-  }
-
-  onDidHide(listener: () => void): Disposable {
-    this.hideListeners.add(listener);
-    return new Disposable(() => this.hideListeners.delete(listener));
-  }
-
-  show(): void {
-    this.visible = true;
-  }
-
-  /** Escape, or the code closing the box: tells the listeners once. */
-  hide(): void {
-    if (!this.visible) {
-      return;
-    }
-    this.visible = false;
-    for (const listener of this.hideListeners) {
-      listener();
-    }
-  }
-
-  dispose(): void {
-    this.disposed = true;
     this.buttonListeners.clear();
-    this.changeListeners.clear();
     this.acceptListeners.clear();
     this.hideListeners.clear();
-  }
-
-  /** Replaces the text, as typing does, and tells the listeners. */
-  type(text: string): void {
-    this.value = text;
-    for (const listener of this.changeListeners) {
-      listener(text);
-    }
-  }
-
-  /** Clicks the button with this tooltip. */
-  press(tooltip: string): void {
-    for (const button of this.buttons.filter((each) => each.tooltip === tooltip)) {
-      for (const listener of this.buttonListeners) {
-        listener(button);
-      }
-    }
-  }
-
-  /** Presses Enter. */
-  accept(): void {
-    for (const listener of this.acceptListeners) {
-      listener();
-    }
   }
 }
 
 export const QuickPickItemKind = { Separator: -1, Default: 0 } as const;
 
-/** A product icon, by its name. */
-export class ThemeIcon {
-  constructor(readonly id: string) {}
-}
-
 export const StatusBarAlignment = { Left: 1, Right: 2 } as const;
+
+export const ViewColumn = { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 } as const;
 
 export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 } as const;
 
@@ -519,6 +455,8 @@ export const decorationTypes: FakeDecorationType[] = [];
 /** A visible editor: a document, and the ranges set for each decoration type. */
 export class FakeEditor {
   readonly decorations = new Map<FakeDecorationType, Range[]>();
+  /** The editor group it is in. */
+  viewColumn: number | undefined;
   /** The lines in view; the whole document unless a test scrolls. */
   visibleRanges: { start: { line: number }; end: { line: number } }[] = [
     { start: { line: 0 }, end: { line: Number.MAX_SAFE_INTEGER - 1000 } },
@@ -652,16 +590,20 @@ export const window = {
     return Promise.resolve(items.find((item) => item.label === quickPicks.next));
   },
   showTextDocument(uri: vscode.Uri, options?: vscode.TextDocumentShowOptions): Promise<object> {
-    shownDocuments.push({ uri: uri.toString(), selection: options?.selection });
+    if (showFailure.error !== undefined) {
+      return Promise.reject(showFailure.error);
+    }
+    shownDocuments.push({
+      uri: uri.toString(),
+      selection: options?.selection,
+      ...(options?.viewColumn !== undefined && { viewColumn: options.viewColumn }),
+      ...(options?.preserveFocus !== undefined && { preserveFocus: options.preserveFocus }),
+      ...(options?.preview !== undefined && { preview: options.preview }),
+    });
     return Promise.resolve({});
   },
   createQuickPick<T extends vscode.QuickPickItem>(): FakeQuickPick<T> {
     return new FakeQuickPick<T>();
-  },
-  createInputBox(): FakeInputBox {
-    const box = new FakeInputBox();
-    inputBoxes.push(box);
-    return box;
   },
   showErrorMessage<T extends string>(message: string, ...buttons: T[]): Promise<T | undefined> {
     shownErrors.push({ message, buttons });
@@ -690,12 +632,9 @@ export const window = {
     channels.set(name, channel);
     return channel;
   },
-} satisfies Partial<
-  Omit<typeof vscode.window, LooseWindowMember | 'createQuickPick' | 'createInputBox'>
-> &
+} satisfies Partial<Omit<typeof vscode.window, LooseWindowMember | 'createQuickPick'>> &
   Partial<Record<LooseWindowMember, unknown>> & {
     createQuickPick?: <T extends vscode.QuickPickItem>() => UsedQuickPick<T>;
-    createInputBox?: () => UsedInputBox;
   };
 
 /** The settings `workspace.getConfiguration` returns, by full name. */
@@ -835,6 +774,20 @@ export const workspace = {
           uri: Uri.parse(`${FOLDER_URI_PREFIX}${name}`),
         }));
   },
+  /** Like VS Code, prefixes the folder's name when there are several, unless told otherwise. */
+  asRelativePath(pathOrUri: string | vscode.Uri, includeWorkspaceFolder?: boolean): string {
+    const text = pathOrUri.toString();
+    const folder = this.workspaceFolders?.find((each) =>
+      text.startsWith(`${each.uri.toString()}/`),
+    );
+    if (folder === undefined) {
+      return text;
+    }
+    const relative = text.slice(folder.uri.toString().length + 1);
+    return (includeWorkspaceFolder ?? workspaceFolderNames.length > 1)
+      ? `${folder.name}/${relative}`
+      : relative;
+  },
   getWorkspaceFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
     return this.workspaceFolders?.find(
       (folder) =>
@@ -933,8 +886,8 @@ export function reset(): void {
   executedCommands.length = 0;
   commandFailure.error = undefined;
   commandResults.clear();
-  inputBoxes.length = 0;
   shownDocuments.length = 0;
+  showFailure.error = undefined;
   diagnostics.clear();
   openedUrls.length = 0;
   env.remoteName = undefined;
@@ -949,6 +902,7 @@ export function reset(): void {
   quickPicks.options.length = 0;
   quickPicks.created.length = 0;
   quickPicks.next = undefined;
+  quickPicks.queue.length = 0;
   quickPicks.acceptAtOnce = false;
   quickPicks.typed = '';
   editorListeners.clear();

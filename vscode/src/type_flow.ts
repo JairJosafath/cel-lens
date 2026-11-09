@@ -1,38 +1,46 @@
-import { SHOW_LOGS_LABEL } from './button_labels';
 import {
   EDIT_TYPE_COMMAND,
-  ENGINE_CHECK_TYPE,
   ENGINE_REMOVE_TYPE,
   ENGINE_SET_TYPE,
   ENGINE_TYPE_CHOICES,
   GIVE_TYPE_COMMAND,
+  GO_TYPES_FAILED_LINE,
+  GO_TYPE_PLACEHOLDER,
   INT_OR_STRING_LINES,
   INT_OR_STRING_PLACEHOLDER,
   KIND_PLACEHOLDER,
+  OUTDATED_ENGINE_LINE,
   REMOVE_TYPE_COMMAND,
-  STRUCT_PLACEHOLDER,
-  TYPE_PROMPT,
   VALUE_PICK_PLACEHOLDER,
   VALUE_PICK_TITLE,
-  WRITE_STRUCT_LINE,
   editTypeTitle,
   engineFailure,
+  firstLines,
   giveTypeTitle,
+  goTypeLines,
+  goTypesIn,
+  hasEntry,
   inCrd,
   isChangeAnswer,
   isCurrentChoice,
   lineValues,
+  parentFolder,
+  parseEntryPlace,
   parseTypeChoices,
-  parseTypeProblem,
   parseTypeTarget,
-  problemText,
+  snippetRefusal,
+  sameGo,
   typeLines,
-  typedType,
   valueLines,
+  withGo,
   withKind,
+  withSnippet,
   withType,
   type PickLine,
+  type SnippetForm,
+  type TextRange,
   type TypeChoice,
+  type TypeChoices,
   type TypeTarget,
 } from './value_types';
 
@@ -52,17 +60,14 @@ export interface PickRequest<T> {
   readonly first?: readonly PickLine<T>[];
   /** Whether a line stands for what the value has now, for the picker to start on. */
   readonly active?: (value: T) => boolean;
+  /** What the filter starts with. */
+  readonly filter?: string;
+  /** Whether the picker is a step after another, with a Back button to it. */
+  readonly back?: true;
 }
 
-/** An input box to show, which checks its text as the person types and sets it on Enter. */
-export interface WriteRequest {
-  readonly title: string;
-  readonly placeholder: string;
-  readonly prompt: string;
-  readonly value: string;
-  check(text: string, signal: AbortSignal): Promise<string | undefined>;
-  accept(text: string): Promise<string | undefined>;
-}
+/** What the Back button of a picker gives. */
+export const BACK = 'back';
 
 /** The line picked, and what was typed in the filter. */
 export interface Picked<T> {
@@ -70,22 +75,28 @@ export interface Picked<T> {
   readonly typed: string;
 }
 
-/** How the input box closed: by Enter or Escape, or by its Pick a kind… button. */
-export type WriteEnd = 'closed' | 'pickKind';
-
 /** What the flow shows a person; the extension shows it with VS Code. */
 export interface TypeUi {
-  /** Shows the quick pick; the line picked, or `undefined` on Escape. */
-  pick<T>(request: PickRequest<T>): Promise<Picked<T> | undefined>;
+  /** Shows the quick pick; the line picked, `BACK` for its Back button, or `undefined` on Escape. */
+  pick<T>(request: PickRequest<T>): Promise<Picked<T> | typeof BACK | undefined>;
   /**
-   * Shows the input box until it is closed: by Enter on a type that was set, by Escape, or by
-   * its Pick a kind… button.
+   * Opens `cellens` beside the rule's editor, or in the editor group that already shows it, with
+   * `selection` selected and the focus there, so the person types the type at once.
    */
-  write(request: WriteRequest): Promise<WriteEnd>;
+  openCellens(cellens: string, selection: TextRange): Promise<void>;
+  /** A folder's path relative to its workspace folder, such as `api/v1`. */
+  workspacePath(uri: string): string;
+  /** The URI of the workspace folder `uri` is in, if any. */
+  workspaceFolder(uri: string): string | undefined;
   inform(message: string): Promise<void>;
   /** Shows an error once; `offerLogs` adds the button that opens the logs. */
   showError(message: string, offerLogs: boolean): Promise<void>;
   openExperimentalSetting(): Promise<void>;
+  /** Opens the setting `cel-lens.serverPath`, which picks the engine. */
+  openServerPathSetting(): Promise<void>;
+  /** Says once that the engine is too old for this, with a button to `cel-lens.serverPath`. */
+  showOutdatedEngine(): Promise<void>;
+  showLogs(): void;
 }
 
 export interface FlowLog {
@@ -106,10 +117,12 @@ function sentence(text: string): string {
 
 /**
  * Asks a person what type a `dyn` value has, and has the engine write it into `.cellens`:
- * `Give it a type` and `Edit` show a picker of a struct to write and the kinds there are, or an
- * input box that checks the type as it is typed; `Remove` removes the entry at once. The engine
- * edits `.cellens` through the editor, so Undo there takes a change back, and it refreshes the
- * lines above the rules itself.
+ * `Give it a type` and `Edit` show a picker. `Write a schema in .cellens…` and
+ * `Write a short type in .cellens…` have the engine write an entry to fill in, or find the one
+ * the value has, and open `.cellens` beside the rule there; a Go type, a kind, or a CRD value's
+ * `int` or `string` is set at once. `Remove` removes the entry at once. The engine edits
+ * `.cellens` through the editor, so Undo there takes a change back, and it refreshes the lines
+ * above the rules itself, also as the person types in `.cellens`.
  */
 export class TypeFlow {
   constructor(
@@ -126,22 +139,12 @@ export class TypeFlow {
     }
   }
 
-  /**
-   * `cel-lens.editType`: the input box filled with the type a policy's value has, or the picker
-   * on the kind it has, or on the int or string of a CRD's value.
-   */
+  /** `cel-lens.editType`: the same picker, on what the value has now. */
   async editType(argument: unknown): Promise<void> {
     const target = this.target(EDIT_TYPE_COMMAND, argument);
-    if (target === undefined) {
-      return;
+    if (target !== undefined) {
+      await this.choose(target, editTypeTitle(target.value), `edit the type of ${target.value}`);
     }
-    const title = editTypeTitle(target.value);
-    const action = `edit the type of ${target.value}`;
-    if (target.type !== undefined && !inCrd(target)) {
-      await this.writeOrPick(target, title, action, target.type);
-      return;
-    }
-    await this.choose(target, title, action);
   }
 
   /** `cel-lens.removeType`: removes the entry at once. */
@@ -167,7 +170,7 @@ export class TypeFlow {
       placeholder: VALUE_PICK_PLACEHOLDER,
       lines: valueLines(values),
     });
-    if (picked === undefined) {
+    if (picked === undefined || picked === BACK) {
       return;
     }
     const { command, target } = picked.value;
@@ -185,28 +188,126 @@ export class TypeFlow {
   }
 
   /**
-   * The picker, on the value's type or kind when it has one: the type or kind picked is set, and
-   * `Write a struct…` opens the input box. Picking what the value has already changes nothing.
+   * The picker, on what the value has now when it has a type. A policy's value asks the engine
+   * for its kinds and Go types, which the `Use a Go type…` step shares, keeping the Go types of
+   * the workspace folder of its `.cellens`, as a `go:` entry names no other; once the flow ends, a
+   * list still to come is cancelled. Nothing waits for that list but the pickers that show it:
+   * the engine answers once its walk of the Go code ends. Picking what the value has already
+   * changes nothing. Back from the Go types returns to this picker with what was typed in it.
    */
   private async choose(target: TypeTarget, title: string, action: string): Promise<void> {
-    const picked = await this.ui.pick<TypeChoice>({
-      title,
-      placeholder: inCrd(target) ? INT_OR_STRING_PLACEHOLDER : KIND_PLACEHOLDER,
-      lines: inCrd(target) ? INT_OR_STRING_LINES : this.kindLines(target),
-      first: [WRITE_STRUCT_LINE],
-      active: isCurrentChoice(target),
-    });
-    const choice = picked?.value;
-    switch (choice?.action) {
-      case undefined:
-        return;
-      case 'write':
-        await this.writeOrPick(
-          target,
+    const listing = new AbortController();
+    const root = this.ui.workspaceFolder(target.cellens) ?? parentFolder(target.cellens);
+    let listed: TypeChoices | undefined;
+    const choices = inCrd(target)
+      ? undefined
+      : this.typeChoices(target, listing.signal).then((found) => {
+          listed = found === undefined ? undefined : goTypesIn(found, root);
+          return listed;
+        });
+    const outdated = (): boolean => listed?.outdated === true;
+    const entry = hasEntry(target);
+    let filter = '';
+    try {
+      for (;;) {
+        const picked = await this.ui.pick<TypeChoice>({
           title,
-          action,
-          typedType(picked?.typed ?? '') ?? target.type ?? '',
-        );
+          placeholder: choices === undefined ? INT_OR_STRING_PLACEHOLDER : KIND_PLACEHOLDER,
+          lines:
+            choices === undefined
+              ? INT_OR_STRING_LINES
+              : choices.then((found) =>
+                  found === undefined ? firstLines(entry) : typeLines(found, entry),
+                ),
+          first: firstLines(entry),
+          active: isCurrentChoice(target),
+          filter,
+        });
+        if (picked === undefined || picked === BACK) {
+          return;
+        }
+        if (picked.value.action === 'pickGo' && choices !== undefined && !outdated()) {
+          const step = await this.pickGoType(
+            target,
+            title,
+            action,
+            choices,
+            picked.typed,
+            outdated,
+          );
+          if (step === BACK) {
+            filter = picked.typed;
+            continue;
+          }
+          return;
+        }
+        await this.apply(target, picked.value, action, outdated);
+        return;
+      }
+    } finally {
+      listing.abort();
+    }
+  }
+
+  /**
+   * The second step of `Use a Go type…`: the Go types, filtered by what was typed, or why there
+   * are none to list; its Back button returns to the first.
+   */
+  private async pickGoType(
+    target: TypeTarget,
+    title: string,
+    action: string,
+    choices: Promise<TypeChoices | undefined>,
+    typed: string,
+    outdated: () => boolean,
+  ): Promise<typeof BACK | undefined> {
+    const picked = await this.ui.pick<TypeChoice>({
+      title: `${title} › Go type`,
+      placeholder: GO_TYPE_PLACEHOLDER,
+      lines: choices.then((found) =>
+        found === undefined
+          ? [GO_TYPES_FAILED_LINE]
+          : found.outdated === true
+            ? [OUTDATED_ENGINE_LINE]
+            : goTypeLines(found, target.cellens, (folder) => this.ui.workspacePath(folder)),
+      ),
+      first: [],
+      active: isCurrentChoice(target),
+      filter: typed,
+      back: true,
+    });
+    if (picked === BACK) {
+      return BACK;
+    }
+    if (picked !== undefined) {
+      await this.apply(target, picked.value, action, outdated);
+    }
+    return undefined;
+  }
+
+  /**
+   * Does what the line picked says, at once. `outdated` says whether the engine has already
+   * answered that it is too old for the lines that write in `.cellens` and the Go types; one that
+   * has not answered yet refuses a `snippet` itself.
+   */
+  private async apply(
+    target: TypeTarget,
+    choice: TypeChoice,
+    action: string,
+    outdated: () => boolean,
+  ): Promise<void> {
+    switch (choice.action) {
+      case 'write':
+        if (outdated()) {
+          await this.ui.showOutdatedEngine();
+          return;
+        }
+        await this.writeInCellens(target, choice.form, action);
+        return;
+      case 'go':
+        if (target.go === undefined || !sameGo(choice.go, target.go)) {
+          await this.change(ENGINE_SET_TYPE, withGo(target, choice.go), action);
+        }
         return;
       case 'type':
         if (choice.type !== target.type) {
@@ -221,135 +322,85 @@ export class TypeFlow {
       case 'openCrdSetting':
         await this.ui.openExperimentalSetting();
         return;
+      case 'openServerPathSetting':
+        await this.ui.openServerPathSetting();
+        return;
+      case 'showLogs':
+        this.ui.showLogs();
+        return;
+      case 'pickGo':
+        if (outdated()) {
+          await this.ui.showOutdatedEngine();
+        }
+        return;
+      case 'none':
+        return;
     }
   }
 
   /**
-   * The picker's lines from `cel-lens.typeChoices`. When the engine cannot list the kinds, the
-   * picker keeps `Write a struct…` and the failure is shown once, beside it.
+   * The kinds and Go types from `cel-lens.typeChoices`, `undefined` when the engine cannot list
+   * them: the picker then keeps its first lines, and the failure is shown once, beside it.
    */
-  private async kindLines(target: TypeTarget): Promise<readonly PickLine<TypeChoice>[]> {
+  private async typeChoices(
+    target: TypeTarget,
+    signal: AbortSignal,
+  ): Promise<TypeChoices | undefined> {
     let answer: unknown;
     try {
-      answer = await this.engine(ENGINE_TYPE_CHOICES);
+      answer = await this.engine(ENGINE_TYPE_CHOICES, undefined, signal);
     } catch (error) {
       // Not awaited: a notification stays pending while it is open, and the picker is open.
-      void this.report(`list the kinds for ${target.value}`, error);
-      return [WRITE_STRUCT_LINE];
+      void this.report(`list the kinds and Go types for ${target.value}`, error);
+      return undefined;
     }
     const choices = parseTypeChoices(answer);
     if (choices === undefined) {
       this.log.warn(
         `${ENGINE_TYPE_CHOICES} gave no kinds; the engine may not match this extension.`,
       );
-      return [WRITE_STRUCT_LINE];
     }
-    return typeLines(choices);
-  }
-
-  /** The input box, then the picker when its Pick a kind… button closed it. */
-  private async writeOrPick(
-    target: TypeTarget,
-    title: string,
-    action: string,
-    value: string,
-  ): Promise<void> {
-    if ((await this.write(target, title, action, value)) === 'pickKind') {
-      await this.choose(target, title, action);
-    }
+    return choices;
   }
 
   /**
-   * The input box; it resolves once the box is closed and a type Enter set is set, so a failure
-   * of a box closed while the engine set its type is shown as a notification.
+   * Has the engine write an entry to fill in, a short type or a schema, or find the entry the
+   * value has, and opens `.cellens` there once the edit is applied: the engine sends the edit
+   * before it answers.
    */
-  private async write(
+  private async writeInCellens(
     target: TypeTarget,
-    title: string,
+    form: SnippetForm,
     action: string,
-    value: string,
-  ): Promise<WriteEnd> {
-    const box = { open: true };
-    let setting: Promise<unknown> = Promise.resolve();
-    const end = await this.ui.write({
-      title,
-      placeholder: STRUCT_PLACEHOLDER,
-      prompt: TYPE_PROMPT,
-      value,
-      check: (text, signal) => this.check(target, text, signal),
-      accept: (text) => {
-        if (text === target.type) {
-          return Promise.resolve(undefined);
-        }
-        const set = this.setWritten(target, text, action, box);
-        setting = set;
-        return set;
-      },
-    });
-    box.open = false;
-    await setting;
-    return end;
-  }
-
-  /** What `cel-lens.checkType` finds wrong with `text` for the value; a failed check shows nothing. */
-  private async check(
-    target: TypeTarget,
-    text: string,
-    signal: AbortSignal,
-  ): Promise<string | undefined> {
+  ): Promise<void> {
     let answer: unknown;
     try {
-      answer = await this.engine(ENGINE_CHECK_TYPE, withType(target, text), signal);
+      answer = await this.engine(ENGINE_SET_TYPE, withSnippet(target, form));
     } catch (error) {
-      const failure = engineFailure(error);
-      switch (failure.kind) {
-        case 'cancelled':
-          return undefined;
-        case 'refused':
-          return failure.reason;
-        case 'other':
-          this.log.error(`Could not check the type of ${target.value}: ${failure.reason}`);
-          return undefined;
+      const refusal = snippetRefusal(error);
+      if (refusal !== undefined) {
+        this.log.warn(`Could not ${action}, as the engine is too old: ${refusal}`);
+        await this.ui.showOutdatedEngine();
+        return;
       }
+      await this.report(action, error);
+      return;
     }
-    const problem = parseTypeProblem(answer);
-    if (problem === undefined) {
+    const place = parseEntryPlace(answer);
+    if (place === undefined) {
       this.log.warn(
-        `${ENGINE_CHECK_TYPE} gave no answer it documents; the engine may not match this extension.`,
+        `${ENGINE_SET_TYPE} gave no place to write the type; the engine may not match this extension.`,
       );
+      return;
     }
-    return problem === null || problem === undefined ? undefined : problemText(problem);
-  }
-
-  /**
-   * Sets the type written in the input box: `undefined` once set, else what the box shows; once
-   * the box is closed, a notification shows it instead.
-   */
-  private async setWritten(
-    target: TypeTarget,
-    text: string,
-    action: string,
-    box: { readonly open: boolean },
-  ): Promise<string | undefined> {
     try {
-      this.checkChange(ENGINE_SET_TYPE, await this.engine(ENGINE_SET_TYPE, withType(target, text)));
-      return undefined;
+      await this.ui.openCellens(place.cellens, place.selection);
     } catch (error) {
-      if (!box.open) {
-        await this.report(action, error);
-        return undefined;
-      }
-      const failure = engineFailure(error);
-      switch (failure.kind) {
-        case 'cancelled':
-          return undefined;
-        case 'refused':
-          this.log.warn(`Could not ${action}: ${failure.reason}`);
-          return sentence(failure.reason);
-        case 'other':
-          this.log.error(`Could not ${action}: ${failure.reason}`);
-          return `cel-lens could not ${action}. Run cel-lens: ${SHOW_LOGS_LABEL} for the reason.`;
-      }
+      this.log.error(`Could not open ${place.cellens}: ${String(error)}`);
+      await this.ui.showError(
+        'cel-lens could not open .cellens. Show the logs for the reason.',
+        true,
+      );
     }
   }
 

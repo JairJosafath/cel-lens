@@ -1,27 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  FakeEditor,
+  Range,
+  ViewColumn,
+  Uri,
+  PRESS_BACK,
   activeEditor,
+  addWorkspaceFolder,
   commandFailure,
   commandResults,
   errorChoice,
   executedCommands,
-  inputBoxes,
   quickPicks,
   reset,
   settings,
   settle,
+  showFailure,
+  shownDocuments,
   shownErrors,
   shownInfos,
-  ThemeIcon,
+  visibleEditors,
   window,
 } from '../test/vscode';
 import { OPEN_YAML_MESSAGE, giveValueType, typeUi } from './type_commands';
 import { INLINE_INFO_OFF_MESSAGE, NO_VALUES_MESSAGE, TypeFlow } from './type_flow';
-import { CHECK_DELAY_MS } from './type_input';
-import { TYPE_PROMPT } from './value_types';
+import { GO_TYPE_PLACEHOLDER } from './value_types';
 
-const CELLENS = 'file:///ws/.cellens';
+const CELLENS = 'file:///workspace/repo/.cellens';
 
 const CONFIG = {
   cellens: CELLENS,
@@ -61,31 +67,65 @@ const CHOICES = {
       description: 'A widget.',
     },
   ],
+  goTypes: [
+    {
+      folder: 'file:///workspace/repo/api/v1',
+      name: 'QuotaSpec',
+      doc: 'QuotaSpec is the quota of a team.',
+    },
+    { folder: 'file:///workspace/repo/internal/limits', name: 'Limit', doc: '' },
+  ],
 };
 
-const WAITING =
-  'an edit of .cellens is waiting for the editor: run the command again once it is applied';
+/** Where the engine puts the cursor in `.cellens`: between the braces of `type: "{}"`. */
+const SELECTION = { start: { line: 9, character: 11 }, end: { line: 9, character: 11 } };
 
-const MISSPELT = { message: 'unknown type "strin": use string, int, ...', column: 8 };
+const SCHEMA_LINE = '$(edit) Write a schema in .cellens…';
+const GO_LINE = '$(symbol-struct) Use a Go type…';
+const SHORT_LINE = '$(edit) Write a short type in .cellens…';
 
-/** The engine, faked: `cel-lens.checkType` finds the misspelt `strin`, and every edit is applied. */
+type Run = (command: string, argument?: unknown, signal?: AbortSignal) => Promise<unknown>;
+
+/**
+ * The engine, faked: it lists `CHOICES`, and applies every edit before it answers, as the real
+ * one does; a setType with a snippet answers where the cursor goes. `hold` keeps a command's
+ * answer until the test gives it.
+ */
 function fakeEngine(): {
-  calls: { command: string; argument: unknown; signal: AbortSignal | undefined }[];
-  run: (command: string, argument?: unknown, signal?: AbortSignal) => Promise<unknown>;
+  calls: { command: string; argument: unknown }[];
+  hold: (command: string) => (answer?: unknown) => void;
+  run: Run;
 } {
-  const calls: { command: string; argument: unknown; signal: AbortSignal | undefined }[] = [];
+  const calls: { command: string; argument: unknown }[] = [];
+  const held = new Map<string, Promise<unknown>>();
+  const answer = (command: string, argument: unknown): unknown => {
+    if (command === 'cel-lens.typeChoices') {
+      return CHOICES;
+    }
+    const snippet = typeof argument === 'object' && argument !== null && 'snippet' in argument;
+    return snippet
+      ? { cellens: CELLENS, change: 'added', selection: SELECTION }
+      : { cellens: CELLENS, change: 'added' };
+  };
   return {
     calls,
-    run: (command, argument, signal) => {
-      calls.push({ command, argument, signal });
-      switch (command) {
-        case 'cel-lens.typeChoices':
-          return Promise.resolve(CHOICES);
-        case 'cel-lens.checkType':
-          return Promise.resolve(JSON.stringify(argument).includes('strin}') ? MISSPELT : null);
-        default:
-          return Promise.resolve({ cellens: CELLENS, change: 'added' });
-      }
+    hold: (command) => {
+      let give: (answer?: unknown) => void = () => undefined;
+      held.set(
+        command,
+        new Promise((resolve) => {
+          give = resolve;
+        }),
+      );
+      return (given) => {
+        give(given);
+      };
+    },
+    run: async (command, argument) => {
+      calls.push({ command, argument });
+      const waiting = held.get(command);
+      const given = waiting === undefined ? undefined : await waiting;
+      return given ?? answer(command, argument);
     },
   };
 }
@@ -102,22 +142,17 @@ function setUp(): {
   return { engine, log, ui, flow: new TypeFlow(engine.run, ui, log) };
 }
 
-/** Lets the chained promises of a step run: the engine's answer, then what is shown with it. */
-async function flush(): Promise<void> {
-  await settle();
-  await settle();
+/** An editor of the group `viewColumn` that shows the document at `uri`. */
+function editorOf(uri: string, viewColumn: number): FakeEditor {
+  const editor = new FakeEditor({ languageId: 'yaml', getText: () => '', uri: Uri.parse(uri) });
+  editor.viewColumn = viewColumn;
+  return editor;
 }
 
 describe('Give it a type, against the VS Code stand-in', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    reset();
-  });
+  afterEach(reset);
 
-  it('shows the picker titled after the value, the kinds told apart by icon, with group and version as the description, found by what is typed in descriptions and details too', async () => {
+  it('shows the picker at once, titled after the value and busy with a schema, a Go type and a short type, then the kinds told apart by icon, found by what is typed in descriptions and details too', async () => {
     const { flow } = setUp();
 
     await flow.giveType(CONFIG);
@@ -125,20 +160,34 @@ describe('Give it a type, against the VS Code stand-in', () => {
     expect(quickPicks.created).toEqual([
       {
         title: 'Give params.spec.config a type',
-        placeholder: 'Write a struct, or type to find a kind such as Deployment',
+        placeholder: 'Pick how to write the type, or type to find a kind such as Deployment',
         matchOnDescription: true,
         matchOnDetail: true,
         busy: true,
-        labels: ['$(edit) Write a struct…'],
+        buttons: [],
+        value: '',
+        labels: [SCHEMA_LINE, GO_LINE, SHORT_LINE],
       },
     ]);
     expect(quickPicks.shown[0]).toEqual([
       {
-        label: '$(edit) Write a struct…',
-        detail:
-          'Its fields and their types, such as {name: string, replicas: int}, or any CEL type',
+        label: SCHEMA_LINE,
+        description: 'OpenAPI',
+        detail: 'Properties, descriptions and formats, as in a CRD; opens .cellens beside the rule',
+        value: { action: 'write', form: 'schema' },
+      },
+      {
+        label: GO_LINE,
+        description: '2 types',
+        detail: "A struct of the workspace's Go code, such as a kubebuilder API type",
         alwaysShow: true,
-        value: { action: 'write' },
+        value: { action: 'pickGo' },
+      },
+      {
+        label: SHORT_LINE,
+        description: 'CEL',
+        detail: 'Such as {name: string, replicas: int}; opens .cellens beside the rule',
+        value: { action: 'write', form: 'type' },
       },
       { label: 'Built-in kinds · Kubernetes 1.37', kind: -1 },
       {
@@ -163,34 +212,28 @@ describe('Give it a type, against the VS Code stand-in', () => {
     ]);
   });
 
-  it('shows the picker at once, busy with Write a struct…, before the engine lists the kinds', async () => {
-    const engine = fakeEngine();
-    let answer: (choices: unknown) => void = () => undefined;
-    const run = (command: string, argument?: unknown, signal?: AbortSignal): Promise<unknown> =>
-      command === 'cel-lens.typeChoices'
-        ? new Promise((resolve) => {
-            answer = resolve;
-          })
-        : engine.run(command, argument, signal);
-    const log = window.createOutputChannel('cel-lens');
+  it('lets a kind be picked from the busy picker after the engine lists them, and sets it at once', async () => {
+    const { flow, engine } = setUp();
+    const listed = engine.hold('cel-lens.typeChoices');
     quickPicks.next = '$(symbol-class) Deployment';
 
-    const giving = new TypeFlow(run, typeUi(log), log).giveType(CONFIG);
-    await flush();
+    const giving = flow.giveType(CONFIG);
+    await settle();
 
     expect(quickPicks.created).toMatchObject([
-      { title: 'Give params.spec.config a type', busy: true, labels: ['$(edit) Write a struct…'] },
+      { busy: true, labels: [SCHEMA_LINE, GO_LINE, SHORT_LINE] },
     ]);
     expect(quickPicks.shown).toEqual([]);
 
-    answer(CHOICES);
+    listed(CHOICES);
     await giving;
 
-    expect(quickPicks.shown[0]).toHaveLength(6);
-    expect(engine.calls.at(-1)).toMatchObject({
+    expect(quickPicks.shown[0]).toHaveLength(8);
+    expect(engine.calls.at(-1)).toEqual({
       command: 'cel-lens.setType',
       argument: { ...CONFIG, kind: 'apps/v1 Deployment' },
     });
+    expect(shownDocuments).toEqual([]);
   });
 
   it('starts an edit on the kind the value has', async () => {
@@ -201,167 +244,204 @@ describe('Give it a type, against the VS Code stand-in', () => {
     expect(quickPicks.active[0]).toMatchObject([{ label: '$(file-code) Widget' }]);
   });
 
-  it('writes a struct: the input box checks it as it is typed, and Enter on a type that is fine sets it', async () => {
-    const { flow, engine } = setUp();
-    quickPicks.next = '$(edit) Write a struct…';
+  it.each([
+    ['a schema', SCHEMA_LINE, 'schema'],
+    ['a short type', SHORT_LINE, 'type'],
+  ])(
+    'writes %s in .cellens: opens it beside the rule once the engine applied its entry, focused on its first placeholder, and no preview',
+    async (_name, line, snippet) => {
+      const { flow, engine } = setUp();
+      const written = engine.hold('cel-lens.setType');
+      quickPicks.next = line;
 
-    const giving = flow.giveType(CONFIG);
-    await flush();
-    const box = inputBoxes[0];
-    expect(box).toMatchObject({
-      title: 'Give params.spec.config a type',
-      placeholder: '{name: string, replicas: int}',
-      prompt: TYPE_PROMPT,
-      value: '',
-      visible: true,
-    });
+      const giving = flow.giveType(CONFIG);
+      await settle();
+      expect(engine.calls.at(-1)).toEqual({
+        command: 'cel-lens.setType',
+        argument: { ...CONFIG, snippet },
+      });
+      expect(shownDocuments).toEqual([]);
 
-    box?.type('{name: strin}');
-    await flush();
-    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
-    vi.advanceTimersByTime(CHECK_DELAY_MS);
-    await flush();
-    expect(engine.calls.at(-1)).toMatchObject({
-      command: 'cel-lens.checkType',
-      argument: { ...CONFIG, type: '{name: strin}' },
-    });
-    expect(box?.validationMessage).toBe('unknown type "strin": use string, int, ... (character 8)');
+      written();
+      await giving;
 
-    box?.accept();
-    await flush();
-    expect(engine.calls.map((call) => call.command)).not.toContain('cel-lens.setType');
-    expect(box?.visible).toBe(true);
+      expect(shownDocuments).toEqual([
+        {
+          uri: CELLENS,
+          selection: new Range(9, 11, 9, 11),
+          viewColumn: ViewColumn.Beside,
+          preserveFocus: false,
+          preview: false,
+        },
+      ]);
+    },
+  );
 
-    box?.type('{name: string}');
-    vi.advanceTimersByTime(CHECK_DELAY_MS);
-    await flush();
-    expect(box?.validationMessage).toBeUndefined();
-    box?.accept();
-    await giving;
-
-    expect(engine.calls.at(-1)).toEqual({
-      command: 'cel-lens.setType',
-      argument: { ...CONFIG, type: '{name: string}' },
-      signal: undefined,
-    });
-    expect(box).toMatchObject({ visible: false, disposed: true });
-  });
-
-  it('starts the input box with a struct typed in the filter, where Write a struct… stays the line Enter picks', async () => {
+  it('opens .cellens in the editor group that already shows it, so the rule stays in view and no third group opens', async () => {
     const { flow } = setUp();
-    quickPicks.typed = '{name: string}';
-    quickPicks.next = '$(edit) Write a struct…';
+    visibleEditors.push(
+      editorOf('file:///workspace/repo/policies/limits.yaml', ViewColumn.One),
+      editorOf(CELLENS, ViewColumn.Two),
+    );
+    quickPicks.next = SHORT_LINE;
 
-    const giving = flow.giveType(CONFIG);
-    await flush();
+    await flow.giveType(CONFIG);
 
-    expect(inputBoxes[0]?.value).toBe('{name: string}');
-    inputBoxes[0]?.hide();
-    await giving;
+    expect(shownDocuments).toMatchObject([{ uri: CELLENS, viewColumn: ViewColumn.Two }]);
   });
 
-  it('turns from the input box to the picker with its Pick a kind… button, so a struct can become a kind', async () => {
+  it('opens an edit at the entry the value has, where the engine puts the cursor on its type', async () => {
     const { flow, engine } = setUp();
-    quickPicks.next = '$(symbol-class) Deployment';
+    const atType = { start: { line: 4, character: 10 }, end: { line: 4, character: 24 } };
+    const found = engine.hold('cel-lens.setType');
+    quickPicks.next = SHORT_LINE;
 
     const editing = flow.editType({ ...CONFIG, type: '{name: string}' });
-    await flush();
-    const box = inputBoxes[0];
-    expect(box?.buttons).toEqual([
-      { iconPath: new ThemeIcon('symbol-class'), tooltip: 'Pick a kind…' },
-    ]);
-    box?.press('Pick a kind…');
+    await settle();
+    found({ cellens: CELLENS, change: 'unchanged', selection: atType });
     await editing;
 
-    expect(box?.visible).toBe(false);
     expect(quickPicks.created.map((pick) => pick.title)).toEqual([
       'Edit the type of params.spec.config',
     ]);
-    expect(engine.calls.at(-1)).toMatchObject({
+    expect(quickPicks.active[0]).toMatchObject([{ label: SHORT_LINE }]);
+    expect(engine.calls.at(-1)).toEqual({
+      command: 'cel-lens.setType',
+      argument: { ...CONFIG, snippet: 'type' },
+    });
+    expect(shownDocuments).toMatchObject([{ uri: CELLENS, selection: new Range(4, 10, 4, 24) }]);
+  });
+
+  it('turns to the Go types, which start with what was typed in the first picker, each with its folder in the workspace and its doc comment, and sets the one picked at once', async () => {
+    const { flow, engine } = setUp();
+    addWorkspaceFolder('repo');
+    quickPicks.typed = 'quota';
+    quickPicks.queue.push(GO_LINE, '$(symbol-struct) QuotaSpec');
+
+    await flow.giveType(CONFIG);
+
+    expect(quickPicks.created[1]).toEqual({
+      title: 'Give params.spec.config a type › Go type',
+      placeholder: GO_TYPE_PLACEHOLDER,
+      matchOnDescription: true,
+      matchOnDetail: true,
+      busy: true,
+      buttons: ['Back'],
+      value: 'quota',
+      labels: [],
+    });
+    expect(quickPicks.shown[1]).toEqual([
+      {
+        label: '$(symbol-struct) QuotaSpec',
+        description: 'api/v1',
+        detail: 'QuotaSpec is the quota of a team.',
+        value: { action: 'go', go: './api/v1#QuotaSpec' },
+      },
+      {
+        label: '$(symbol-struct) Limit',
+        description: 'internal/limits',
+        value: { action: 'go', go: './internal/limits#Limit' },
+      },
+    ]);
+    expect(engine.calls.at(-1)).toEqual({
+      command: 'cel-lens.setType',
+      argument: { ...CONFIG, go: './api/v1#QuotaSpec' },
+    });
+    expect(shownDocuments).toEqual([]);
+  });
+
+  it("goes back from the Go types to the first picker with the Back button (#8's review)", async () => {
+    const { flow, engine } = setUp();
+    quickPicks.queue.push(GO_LINE, PRESS_BACK, '$(symbol-class) Deployment');
+
+    await flow.giveType(CONFIG);
+
+    expect(quickPicks.created.map((pick) => pick.title)).toEqual([
+      'Give params.spec.config a type',
+      'Give params.spec.config a type › Go type',
+      'Give params.spec.config a type',
+    ]);
+    expect(engine.calls.at(-1)).toEqual({
       command: 'cel-lens.setType',
       argument: { ...CONFIG, kind: 'apps/v1 Deployment' },
     });
   });
 
-  it('cancels the check of what was typed before, as the person types on', async () => {
-    const { flow, engine } = setUp();
-    quickPicks.next = '$(edit) Write a struct…';
-    const giving = flow.giveType(CONFIG);
-    await flush();
-    const box = inputBoxes[0];
+  it("lists only the Go types of the workspace folder of the .cellens (#8's review)", async () => {
+    const engine = fakeEngine();
+    const listed = engine.hold('cel-lens.typeChoices');
+    const log = window.createOutputChannel('cel-lens');
+    addWorkspaceFolder('charts');
+    addWorkspaceFolder('operator');
+    quickPicks.queue.push(GO_LINE, '$(symbol-struct) QuotaSpec');
 
-    box?.type('{name: strin}');
-    vi.advanceTimersByTime(CHECK_DELAY_MS);
-    const first = engine.calls.at(-1)?.signal;
-    box?.type('{name: string}');
-
-    expect(first?.aborted).toBe(true);
-    box?.hide();
+    const giving = new TypeFlow(engine.run, typeUi(log), log).giveType({
+      ...CONFIG,
+      cellens: 'file:///workspace/charts/.cellens',
+    });
+    await settle();
+    listed({
+      ...CHOICES,
+      goTypes: [
+        { folder: 'file:///workspace/charts/api', name: 'ChartSpec', doc: '' },
+        { folder: 'file:///workspace/operator/api/v1', name: 'QuotaSpec', doc: '' },
+      ],
+    });
     await giving;
+
+    expect(quickPicks.shown[1]).toMatchObject([{ label: '$(symbol-struct) ChartSpec' }]);
+    expect(quickPicks.shown[1]).toHaveLength(1);
+    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
   });
 
-  it('says once why a type was not set when the box was closed while the engine set it', async () => {
+  it("says once that the engine is too old to write in .cellens, with a button to cel-lens.serverPath (#8's review)", async () => {
     const engine = fakeEngine();
-    let refuse: (error: Error) => void = () => undefined;
-    const run = (command: string, argument?: unknown, signal?: AbortSignal): Promise<unknown> =>
-      command === 'cel-lens.setType'
-        ? new Promise((_resolve, reject) => {
-            refuse = reject;
-          })
-        : engine.run(command, argument, signal);
     const log = window.createOutputChannel('cel-lens');
-    const flow = new TypeFlow(run, typeUi(log), log);
-    quickPicks.next = '$(edit) Write a struct…';
-    const giving = flow.giveType(CONFIG);
-    await flush();
-    const box = inputBoxes[0];
-    box?.type('{name: string}');
-    vi.advanceTimersByTime(CHECK_DELAY_MS);
-    await flush();
+    const run: Run = (command, argument, signal) =>
+      command === 'cel-lens.setType'
+        ? Promise.reject(
+            Object.assign(
+              new Error(
+                'cel-lens.setType: give the type, such as type: "{name: string}", the kind, such as kind: "apps/v1 Deployment", the schema, such as schema: {"type": "object", "properties": {...}}, or the Go type, such as go: "./api/v1#QuotaSpec"',
+              ),
+              {
+                code: -32602,
+              },
+            ),
+          )
+        : engine.run(command, argument, signal);
+    errorChoice.next = 'Open Engine Setting';
+    quickPicks.next = SCHEMA_LINE;
 
-    box?.accept();
-    await flush();
-    box?.hide();
-    await flush();
-    refuse(Object.assign(new Error(WAITING), { code: -32803 }));
-    await giving;
+    await new TypeFlow(run, typeUi(log), log).giveType(CONFIG);
 
     expect(shownErrors).toEqual([
-      { message: `cel-lens could not give params.spec.config a type: ${WAITING}.`, buttons: [] },
+      {
+        message:
+          'This cel-lens engine is too old to write a type in .cellens or list Go types: set cel-lens.serverPath to a newer cel-lens-core, then run cel-lens: Restart Engine.',
+        buttons: ['Open Engine Setting'],
+      },
     ]);
+    expect(executedCommands).toEqual([
+      { command: 'workbench.action.openSettings', args: ['cel-lens.serverPath'] },
+    ]);
+    expect(shownDocuments).toEqual([]);
   });
 
-  it('changes nothing on Escape in the input box', async () => {
-    const { flow, engine } = setUp();
-    quickPicks.next = '$(edit) Write a struct…';
-    const giving = flow.giveType(CONFIG);
-    await flush();
+  it('says once that .cellens could not be opened, with Show Logs', async () => {
+    const { flow, log } = setUp();
+    showFailure.error = new Error('cannot open');
+    quickPicks.next = SCHEMA_LINE;
 
-    inputBoxes[0]?.type('{name: string}');
-    inputBoxes[0]?.hide();
-    vi.advanceTimersByTime(CHECK_DELAY_MS);
-    await giving;
+    await flow.giveType(CONFIG);
 
-    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
-    expect(inputBoxes[0]?.disposed).toBe(true);
-  });
-
-  it('opens an edit of a type in the input box filled with it, and checks it', async () => {
-    const { flow, engine } = setUp();
-
-    const editing = flow.editType({ ...CONFIG, type: '{name: strin}' });
-    await flush();
-    vi.advanceTimersByTime(CHECK_DELAY_MS);
-    await flush();
-
-    expect(inputBoxes[0]).toMatchObject({
-      title: 'Edit the type of params.spec.config',
-      value: '{name: strin}',
-      validationMessage: 'unknown type "strin": use string, int, ... (character 8)',
-    });
-    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.checkType']);
-    inputBoxes[0]?.hide();
-    await editing;
+    expect(shownErrors).toEqual([
+      {
+        message: 'cel-lens could not open .cellens. Show the logs for the reason.',
+        buttons: ['Show Logs'],
+      },
+    ]);
+    expect(log.lines).toEqual([`Could not open ${CELLENS}: Error: cannot open`]);
   });
 });
 
@@ -393,6 +473,26 @@ describe('typeUi', () => {
       { command: 'workbench.action.openSettings', args: ['cel-lens.experimental'] },
     ]);
   });
+
+  it.each([
+    ['one workspace folder', ['repo'], 'file:///workspace/repo/api/v1', 'api/v1'],
+    [
+      'several, with the name of its own',
+      ['repo', 'other'],
+      'file:///workspace/repo/api/v1',
+      'repo/api/v1',
+    ],
+    ['the workspace folder itself, by its name', ['repo'], 'file:///workspace/repo', 'repo'],
+  ])(
+    'writes a folder relative to its workspace folder with %s',
+    (_name, folders, uri, expected) => {
+      for (const folder of folders) {
+        addWorkspaceFolder(folder);
+      }
+
+      expect(typeUi(window.createOutputChannel('cel-lens')).workspacePath(uri)).toBe(expected);
+    },
+  );
 });
 
 describe('giveValueType', () => {

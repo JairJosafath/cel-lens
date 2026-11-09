@@ -1,24 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  GO_TYPES_FAILED_LINE,
+  OUTDATED_ENGINE_MESSAGE,
   INT_OR_STRING_LINES,
-  WRITE_STRUCT_LINE,
-  isCurrentChoice,
+  NO_GO_TYPES_LINE,
+  WRITE_SCHEMA_LINE,
+  WRITE_SHORT_TYPE_LINE,
   editTypeTitle,
   engineFailure,
   giveTypeTitle,
+  firstLines,
+  goReference,
+  goTypeLine,
+  goTypeLines,
+  goTypesIn,
+  hasEntry,
   inCrd,
+  isAtOrBelow,
   isChangeAnswer,
+  isCurrentChoice,
   lineValues,
+  parseEntryPlace,
   parseTypeChoices,
-  parseTypeProblem,
   parseTypeTarget,
-  problemText,
+  sameGo,
+  snippetRefusal,
   typeLines,
-  typedType,
   valueLines,
+  withGo,
   withKind,
+  withSnippet,
   withType,
+  writeLine,
   type PickLine,
   type TypeChoice,
   type TypeChoices,
@@ -73,12 +87,17 @@ const CHOICES: TypeChoices = {
   crds: [
     { apiVersion: 'example.com/v1', kind: 'Widget', description: 'A widget.', stability: 'ga' },
   ],
+  goTypes: [
+    { folder: 'file:///ws/api/v1', name: 'QuotaSpec', doc: 'QuotaSpec is the quota of a team.' },
+    { folder: 'file:///ws/internal/limits', name: 'Limit', doc: '' },
+  ],
 };
 
 describe('parseTypeTarget', () => {
   it('reads the value of a CRD, keeping the argument as the engine sent it', () => {
     expect(parseTypeTarget(CRD_VALUE)).toEqual({
       argument: CRD_VALUE,
+      cellens: 'file:///ws/.cellens',
       value: 'self.spec.maxSurge',
       document: 'CustomResourceDefinition widgets.example.com',
       version: 'v1',
@@ -90,6 +109,19 @@ describe('parseTypeTarget', () => {
       value: 'params.spec.config',
       document: 'ValidatingAdmissionPolicy limits',
       kind: 'apps/v1 Deployment',
+    });
+  });
+
+  it.each([
+    ['a Go type', { go: './api/v1#QuotaSpec' }, { go: './api/v1#QuotaSpec' }],
+    ['a schema, which is a JSON object', { schema: { type: 'object' } }, { schema: true }],
+    ['no schema for one that is no object', { schema: 'type: object' }, {}],
+  ])("reads %s an entry gives a policy's value", (_name, entry, expected) => {
+    const parsed = parseTypeTarget({ ...POLICY_VALUE, kind: undefined, ...entry });
+    expect({ go: parsed?.go, schema: parsed?.schema }).toEqual({
+      go: undefined,
+      schema: undefined,
+      ...expected,
     });
   });
 
@@ -119,7 +151,7 @@ describe('inCrd', () => {
   });
 });
 
-describe('withType and withKind', () => {
+describe('the arguments of setType', () => {
   it('give the engine the type and drop the kind the value has', () => {
     expect(withType(target(POLICY_VALUE), '{name: string}')).toEqual({
       ...Object.fromEntries(Object.entries(POLICY_VALUE).filter(([key]) => key !== 'kind')),
@@ -130,6 +162,19 @@ describe('withType and withKind', () => {
   it('give the engine the kind and drop the type the value has', () => {
     const typed = target({ ...CRD_VALUE, type: 'int' });
     expect(withKind(typed, 'v1 ConfigMap')).toEqual({ ...CRD_VALUE, kind: 'v1 ConfigMap' });
+  });
+
+  it.each([
+    ['a Go type', { go: './api/v1#Old' }],
+    ['a schema', { schema: { type: 'object' } }],
+    ['a kind', { kind: 'v1 ConfigMap' }],
+    ['a type', { type: 'int' }],
+  ])('give the engine one Go type, or one snippet, and drop %s the value has', (_name, entry) => {
+    const typed = target({ ...CRD_VALUE, ...entry });
+
+    expect(withGo(typed, './api/v1#QuotaSpec')).toEqual({ ...CRD_VALUE, go: './api/v1#QuotaSpec' });
+    expect(withSnippet(typed, 'schema')).toEqual({ ...CRD_VALUE, snippet: 'schema' });
+    expect(withSnippet(typed, 'type')).toEqual({ ...CRD_VALUE, snippet: 'type' });
   });
 });
 
@@ -162,6 +207,13 @@ describe('parseTypeChoices', () => {
         ],
         crds: [],
         crdsNote: 'only with crd-typed-policies on',
+        goTypes: [
+          { folder: 'file:///repo/api/v1', name: 'QuotaSpec', doc: 'The quota of a team.' },
+          { folder: 'file:///repo/api/v1', name: 'Limit' },
+          { folder: 'file:///repo/api/v1', name: '' },
+          'Owner',
+        ],
+        goTypesNote: 'the workspace has more than 1000 types: the first 1000 are listed',
       }),
     ).toEqual({
       kubernetesVersion: '1.37',
@@ -176,7 +228,16 @@ describe('parseTypeChoices', () => {
       ],
       crds: [],
       crdsNote: 'only with crd-typed-policies on',
+      goTypes: [
+        { folder: 'file:///repo/api/v1', name: 'QuotaSpec', doc: 'The quota of a team.' },
+        { folder: 'file:///repo/api/v1', name: 'Limit', doc: '' },
+      ],
+      goTypesNote: 'the workspace has more than 1000 types: the first 1000 are listed',
     });
+  });
+
+  it('reads no Go types from an engine that lists none', () => {
+    expect(parseTypeChoices({ builtIn: [], crds: [] })?.goTypes).toEqual([]);
   });
 
   it.each([null, [], { crds: [] }, { builtIn: 'Deployment' }])(
@@ -188,9 +249,11 @@ describe('parseTypeChoices', () => {
 });
 
 describe('typeLines', () => {
-  it('starts with Write a struct… and its pencil, then the built-in kinds, then the CRDs, each group under a separator', () => {
+  it('offers a schema, a Go type and a short type, in that order, then the built-in kinds, then the CRDs, each group under a separator', () => {
     expect(typeLines(CHOICES)).toEqual([
-      WRITE_STRUCT_LINE,
+      WRITE_SCHEMA_LINE,
+      goTypeLine(2),
+      WRITE_SHORT_TYPE_LINE,
       { separator: true, label: 'Built-in kinds · Kubernetes 1.37' },
       {
         label: '$(symbol-class) Deployment',
@@ -211,7 +274,53 @@ describe('typeLines', () => {
         value: { action: 'kind', kind: 'example.com/v1 Widget' },
       },
     ]);
-    expect(WRITE_STRUCT_LINE.label).toBe('$(edit) Write a struct…');
+    expect(
+      typeLines(CHOICES)
+        .slice(0, 3)
+        .map((line) => line.label),
+    ).toEqual([
+      '$(edit) Write a schema in .cellens…',
+      '$(symbol-struct) Use a Go type…',
+      '$(edit) Write a short type in .cellens…',
+    ]);
+  });
+
+  it('starts with the same three lines while the engine lists the kinds', () => {
+    expect(firstLines().map((line) => line.label)).toEqual(
+      typeLines(CHOICES)
+        .slice(0, 3)
+        .map((line) => line.label),
+    );
+    expect(firstLines()[1]).toEqual(goTypeLine());
+  });
+
+  it("says on the lines that write in .cellens that they open the entry of a value that has one, there and while it loads (#8's review)", () => {
+    expect(typeLines(CHOICES, true).slice(0, 3)).toEqual([
+      writeLine('schema', true),
+      goTypeLine(2),
+      writeLine('type', true),
+    ]);
+    expect(firstLines(true)[0]).toEqual(writeLine('schema', true));
+    expect(writeLine('schema', true).detail).toBe(
+      'Properties, descriptions and formats, as in a CRD; opens .cellens beside the rule at the entry it has, to write a schema there',
+    );
+    expect(writeLine('type', true).detail).toBe(
+      'Such as {name: string, replicas: int}; opens .cellens beside the rule at the entry it has, to write a short type there',
+    );
+    expect(writeLine('schema')).toEqual(WRITE_SCHEMA_LINE);
+  });
+
+  it.each([
+    [undefined, undefined],
+    [0, 'none in the workspace'],
+    [1, '1 type'],
+    [12, '12 types'],
+  ])('says how many Go types there are on Use a Go type…, with %j: %j', (count, description) => {
+    expect(goTypeLine(count).description).toBe(description);
+  });
+
+  it('keeps Use a Go type… in the list whatever is typed, so the Go types can be found from the first picker', () => {
+    expect(goTypeLine(2)).toMatchObject({ alwaysShow: true, value: { action: 'pickGo' } });
   });
 
   it('says why no CRD is listed, in a line that opens the setting', () => {
@@ -229,41 +338,28 @@ describe('typeLines', () => {
   });
 
   it('has no CRD group when the workspace defines none, and no version in the separator when none is known', () => {
-    expect(typeLines({ ...CHOICES, kubernetesVersion: '', crds: [] }).map((l) => l.label)).toEqual([
-      '$(edit) Write a struct…',
+    expect(
+      typeLines({ ...CHOICES, kubernetesVersion: '', crds: [] })
+        .slice(3)
+        .map((l) => l.label),
+    ).toEqual([
       'Built-in kinds',
       '$(symbol-class) Deployment',
       '$(symbol-class) VolumeAttributesClass',
     ]);
   });
 
-  it('is only Write a struct… with no kind at all', () => {
-    expect(typeLines({ kubernetesVersion: '1.37', builtIn: [], crds: [] })).toEqual([
-      WRITE_STRUCT_LINE,
+  it('is only the three ways to write or use a type with no kind at all', () => {
+    expect(typeLines({ kubernetesVersion: '1.37', builtIn: [], crds: [], goTypes: [] })).toEqual([
+      WRITE_SCHEMA_LINE,
+      goTypeLine(0),
+      WRITE_SHORT_TYPE_LINE,
     ]);
   });
 });
 
-describe('typedType', () => {
-  it.each([
-    ['{name: string}', '{name: string}'],
-    ['  list({port: int}) ', 'list({port: int})'],
-    ['map(string, int)', 'map(string, int)'],
-    ['string', 'string'],
-    ['deploy', undefined],
-    ['Deployment', undefined],
-    ['', undefined],
-  ])('reads %j typed in the filter as the type %j', (filter, expected) => {
-    expect(typedType(filter)).toBe(expected);
-  });
-
-  it('keeps Write a struct… in the list whatever is typed, so Enter on a struct typed there picks it', () => {
-    expect(WRITE_STRUCT_LINE.alwaysShow).toBe(true);
-  });
-});
-
 describe('INT_OR_STRING_LINES', () => {
-  it('offers int and string, the two types an x-kubernetes-int-or-string value takes', () => {
+  it("offers only int and string, the two types an x-kubernetes-int-or-string value takes (#8's review)", () => {
     expect(INT_OR_STRING_LINES.map((line) => line.label)).toEqual([
       '$(symbol-numeric) int',
       '$(symbol-string) string',
@@ -271,49 +367,280 @@ describe('INT_OR_STRING_LINES', () => {
   });
 });
 
+describe('goReference', () => {
+  it.each([
+    ['a folder below', 'file:///ws/.cellens', 'file:///ws/api/v1', './api/v1#QuotaSpec'],
+    ['a folder beside', 'file:///ws/deploy/.cellens', 'file:///ws/api/v1', '../api/v1#QuotaSpec'],
+    ['the folder itself', 'file:///ws/api/.cellens', 'file:///ws/api', '.#QuotaSpec'],
+    ['a folder two up', 'file:///ws/a/b/.cellens', 'file:///ws/api', '../../api#QuotaSpec'],
+    ['a folder with a trailing slash', 'file:///ws/.cellens', 'file:///ws/api/', './api#QuotaSpec'],
+    [
+      'an escaped name, written plain',
+      'file:///my%20ws/.cellens',
+      'file:///my%20ws/caf%C3%A9/v1',
+      './café/v1#QuotaSpec',
+    ],
+    ['a folder of another host', 'file:///ws/.cellens', 'file://host/ws/api', undefined],
+    ['no URI', 'file:///ws/.cellens', '/ws/api', undefined],
+    [
+      'a Windows drive written two ways',
+      'file:///C:/repo/.cellens',
+      'file:///c%3A/repo/api/v1',
+      './api/v1#QuotaSpec',
+    ],
+    [
+      'a Windows path in another case, written as the folder writes it',
+      'file:///c%3A/Repo/.cellens',
+      'file:///C:/repo/API/v1',
+      './API/v1#QuotaSpec',
+    ],
+    [
+      'a path in another case off Windows',
+      'file:///Repo/.cellens',
+      'file:///repo/api',
+      '../repo/api#QuotaSpec',
+    ],
+  ])(
+    'names a Go type of %s relative to the folder of the .cellens',
+    (_name, cellens, folder, expected) => {
+      expect(goReference(cellens, folder, 'QuotaSpec')).toBe(expected);
+    },
+  );
+});
+
+describe('the Go types a .cellens can name', () => {
+  it.each([
+    ['its own folder', 'file:///ws/charts', 'file:///ws/charts', true],
+    ['a folder below', 'file:///ws/charts/api/v1', 'file:///ws/charts', true],
+    ['another workspace folder', 'file:///ws/operator/api', 'file:///ws/charts', false],
+    [
+      'a folder whose name starts the same',
+      'file:///ws/charts-old/api',
+      'file:///ws/charts',
+      false,
+    ],
+    ['a Windows folder written another way', 'file:///c%3A/ws/api', 'file:///C:/WS', true],
+    ['another host', 'file://host/ws/charts', 'file:///ws/charts', false],
+  ])('finds %s at or below the root: %s', (_name, folder, root, expected) => {
+    expect(isAtOrBelow(folder, root)).toBe(expected);
+  });
+
+  it("keeps only the Go types of the root, the workspace folder of the .cellens (#8's review)", () => {
+    const choices = {
+      ...CHOICES,
+      goTypes: [
+        { folder: 'file:///ws/charts/api', name: 'ChartSpec', doc: '' },
+        { folder: 'file:///ws/operator/api/v1', name: 'QuotaSpec', doc: '' },
+      ],
+    };
+
+    expect(goTypesIn(choices, 'file:///ws/charts').goTypes.map((type) => type.name)).toEqual([
+      'ChartSpec',
+    ]);
+  });
+
+  it.each([
+    ['./api/v1#QuotaSpec', 'api/v1#QuotaSpec', true],
+    ['./api/v1/#QuotaSpec', 'api//v1#QuotaSpec', true],
+    ['.#QuotaSpec', '#QuotaSpec', true],
+    ['../api#QuotaSpec', 'api#QuotaSpec', false],
+    ['./api/v1#QuotaSpec', './api/v1#Limit', false],
+  ])("finds %s and %s the same Go type: %s (#8's review)", (a, b, expected) => {
+    expect(sameGo(a, b)).toBe(expected);
+  });
+});
+
+describe('an engine older than this extension', () => {
+  it.each([
+    ['no goTypes key', { builtIn: [], crds: [] }, true],
+    [
+      'goTypes null, as a workspace without Go code may give',
+      { builtIn: [], goTypes: null },
+      undefined,
+    ],
+    ['no Go types', { builtIn: [], goTypes: [] }, undefined],
+  ])(
+    'reads an answer of typeChoices with %s as an outdated engine: %s',
+    (_name, answer, expected) => {
+      expect(parseTypeChoices(answer)?.outdated).toBe(expected);
+    },
+  );
+
+  it("says on Use a Go type… that it needs a newer engine, not that there are none (#8's re-review)", () => {
+    expect(goTypeLine(0, true).description).toBe('needs a newer engine');
+    expect(typeLines({ ...CHOICES, goTypes: [], outdated: true })[1]).toEqual(goTypeLine(0, true));
+  });
+
+  /** What the #17 engine, with setType but no snippet, refuses a request with no type with. */
+  const NO_TYPE =
+    'cel-lens.setType: give the type, such as type: "{name: string}", the kind, such as kind: "apps/v1 Deployment", the schema, such as schema: {"type": "object", "properties": {...}}, or the Go type, such as go: "./api/v1#QuotaSpec"';
+
+  it.each([
+    [
+      "the InvalidParams of an engine with no snippet, which reads it as a request with no type (#8's re-review)",
+      { code: -32602, message: NO_TYPE },
+      NO_TYPE.replace('cel-lens.setType: ', ''),
+    ],
+    [
+      'a request with two types',
+      {
+        code: -32602,
+        message: 'cel-lens.setType: give one of type, kind, schema and go, not type and kind',
+      },
+      undefined,
+    ],
+    [
+      'another refusal that names snippet',
+      { code: -32602, message: 'cel-lens.setType: a snippet beside a type' },
+      undefined,
+    ],
+    ['the same words with another code', { code: -32803, message: NO_TYPE }, undefined],
+    ['another refusal', { code: -32602, message: 'cel-lens.setType: bad .cellens' }, undefined],
+    ['another failure', new Error(NO_TYPE), undefined],
+  ])('reads %s as a refused snippet: %j', (_name, error, expected) => {
+    expect(snippetRefusal(error)).toBe(expected);
+  });
+
+  it('says which setting and command fix it', () => {
+    expect(OUTDATED_ENGINE_MESSAGE).toBe(
+      'This cel-lens engine is too old to write a type in .cellens or list Go types: set cel-lens.serverPath to a newer cel-lens-core, then run cel-lens: Restart Engine.',
+    );
+    expect(GO_TYPES_FAILED_LINE.value).toEqual({ action: 'showLogs' });
+  });
+
+  it.each([
+    [{}, false],
+    [{ type: 'int' }, true],
+    [{ kind: 'v1 ConfigMap' }, true],
+    [{ go: './api#X' }, true],
+    [{ schema: { type: 'object' } }, true],
+  ])('reads %j as an entry: %s', (entry, expected) => {
+    expect(hasEntry(target({ ...CRD_VALUE, ...entry }))).toBe(expected);
+  });
+});
+
+describe('goTypeLines', () => {
+  const folderName = (folder: string): string => folder.replace('file:///ws/', '');
+
+  it('lists each Go type by name, with its folder in the workspace and its doc comment, and names it from the .cellens', () => {
+    expect(goTypeLines(CHOICES, 'file:///ws/deploy/.cellens', folderName)).toEqual([
+      {
+        label: '$(symbol-struct) QuotaSpec',
+        description: 'api/v1',
+        detail: 'QuotaSpec is the quota of a team.',
+        value: { action: 'go', go: '../api/v1#QuotaSpec' },
+      },
+      {
+        label: '$(symbol-struct) Limit',
+        description: 'internal/limits',
+        value: { action: 'go', go: '../internal/limits#Limit' },
+      },
+    ]);
+  });
+
+  it('says so in one line when there is no Go type', () => {
+    expect(goTypeLines({ ...CHOICES, goTypes: [] }, 'file:///ws/.cellens', folderName)).toEqual([
+      NO_GO_TYPES_LINE,
+    ]);
+    expect(NO_GO_TYPES_LINE.value).toEqual({ action: 'none' });
+  });
+
+  it('ends with why not every Go type is listed, when the engine says so', () => {
+    const note = 'the workspace has more than 1000 types: the first 1000 are listed';
+
+    expect(
+      goTypeLines({ ...CHOICES, goTypesNote: note }, 'file:///ws/.cellens', folderName).at(-1),
+    ).toEqual({
+      label: '$(info) Not every Go type is listed',
+      detail: note,
+      value: { action: 'none' },
+    });
+  });
+});
+
 describe('isCurrentChoice', () => {
-  /** The label of the first line that is the value's type or kind now. */
+  /** The label of the first line that is what the value has now. */
   function current(lines: readonly PickLine<TypeChoice>[], argument: Record<string, unknown>) {
     const isCurrent = isCurrentChoice(target(argument));
     return lines.find((line) => line.separator !== true && isCurrent(line.value))?.label;
   }
 
+  const policy = { ...POLICY_VALUE, kind: undefined };
+
   it.each([
     ['the kind it has', POLICY_VALUE, '$(symbol-class) Deployment'],
     ['nothing for a kind not listed', { ...POLICY_VALUE, kind: 'v1 Nothing' }, undefined],
     ['nothing for dyn', CRD_VALUE, undefined],
+    [
+      'Use a Go type… for a Go type',
+      { ...policy, go: './api/v1#QuotaSpec' },
+      '$(symbol-struct) Use a Go type…',
+    ],
+    [
+      'Write a schema… for a schema',
+      { ...policy, schema: { type: 'object' } },
+      '$(edit) Write a schema in .cellens…',
+    ],
+    [
+      'Write a short type… for a short type',
+      { ...policy, type: '{name: string}' },
+      '$(edit) Write a short type in .cellens…',
+    ],
   ])('finds %s', (_name, argument, label) => {
     expect(current(typeLines(CHOICES), argument)).toBe(label);
   });
 
-  it('finds the int of a CRD value typed int', () => {
-    expect(current(INT_OR_STRING_LINES, { ...CRD_VALUE, type: 'int' })).toBe(
-      '$(symbol-numeric) int',
+  it.each([
+    ['the int of a CRD value typed int', { ...CRD_VALUE, type: 'int' }, '$(symbol-numeric) int'],
+    ['nothing for another type', { ...CRD_VALUE, type: 'bool' }, undefined],
+  ])('finds %s', (_name, argument, label) => {
+    expect(current(INT_OR_STRING_LINES, argument)).toBe(label);
+  });
+
+  it('finds the Go type the value has among the Go types', () => {
+    const lines = goTypeLines(CHOICES, 'file:///ws/.cellens', (folder) => folder);
+
+    expect(current(lines, { ...policy, go: './internal/limits#Limit' })).toBe(
+      '$(symbol-struct) Limit',
     );
   });
 });
 
-describe('parseTypeProblem and problemText', () => {
+describe('parseEntryPlace', () => {
+  const selection = { start: { line: 9, character: 11 }, end: { line: 9, character: 14 } };
+
   it.each([
-    [null, null],
-    [
-      { message: 'unknown type "strin": use string, int, ...', column: 8 },
-      { message: 'unknown type "strin": use string, int, ...', column: 8 },
-    ],
-    [{ message: 'give it int or string', column: 0 }, { message: 'give it int or string' }],
-    [{ message: 'give it int or string' }, { message: 'give it int or string' }],
-    [{ column: 3 }, undefined],
-    [undefined, undefined],
-    ['fine', undefined],
-  ])('reads %j as %j', (answer, expected) => {
-    expect(parseTypeProblem(answer)).toEqual(expected);
+    ['a new entry', 'added'],
+    ['the entry the value has', 'unchanged'],
+  ])('reads where the cursor goes in .cellens for %s', (_name, change) => {
+    expect(parseEntryPlace({ cellens: 'file:///ws/.cellens', change, selection })).toEqual({
+      cellens: 'file:///ws/.cellens',
+      selection,
+    });
   });
 
   it.each([
-    [{ message: 'unknown type "strin"', column: 8 }, 'unknown type "strin" (character 8)'],
-    [{ message: 'give it int or string' }, 'give it int or string'],
-  ])('shows %j as %j', (problem, expected) => {
-    expect(problemText(problem)).toBe(expected);
+    ['no selection', { cellens: 'file:///ws/.cellens', change: 'added' }],
+    ['no cellens', { change: 'added', selection }],
+    [
+      'a position before the start',
+      {
+        cellens: 'file:///ws/.cellens',
+        change: 'added',
+        selection: { ...selection, end: { line: -1, character: 0 } },
+      },
+    ],
+    [
+      'a character that is no number',
+      {
+        cellens: 'file:///ws/.cellens',
+        change: 'added',
+        selection: { ...selection, start: { line: 9, character: '11' } },
+      },
+    ],
+    ['null', null],
+  ])('reads nothing from an answer with %s', (_name, answer) => {
+    expect(parseEntryPlace(answer)).toBeUndefined();
   });
 });
 
@@ -473,6 +800,17 @@ describe('lineValues', () => {
 });
 
 describe('valueLines', () => {
+  it.each([
+    ['its Go type', { go: './api/v1#QuotaSpec' }, './api/v1#QuotaSpec'],
+    ['schema for a schema', { schema: { type: 'object' } }, 'schema'],
+  ])('shows a value with %s', (_name, entry, description) => {
+    const typed = target({ ...POLICY_VALUE, kind: undefined, ...entry });
+
+    expect(
+      valueLines([{ target: typed, command: 'cel-lens.editType', line: 30 }])[0]?.description,
+    ).toBe(description);
+  });
+
   it('shows each value with its type now, dyn when it has none, and its document and line', () => {
     const policy = target({ ...POLICY_VALUE });
     expect(

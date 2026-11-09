@@ -8,9 +8,9 @@ Shows CEL errors, hover, completion, quick fixes and colors inside Kubernetes YA
 
 The line above each CEL rule: what `self` is, whether the rule compiles, and the values it reads as `dyn`. Click the first part to open the rule's first problem in the problems peek, or its hover when it has none; click **+N more** to pick from the values the line leaves out. **cel-lens: Toggle Inline Info** turns the line off and on.
 
-<!-- Picture to take: images/give-type.png, the picker titled `Give params a type`, opened from `params: dyn · Give it a type` above a rule of a ValidatingAdmissionPolicy whose spec.paramKind names a custom kind, in a dark theme: `Write a struct…` first, then the built-in kinds with their group and version. -->
+<!-- Picture to take: images/give-type.png, the picker titled `Give params a type`, opened from `params: dyn · Give it a type` above a rule of a ValidatingAdmissionPolicy whose spec.paramKind names a custom kind, in a dark theme: `Write a schema in .cellens…`, `Use a Go type…` and `Write a short type in .cellens…` first, then the built-in kinds with their group and version. -->
 
-Click **Give it a type** on the line above a rule to give a `dyn` value a type: write a struct, checked as you type, or pick a built-in kind or a kind of the workspace's CRDs.
+Click **Give it a type** on the line above a rule to give a `dyn` value a type: write a schema or a short type in `.cellens`, opened beside the rule, or pick a Go type of the workspace, a built-in kind or a kind of the workspace's CRDs.
 
 ![Colors: a CEL rule colored part by part as it is typed in a CRD](https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/colors.gif)
 
@@ -52,13 +52,45 @@ The extension carries the cel-lens engine for your platform, so there is nothing
 
 ## Give a value a type
 
-Where Kubernetes gives a CEL value no type, it is `dyn`, and cel-lens can't check, complete or explain it: an `x-kubernetes-int-or-string` field to a CRD's rule, or the `params` of a policy whose `paramKind` is a custom kind. A `.cellens` file says what such a value is; commit it, so everyone gets the same types. cel-lens writes it for you:
+Where Kubernetes gives a CEL value no type, it is `dyn`, and cel-lens can't check, complete or explain it: an `x-kubernetes-int-or-string` field to a CRD's rule, or the `params` of a policy whose `paramKind` is a custom kind. A `.cellens` file says what such a value is; commit it, so everyone gets the same types. cel-lens writes it with you:
 
 1. On the line above the rule, click **Give it a type** after the value (such as `params: dyn · Give it a type`), or **+N more** and then the value. Or run **cel-lens: Give a Value a Type…** and pick one of the values of the open file.
-2. The picker is titled after the value, such as **Give params a type**. Pick **Write a struct…** and type the type, such as `{name: string, replicas: int}`: what is wrong shows under the box as you type, Enter sets it, and Escape changes nothing. Or type to find a built-in kind, such as `deploy` for Deployment, or a kind of the workspace's CRDs (listed with the `crd-typed-policies` experimental feature on). A value of a CRD takes `int` or `string`, so the picker offers just those.
+2. The picker is titled after the value, such as **Give params a type**. It opens at once and lists the Go types and kinds as the engine finds them. Pick one of the four forms below.
 3. The entry goes in the nearest `.cellens` at or above the file, or a new one at the root of its workspace folder, and the rules are checked again with the type.
 
-**Edit** opens the same box filled with the type, or the picker on the kind; the box's **Pick a kind…** button turns to the picker, so a struct can become a kind. A struct typed in the picker's filter is where the box starts. **Remove** removes the entry at once. The engine changes `.cellens` in the editor, so **Undo** in the `.cellens` editor takes a change back.
+A schema or a short type is written in `.cellens` itself: cel-lens adds the entry and opens `.cellens` beside the rule (in the editor group that already shows it, if one does), with the cursor where the type goes. There you have the engine's completion, hover and problems as you type, and the line above the rule follows each change.
+
+### A schema
+
+<!-- Picture to take: images/give-type-schema.png, `.cellens` open beside a ValidatingAdmissionPolicy after Write a schema in .cellens…, in a dark theme: the new entry's `schema:` with `type: object` and `properties: {maxReplicas: {type: integer}}` half typed and the completion of its keywords open, and on the left `params: {maxReplicas} · Edit` above the rule. -->
+
+Pick **Write a schema in .cellens…** to describe the value as an OpenAPI schema, as a CRD's `openAPIV3Schema` does: properties, descriptions, formats and the `x-kubernetes-` extensions. The entry starts as `schema:` with `type: object` and `properties: {}`, the cursor between the braces.
+
+### A Go type
+
+<!-- Picture to take: images/give-type-go.png, the picker of Go types after Use a Go type…, in a dark theme: `quota` typed in the filter, and `QuotaSpec` with its folder `api/v1` and its doc comment `QuotaSpec is the quota of a team.` highlighted. -->
+
+Pick **Use a Go type…** when the value is a struct of the workspace's Go code, such as a kubebuilder API type. A second picker lists the exported structs with a `json` tag of the workspace folder of the `.cellens`, each with its folder and the first sentence of its doc comment, found by any of them as you type; it starts with what you typed in the first picker, and its **Back** button returns to the first. The entry is written at once, as `go: ./api/v1#QuotaSpec`, and follows the Go code from then on.
+
+### A short type
+
+<!-- Picture to take: images/give-type-short.png, `.cellens` open beside a ValidatingAdmissionPolicy after Write a short type in .cellens…, in a dark theme: the new entry's `type: "{name: string, replicas: int}"` being typed with the completion of the type names open, and on the left the line above the rule showing `params: {name, replicas} · Edit`. -->
+
+Pick **Write a short type in .cellens…** for a CEL type that needs nothing more, such as `int` or `{name: string, replicas: int}`. The entry starts as `type: "{}"`, the cursor between the braces.
+
+### A kind
+
+<!-- Picture to take: images/give-type-kind.png, the picker titled `Give params a type` in a dark theme with `deploy` typed in the filter and `Deployment`, `apps/v1`, highlighted under Built-in kinds. -->
+
+Type to find a built-in kind, such as `deploy` for Deployment, or a kind of the workspace's CRDs (listed with the `crd-typed-policies` experimental feature on), and pick it: the entry is written at once, as `kind: apps/v1 Deployment`.
+
+### A value of a CRD
+
+A value of a CRD takes an int or a string: its picker offers `int` and `string` only, written at once. A schema, a short type, a Go type or a kind would not fit it.
+
+### Edit or remove a type
+
+**Edit** opens the same picker on what the value has. The schema and short type lines open `.cellens` at its entry, with the cursor on the type it has; a Go type, a kind, `int` or `string` replaces it at once. An engine too old for the schema and short type lines or the Go types says so, with a button to `cel-lens.serverPath`. **Remove** removes the entry at once. The engine changes `.cellens` in the editor, so **Undo** in the `.cellens` editor takes a change back.
 
 ## Commands
 
