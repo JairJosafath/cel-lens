@@ -191,7 +191,8 @@ describe('CHANGELOG.md', () => {
     "analyses the engine's Go, the extension's JavaScript and TypeScript, and the workflows on every push to `main`, on every pull request and every week",
     "a Dependabot configuration, which proposes updates every week for the engine's Go modules, the extension's npm packages and the GitHub Actions",
     'the minor and patch updates of each in one pull request and each major update in its own',
-    'a `govulncheck` job in CI, which fails on a known vulnerability the engine reaches, with the Go version of `engine/go.mod`',
+    'a `govulncheck` job in CI, with the Go version of `engine/go.mod`, which fails on a call into code with a known vulnerability that `engine/osv-scanner.toml` does not leave aside',
+    'govulncheck has no ignore list, and an advisory without symbols marks every call into its module, so a script reads its JSON output against that file',
     "the bump is made in the maintainers' source, the next published release carries it, and the pull request is not merged on GitHub",
     'Its `SECURITY.md` says how the code and its dependencies are watched',
   ])('names %s under Security in the Unreleased section', (text) => {

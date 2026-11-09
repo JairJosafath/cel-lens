@@ -35,11 +35,20 @@ jobs:
   govulncheck:
     runs-on: ubuntu-latest
     steps:
+      # govulncheck has no ignore list, and an advisory without symbols marks
+      # every call into its module. So the action writes what it finds as JSON,
+      # which never fails, and the step after it fails on any advisory the
+      # engine calls that engine/osv-scanner.toml does not leave aside.
+      #
       # The action checks the repository out itself. Its go-version-input is
       # 'stable' unless set, and the file's version is used only without it.
       - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
           go-version-input: ''
           go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
           work-dir: engine
           go-package: ./...
+          output-format: json
+          output-file: govulncheck.json
+      - run: node .github/scripts/govulncheck-left.mjs engine/osv-scanner.toml govulncheck.json

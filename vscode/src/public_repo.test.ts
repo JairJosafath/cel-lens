@@ -232,6 +232,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     '.github/workflows/codeql.yml',
     '.github/workflows/scorecard.yml',
     '.github/dependabot.yml',
+    '.github/scripts/govulncheck-left.mjs',
   ])('holds %s', (file) => {
     expect(existsSync(`${FOLDER}/${file}`)).toBe(true);
   });
@@ -397,21 +398,26 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(ci.concurrency).toEqual(NEWER_RUNS_CANCEL_OLDER);
   });
 
-  it('fails CI on a vulnerability the engine reaches: govulncheck over engine/, on the Go version of engine/go.mod', () => {
+  it('fails CI on a call into vulnerable code that engine/osv-scanner.toml does not leave aside: govulncheck over engine/ as JSON, on the Go version of engine/go.mod, then the script that reads it', () => {
     const ci = readWorkflow(CI_PATH);
 
     expect(Object.keys(ci.jobs ?? {})).toEqual(['engine', 'vscode', 'govulncheck']);
     // The action's go-version-input is 'stable' unless set, and setup-go then ignores the file.
+    // With an output file the action writes it from the repository's root, and JSON never fails.
     expect(ci.jobs?.['govulncheck']?.steps).toEqual([
       {
         uses: 'golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f',
         with: {
           'go-version-input': '',
           'go-version-file': 'engine/go.mod',
+          'cache-dependency-path': 'engine/go.sum',
           'work-dir': 'engine',
           'go-package': './...',
+          'output-format': 'json',
+          'output-file': 'govulncheck.json',
         },
       },
+      { run: 'node .github/scripts/govulncheck-left.mjs engine/osv-scanner.toml govulncheck.json' },
     ]);
     expect(readFileSync(CI_PATH, 'utf8')).toContain(
       'golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0',
