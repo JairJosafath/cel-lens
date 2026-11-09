@@ -279,7 +279,8 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.0",
     "vitest": "5.0.3",
-    "vscode-languageserver-protocol": "3.18.4"
+    "vscode-languageserver-protocol": "3.18.4",
+    "yaml": "2.9.1"
   },
   "pictures": {
     "openvscodeServer": "1.109.5"
@@ -289,8 +290,7 @@
     "@vscode/vsce-sign": false
   },
   "dependencies": {
-    "vscode-languageclient": "10.1.2",
-    "yaml": "2.9.1"
+    "vscode-languageclient": "10.1.2"
   },
   "homepage": "https://github.com/JairJosafath/cel-lens/tree/main/vscode#readme",
   "bugs": {

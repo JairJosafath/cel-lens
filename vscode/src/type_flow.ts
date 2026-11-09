@@ -1,11 +1,7 @@
 import {
-  USE_EXAMPLE_TITLE,
   exampleTooBig,
   notePlaces,
-  pastedAsLines,
-  pastedKinds,
   pastedPath,
-  type PastedAs,
   parseInferredSchema,
   type ExampleArgument,
   type NotePlace,
@@ -42,6 +38,7 @@ import {
   parseEntryPlace,
   parseTypeChoices,
   parseTypeTarget,
+  noValueAtPath,
   snippetRefusal,
   sameGo,
   unknownInferType,
@@ -426,17 +423,20 @@ export class TypeFlow {
     }
     await this.typeFromExample(
       target,
-      { text, line, ...(target.path !== undefined && { path: target.path }) },
+      {
+        text,
+        line,
+        value: withoutType(target),
+        ...(target.path !== undefined && { path: target.path }),
+      },
       action,
     );
   }
 
   /**
    * A schema from a pasted example: of the value at its path in a pasted resource of its kind, or
-   * of the example itself. When the value's kinds are not known, a pasted resource may be either,
-   * such as a Deployment for `object.spec.template` or an object reference, so the person says
-   * which; Escape writes nothing. An example over the engine's 1 MiB is refused before anything
-   * reads it.
+   * of the example itself, which the engine tells apart with the value's kinds (`pastedPath`).
+   * An example over the engine's 1 MiB is refused before anything reads it.
    */
   private async typeFromPaste(
     target: TypeTarget,
@@ -451,24 +451,17 @@ export class TypeFlow {
       await this.ui.showError(sentence(`cel-lens could not ${action}: ${tooBig}`), false);
       return;
     }
-    const kinds = known()?.examples.map((example) => example.kind) ?? [];
-    let as = pastedPath(text, target.path, kinds);
-    if (as === 'ask' && target.path !== undefined) {
-      const picked = await this.ui.pick<PastedAs>({
-        title: USE_EXAMPLE_TITLE,
-        placeholder: `Is the pasted example ${target.value} itself, or does it hold it?`,
-        lines: pastedAsLines(pastedKinds(text)[0] ?? 'resource', target.path),
-      });
-      if (picked === undefined || picked === BACK) {
-        return;
-      }
-      as = picked.value === 'whole' ? 'send' : 'none';
-    }
+    const path = pastedPath(text, target.path, known()?.valueKinds);
     await this.typeFromExample(
       target,
-      { text, ...(as === 'send' && target.path !== undefined && { path: target.path }) },
+      {
+        text,
+        value: withoutType(target),
+        ...(path !== 'none' && target.path !== undefined && { path: target.path }),
+      },
       action,
       editor,
+      path === 'try',
     );
   }
 
@@ -484,10 +477,11 @@ export class TypeFlow {
     example: ExampleArgument,
     action: string,
     editor?: PastedEditor,
+    orWithoutPath = false,
   ): Promise<void> {
     let answer: unknown;
     try {
-      answer = await this.engine(ENGINE_INFER_TYPE, example);
+      answer = await this.inferType(example, orWithoutPath);
     } catch (error) {
       if (unknownInferType(error)) {
         this.log.warn(`Could not ${action}, as the engine is too old: ${String(error)}`);
@@ -517,6 +511,25 @@ export class TypeFlow {
     await this.writeInCellens(target, 'schema', action, (text, at) =>
       notePlaces(text, at, inferred.notes, example.path),
     );
+  }
+
+  /**
+   * `cel-lens.inferType` with the example; `orWithoutPath` asks again without its `path` when no
+   * example has a value there, as for an example of the value alone that looks like a resource,
+   * such as an object reference, when the engine cannot tell.
+   */
+  private async inferType(example: ExampleArgument, orWithoutPath: boolean): Promise<unknown> {
+    try {
+      return await this.engine(ENGINE_INFER_TYPE, example);
+    } catch (error) {
+      if (!orWithoutPath || example.path === undefined || !noValueAtPath(error)) {
+        throw error;
+      }
+      return await this.engine(ENGINE_INFER_TYPE, {
+        text: example.text,
+        ...(example.value !== undefined && { value: example.value }),
+      });
+    }
   }
 
   /**

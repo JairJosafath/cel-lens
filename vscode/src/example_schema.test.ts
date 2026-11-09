@@ -1,27 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
-import type * as Yaml from 'yaml';
-
-/** How many times the YAML parser read a pasted example: a pass-through that counts. */
-const parses = vi.hoisted(() => ({ count: 0 }));
-
-vi.mock('yaml', async (importOriginal) => {
-  const yaml = await importOriginal<typeof Yaml>();
-  return {
-    ...yaml,
-    parseAllDocuments: (...args: Parameters<typeof yaml.parseAllDocuments>) => {
-      parses.count += 1;
-      return yaml.parseAllDocuments(...args);
-    },
-  };
-});
+import { describe, expect, it } from 'vitest';
 
 import {
   EXAMPLE_CURSOR_LINE,
   MAX_EXAMPLE_BYTES,
   exampleTooBig,
   exampleComment,
-  pastedAsLines,
-  pastedKinds,
+  looksLikeResource,
   pastedPath,
   moveNotes,
   notePlaces,
@@ -141,94 +125,57 @@ describe('exampleTooBig', () => {
   });
 });
 
-describe('pastedKinds', () => {
+describe('looksLikeResource', () => {
   it.each([
-    ['a YAML resource', 'apiVersion: v1\nkind: ConfigMap\ndata: {}\n', ['ConfigMap']],
-    ['YAML documents, the comment left out', '# An example\n---\napiVersion: v1\nkind: X\n', ['X']],
+    ['a YAML resource', 'apiVersion: v1\nkind: ConfigMap\ndata: {}\n', true],
+    ['YAML documents, the comment left out', '# An example\n---\napiVersion: v1\nkind: X\n', true],
     [
       'a YAML list of resources',
-      '- apiVersion: v1\n  kind: A\n  spec: {}\n- kind: B # second\n  apiVersion: v1\n',
-      ['A', 'B'],
+      '- apiVersion: v1\n  kind: A\n- apiVersion: v1\n  kind: B\n',
+      true,
     ],
-    ["a YAML list indented more (#14's review)", '-   apiVersion: v1\n    kind: A\n', ['A']],
+    ['a JSON resource after the comment', '# An example\n{"apiVersion": "v1", "kind": "X"}', true],
+    ['a JSON list of resources', '[{"apiVersion": "v1", "kind": "X"}]', true],
+    ['a value', 'teams: []\nmax: 3\n', false],
+    ['a value that holds a resource', 'template:\n  apiVersion: v1\n  kind: Pod\n', false],
     [
-      "a flow-style YAML resource (#14's review)",
-      '{apiVersion: v1, kind: ConfigMap}\n',
-      ['ConfigMap'],
+      'a JSON value that holds a resource',
+      '{"template": {"apiVersion": "v1", "kind": "Pod"}}',
+      false,
     ],
-    ['a quoted kind', 'apiVersion: "apps/v1"\nkind: "Deployment"\n', ['Deployment']],
-    ['a JSON resource after the comment', '# An example\n{"apiVersion": "v1", "kind": "X"}', ['X']],
-    ['a JSON list of resources', '[{"apiVersion": "v1", "kind": "X"}, {"kind": "Y"}]', ['X']],
-    [
-      'a v1 List, by its items',
-      'apiVersion: v1\nkind: List\nitems:\n- {apiVersion: v1, kind: A}\n',
-      ['A'],
-    ],
-    [
-      'an object reference, which looks like a resource',
-      'apiVersion: v1\nkind: Secret\nname: s\n',
-      ['Secret'],
-    ],
-    ['a value', 'teams: []\nmax: 3\n', []],
-    ['a value that holds a resource', 'template:\n  apiVersion: v1\n  kind: Pod\n', []],
-    ['a list of values', '- name: a\n  kind: x\n', []],
-    ['a JSON value that holds a resource', '{"template": {"apiVersion": "v1", "kind": "Pod"}}', []],
-    ['YAML it cannot read', 'apiVersion: v1\nkind: [\n', []],
-    ['nothing', '', []],
-  ])('reads the kinds of %s at its root', (_name, text, expected) => {
-    expect(pastedKinds(text)).toEqual(expected);
-  });
+    ['nothing', '', false],
+  ])(
+    'reads %s as a resource, for an engine that cannot tell: %s (#16)',
+    (_name, text, expected) => {
+      expect(looksLikeResource(text)).toBe(expected);
+    },
+  );
 });
 
 describe('pastedPath', () => {
   const limit = 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\nspec: {}\n';
-  const reference = 'apiVersion: v1\nkind: Secret\nname: quota\n';
+  const kinds = [{ apiVersion: 'rules.example.com/v1', kind: 'ReplicaLimit' }];
 
   it.each([
-    ['a value at the root of its object', limit, undefined, ['ReplicaLimit'], 'none'],
-    ['the value alone', 'teams: []\n', 'spec.config', ['ReplicaLimit'], 'none'],
-    ["a resource of the value's kind", limit, 'spec.config', ['ReplicaLimit'], 'send'],
+    ['a value at the root of its object', limit, undefined, kinds, 'none'],
     [
-      'a resource of another kind, such as an object reference',
-      reference,
-      'spec.ref',
-      ['ReplicaLimit'],
+      "any example, when the engine knows the value's kinds and decides itself (#16)",
+      'teams: []\n',
+      'spec.config',
+      kinds,
+      'send',
+    ],
+    ["a resource when the value's kinds are not known", limit, 'spec.config', [], 'try'],
+    ['a resource for an engine with no valueKinds (#16)', limit, 'spec.config', undefined, 'try'],
+    [
+      'the value alone for an engine with no valueKinds',
+      'teams: []\n',
+      'spec.config',
+      undefined,
       'none',
     ],
-    [
-      "a resource when the value's kinds are not known, which may be either (#14's review)",
-      reference,
-      'spec.ref',
-      [],
-      'ask',
-    ],
-  ])('takes the path for %s: %s', (_name, text, path, kinds, expected) => {
-    expect(pastedPath(text, path, kinds)).toBe(expected);
-  });
-
-  it('reads nothing of an example for a value at the root of its object, such as params (#16)', () => {
-    parses.count = 0;
-
-    expect(pastedPath(limit, undefined, [])).toBe('none');
-    expect(parses.count).toBe(0);
-
-    expect(pastedPath(limit, 'spec.config', [])).toBe('ask');
-    expect(parses.count).toBe(1);
-  });
-
-  it("asks whether the resource holds the value first, then whether it is the value (#14's review)", () => {
-    expect(pastedAsLines('Deployment', 'spec.template')).toEqual([
-      {
-        label: "$(symbol-class) Use the whole Deployment's spec.template",
-        detail: 'The value is the spec.template of each pasted Deployment',
-        value: 'whole',
-      },
-      {
-        label: '$(symbol-field) Use it as the value itself',
-        detail: 'The pasted Deployment is an example of the value, such as an object reference',
-        value: 'value',
-      },
-    ]);
+  ])('sends the path with %s: %s', (_name, text, path, valueKinds, expected) => {
+    expect(pastedPath(text, path, valueKinds)).toBe(expected);
   });
 });
 

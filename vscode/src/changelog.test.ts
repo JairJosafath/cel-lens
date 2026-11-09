@@ -152,7 +152,7 @@ describe('CHANGELOG.md', () => {
     'Using a pasted example closes its editor; closing it writes nothing, even while the engine works on it, and a window reload closes the examples of the window before',
     "A whole resource of the value's kind pasted for a value inside it, such as a ReplicaLimit for `params.spec.config`, gives the schema of that value, also from a YAML list of resources",
     'a resource of another kind, such as an object reference, is the value itself',
-    `a question says which ("Use the whole Deployment's spec.template" or "Use it as the value itself")`,
+    "which the engine tells from the value's kinds and says in a note; when it does not know them, a paste with `apiVersion` and `kind` at its root is read as a resource",
     'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; nothing is saved when the engine writes another `.cellens`',
     'An engine too old to work out a type from an example says so, whenever the example is used',
     'An example over 1 MiB, the most the engine reads, is refused before anything reads it',
@@ -161,7 +161,7 @@ describe('CHANGELOG.md', () => {
     expect(unreleasedAdded()).toContain(text);
   });
 
-  it.each(['input box', 'Write a struct…', 'Pick a kind…', 'untitled'])(
+  it.each(['input box', 'Write a struct…', 'Pick a kind…', 'untitled', 'Use the whole'])(
     'names no %s, which no release had, in the Unreleased section',
     (text) => {
       expect(unreleasedAdded()).not.toContain(text);

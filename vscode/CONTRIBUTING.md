@@ -139,10 +139,13 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
   `vscode`, and `src/type_commands.ts` shows it.
 - **Types from examples:** `cel-lens.typeChoices` gets the value's argument, so it
   also lists the documents of the workspace of its kind. A document picked, or the
-  text of the editor `Paste an example…` opens, goes to `cel-lens.inferType`, with
-  the value's `path` for a pasted resource of the value's kind (its root read with
-  the `yaml` package, which esbuild bundles; with the value's kinds not known, the
-  person says whether the resource holds the value); its schema is set with
+  text of the editor `Paste an example…` opens, goes to `cel-lens.inferType` with
+  the value (`value`, the line's argument) and its `path`: an engine that knows the
+  value's kinds (`valueKinds` of `typeChoices`) takes a pasted example of another
+  kind as the value itself, with a note. With them not known, or an engine older
+  than `valueKinds`, a paste gets the `path` only when `apiVersion` and `kind` start
+  its lines (or JSON's root), and is sent again without it when no example has a
+  value there; nothing in the extension parses YAML. Its schema is set with
   `cel-lens.setType`, and a second `setType` with a `snippet`, which the engine
   answers `unchanged`, gives the place of the entry to open. The engine's notes are
   placed at their keys of `.cellens` by `src/example_schema.ts` (no `vscode`) and

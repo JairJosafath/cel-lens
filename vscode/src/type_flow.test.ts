@@ -1019,6 +1019,7 @@ describe('a type from an example', () => {
         argument: {
           text: 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\n',
           line: 12,
+          value: CONFIG,
           path: 'spec.config',
         },
       },
@@ -1133,7 +1134,7 @@ describe('a type from an example', () => {
     await ui.pasted[0]?.use('teams: []\n', editorOf(ui));
 
     expect(engine.calls.slice(1).map((call) => call.argument)).toEqual([
-      { text: 'teams: []\n' },
+      { text: 'teams: []\n', value: CONFIG },
       { ...CONFIG, schema: INFERRED.schema },
       { ...CONFIG, snippet: 'schema' },
     ]);
@@ -1179,75 +1180,87 @@ describe('a type from an example', () => {
   });
 
   it.each([
-    ['YAML', 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\nspec:\n  config: {}\n'],
-    [
-      'JSON, after the comment',
-      '# An example\n{"apiVersion": "rules.example.com/v1", "kind": "ReplicaLimit", "spec": {}}',
-    ],
-    [
-      'a YAML list (#14)',
-      '- apiVersion: rules.example.com/v1\n  kind: ReplicaLimit\n  spec: {config: {}}\n',
-    ],
+    ['an object reference', 'apiVersion: v1\nkind: Secret\nname: quota\n'],
+    ['a value alone', 'teams: []\n'],
+    ['a whole resource of its kind', 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\n'],
   ])(
-    "sends the value's path with a whole resource of its kind pasted as %s, so the schema is the value's",
+    "sends the value and its path with %s, and lets the engine decide, when it knows the value's kinds (#16)",
     async (_name, text) => {
       const { flow, ui, engine } = setUp();
+      engine.answers.set('cel-lens.typeChoices', {
+        ...CHOICES,
+        valueKinds: [{ apiVersion: 'rules.example.com/v1', kind: 'ReplicaLimit' }],
+      });
       ui.next.push(PASTE_LINE);
       await flow.giveType(CONFIG);
 
       await ui.pasted[0]?.use(text, editorOf(ui));
 
+      expect(ui.picks).toHaveLength(1);
       expect(engine.calls[1]).toEqual({
         command: 'cel-lens.inferType',
-        argument: { text, path: 'spec.config' },
+        argument: { text, value: CONFIG, path: 'spec.config' },
       });
     },
   );
 
-  it('reads a pasted resource of another kind, such as an object reference, as the value itself (#14)', async () => {
+  it.each([
+    ["the value's kinds are not known", []],
+    ['the engine has no valueKinds', undefined],
+  ])(
+    'sends the path with a paste that looks like a resource when %s, and again without it when no example has a value there (#16)',
+    async (_name, valueKinds) => {
+      const { ui, engine, logs } = setUp();
+      const text = 'apiVersion: v1\nkind: Secret\nname: quota\n';
+      let tries = 0;
+      const run = (command: string, argument?: unknown, signal?: AbortSignal): Promise<unknown> => {
+        if (command === 'cel-lens.inferType' && tries === 0) {
+          tries += 1;
+          engine.calls.push({ command, argument });
+          return Promise.reject(
+            responseError(
+              -32602,
+              'cel-lens.inferType: no example: no example has a value at spec.config',
+            ),
+          );
+        }
+        return engine.run(command, argument, signal);
+      };
+      engine.answers.set('cel-lens.typeChoices', { ...CHOICES, valueKinds });
+      const flow = new TypeFlow(run, ui, {
+        warn: (message: string) => logs.push(message),
+        error: (message: string) => logs.push(message),
+      });
+      ui.next.push(PASTE_LINE);
+      await flow.giveType(CONFIG);
+
+      await ui.pasted[0]?.use(text, editorOf(ui));
+
+      expect(ui.picks).toHaveLength(1);
+      expect(engine.calls.slice(1, 4)).toEqual([
+        {
+          command: 'cel-lens.inferType',
+          argument: { text, value: CONFIG, path: 'spec.config' },
+        },
+        { command: 'cel-lens.inferType', argument: { text, value: CONFIG } },
+        { command: 'cel-lens.setType', argument: { ...CONFIG, schema: INFERRED.schema } },
+      ]);
+      expect(ui.errors).toEqual([]);
+    },
+  );
+
+  it('sends a pasted value alone without the path, for an engine that cannot tell (#16)', async () => {
     const { flow, ui, engine } = setUp();
     ui.next.push(PASTE_LINE);
     await flow.giveType(CONFIG);
-    const text = 'apiVersion: v1\nkind: Secret\nname: quota\n';
 
-    await ui.pasted[0]?.use(text, editorOf(ui));
+    await ui.pasted[0]?.use('teams: []\n', editorOf(ui));
 
-    expect(engine.calls[1]).toEqual({ command: 'cel-lens.inferType', argument: { text } });
+    expect(engine.calls[1]).toEqual({
+      command: 'cel-lens.inferType',
+      argument: { text: 'teams: []\n', value: CONFIG },
+    });
   });
-
-  it.each([
-    ["Use the whole Deployment's spec.config", { path: 'spec.config' }],
-    ['Use it as the value itself', {}],
-  ])(
-    "asks whether a pasted resource holds the value when the value's kinds are not known, and takes %s (#14's review)",
-    async (answer, path) => {
-      const { flow, ui, engine } = setUp();
-      const text = 'apiVersion: apps/v1\nkind: Deployment\nspec:\n  config: {}\n';
-      engine.answers.set('cel-lens.typeChoices', { ...CHOICES, examples: [] });
-      ui.next.push(PASTE_LINE);
-      await flow.giveType(CONFIG);
-      ui.next.push(
-        answer.startsWith('Use the whole')
-          ? `$(symbol-class) ${answer}`
-          : `$(symbol-field) ${answer}`,
-      );
-
-      await ui.pasted[0]?.use(text, editorOf(ui));
-
-      expect(ui.picks[1]).toMatchObject({
-        title: 'Use this example as the type',
-        placeholder: 'Is the pasted example params.spec.config itself, or does it hold it?',
-      });
-      expect(labels(ui.picks[1])).toEqual([
-        "$(symbol-class) Use the whole Deployment's spec.config",
-        '$(symbol-field) Use it as the value itself',
-      ]);
-      expect(engine.calls[1]).toEqual({
-        command: 'cel-lens.inferType',
-        argument: { text, ...path },
-      });
-    },
-  );
 
   it("refuses a paste over the engine's 1 MiB with its limit, before anything reads it or asks (#16)", async () => {
     const { flow, ui, engine } = setUp();
@@ -1266,18 +1279,6 @@ describe('a type from an example', () => {
       },
     ]);
     expect(ui.picks).toHaveLength(1);
-    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
-    expect(ui.steps).toEqual([]);
-  });
-
-  it("writes nothing, and keeps the example's editor, when that question is closed with Escape (#14's review)", async () => {
-    const { flow, ui, engine } = setUp();
-    engine.answers.set('cel-lens.typeChoices', { ...CHOICES, examples: [] });
-    ui.next.push(PASTE_LINE);
-    await flow.giveType(CONFIG);
-
-    await ui.pasted[0]?.use('apiVersion: v1\nkind: Secret\nname: quota\n', editorOf(ui));
-
     expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
     expect(ui.steps).toEqual([]);
   });

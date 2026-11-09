@@ -452,7 +452,10 @@ describe('Give it a type, against the VS Code stand-in', () => {
     await giving;
 
     expect(engine.calls.slice(1)).toEqual([
-      { command: 'cel-lens.inferType', argument: { text: SAMPLE, line: 1, path: 'spec.config' } },
+      {
+        command: 'cel-lens.inferType',
+        argument: { text: SAMPLE, line: 1, value: CONFIG, path: 'spec.config' },
+      },
       { command: 'cel-lens.setType', argument: { ...CONFIG, schema: INFERRED.schema } },
       { command: 'cel-lens.setType', argument: { ...CONFIG, snippet: 'schema' } },
     ]);
@@ -491,7 +494,7 @@ describe('Give it a type, against the VS Code stand-in', () => {
     await runCommand('cel-lens.useExample', EXAMPLE);
 
     expect(engine.calls.slice(1).map((call) => call.argument)).toEqual([
-      { text: document?.text },
+      { text: document?.text, value: CONFIG },
       { ...CONFIG, schema: INFERRED.schema },
       { ...CONFIG, snippet: 'schema' },
     ]);

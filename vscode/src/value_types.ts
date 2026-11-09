@@ -209,6 +209,23 @@ export interface TypeChoices {
    * an example (`cel-lens.inferType`), which every engine that lists examples can.
    */
   readonly cannotInfer?: true;
+  /**
+   * The kinds the root of the value can be, `[]` when they are not known; left out by an engine
+   * older than this list, which cannot tell a pasted resource from the value itself.
+   */
+  readonly valueKinds?: readonly ValueKind[];
+}
+
+/** A kind the root of a value can be, as `valueKinds` of `cel-lens.typeChoices` lists it. */
+export interface ValueKind {
+  readonly apiVersion: string;
+  readonly kind: string;
+}
+
+function parseValueKind(value: unknown): ValueKind | undefined {
+  const apiVersion = isRecord(value) ? text(value['apiVersion']) : undefined;
+  const kind = isRecord(value) ? text(value['kind']) : undefined;
+  return apiVersion === undefined || kind === undefined ? undefined : { apiVersion, kind };
 }
 
 function parseKindChoice(value: unknown): KindChoice | undefined {
@@ -275,6 +292,7 @@ export function parseTypeChoices(value: unknown): TypeChoices | undefined {
   const goTypes = value['goTypes'];
   const goTypesNote = text(value['goTypesNote']);
   const examples = value['examples'];
+  const valueKinds = value['valueKinds'];
   return {
     kubernetesVersion: text(value['kubernetesVersion']) ?? '',
     builtIn: parseKindChoices(value['builtIn']),
@@ -289,6 +307,9 @@ export function parseTypeChoices(value: unknown): TypeChoices | undefined {
       ? examples.map(parseExampleChoice).filter((choice) => choice !== undefined)
       : [],
     ...(examples === undefined && { cannotInfer: true }),
+    ...(Array.isArray(valueKinds) && {
+      valueKinds: valueKinds.map(parseValueKind).filter((kind) => kind !== undefined),
+    }),
   };
 }
 
@@ -691,6 +712,14 @@ function refusedWith(error: unknown, start: string): boolean {
     typeof error['message'] === 'string' &&
     error['message'].startsWith(start)
   );
+}
+
+/**
+ * Whether `cel-lens.inferType` found no value at the `path` given in any example:
+ * `cel-lens.inferType: no example: no example has a value at spec.config`.
+ */
+export function noValueAtPath(error: unknown): boolean {
+  return refusedWith(error, `${ENGINE_INFER_TYPE}: no example: no example has a value at `);
 }
 
 /**
