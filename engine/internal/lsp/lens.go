@@ -52,9 +52,13 @@ func (ss *session) putLens(uri string, text []byte, open bool) bool {
 	key := crdKey(uri)
 	ss.touchLens(key)
 	if l, ok := ss.lenses[key]; ok && bytes.Equal(l.text, text) {
+		if l.uri != uri {
+			ss.lensChanges++ // the code lenses name the file by its URI
+		}
 		l.open, l.uri = open, uri
 		return false
 	}
+	ss.lensChanges++
 	entries, problems := cellens.Parse(text)
 	if ss.lenses == nil {
 		ss.lenses = map[string]*lens{}
@@ -87,6 +91,9 @@ func (ss *session) readLens(uri string) bool {
 func (ss *session) dropLens(key string) bool {
 	ss.touchLens(key)
 	_, had := ss.lenses[key]
+	if had {
+		ss.lensChanges++
+	}
 	delete(ss.lenses, key)
 	return had
 }

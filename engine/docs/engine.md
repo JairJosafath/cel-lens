@@ -60,10 +60,77 @@ number also brings the total under its budget). No fix is offered when there is 
   line, and the problems of a `.cellens` are published on it. See
   [cellens.md](cellens.md).
 
+- **Inline info**: `textDocument/codeLens` (the server declares
+  `codeLensProvider`, without `resolveProvider`: each lens comes with its
+  command and arguments). Above the line of the key of each CEL expression the
+  server checks (a rule, a `messageExpression`, a policy's validation, match
+  condition, variable, audit annotation or mutation; a Kyverno policy only
+  while `kyverno` is on) is one quiet line, one code lens per part, and every
+  part runs a command when clicked:
+  - the subject and its type, then `compiles` or the number of problems the
+    expression has: `self: Widget.spec · compiles` for a rule on a CRD's
+    `spec` (`self: Widget` on the root, `self: Widget.spec.ports[]` on a list's
+    items), `object: apps/v1 Deployment · 2 problems` for a policy (`object:
+    dyn` when its kinds are not known). It runs `cel-lens.showRule`, for the
+    client to show the expression's problems or its hover.
+  - for each value the expression reads that Kubernetes leaves `dyn` and a
+    `.cellens` entry can type, `self.spec.port: dyn · Give it a type`, which
+    runs `cel-lens.giveType`; for one an entry types, `self.spec.port: int ·
+    Edit` and `Remove`, or `params: {max, x} · Edit` and `Remove`, which run
+    `cel-lens.editType` and `cel-lens.removeType`. A value an entry names that
+    is `dyn` all the same, as the entry does not apply (its kind is not found,
+    say), reads `params: dyn · Edit` and `Remove` for that entry, never `Give
+    it a type`, which would write a second one. A struct shows its field
+    names, cut with `…` past 40 characters; a kind shows as written
+    (`params: v1 ConfigMap · Edit`). The values are named as the expression
+    reads them, written as a `.cellens` path writes them
+    (`self.spec.ports[].target`) with field names unescaped (`self.spec.my-port`
+    for `self.spec.my__dash__port`), each once, in the order read. In a
+    CustomResourceDefinition they are the values with
+    `x-kubernetes-int-or-string`, the only `dyn` values the API server lets a
+    rule read; in a ValidatingAdmissionPolicy or MutatingAdmissionPolicy
+    `params`, `object`, `oldObject` and `variables.<name>` when they are `dyn`,
+    and the `dyn` values inside them. `request.options`, Kyverno's variables, a
+    field whose name has a `.`, and a document without `metadata.name` get
+    none, as no entry can name them.
+  - a line is at most 80 characters as VS Code shows it, with ` | ` between
+    its lenses. It shows at most two values, as many as fit, cutting a long
+    name in the middle after its variable (`object.…valueFrom`; `self`,
+    `params` and `variables.max` are never cut) and then a long type to fewer
+    fields; the others are `+N more`, which runs `cel-lens.listValues` with, as
+    its arguments, each one's parts as protocol Commands with whole names, for
+    the client to list. Two expressions whose keys share a line give the line
+    to the first.
+
+  The commands run in the client (the server executes none).
+  `cel-lens.showRule` takes `{"uri": "<the document>", "range": <the
+  expression's range>}`. `cel-lens.giveType`, `cel-lens.editType` and
+  `cel-lens.removeType` take one argument that names the value as a `.cellens`
+  entry does: `{"cellens": "file:///ws/.cellens", "file": "deploy/crd.yaml",
+  "document": "CustomResourceDefinition widgets.example.com", "version": "v1",
+  "path": "spec.port", "value": "self.spec.port"}`, with `variable` (`params`,
+  `object`, `oldObject` or `variables.<name>`) in place of `version` for a
+  policy, no `path` for the root, and the entry's `type` or `kind` when an
+  entry names the value. `cellens` is the URI of the `.cellens` the entry is in
+  or would go in: the nearest one the server knows in a folder at or above the
+  file, else the one at the root of the file's workspace folder, else the one
+  beside the file; `file` is relative to its folder. A document that is no
+  `file:` URI gets no values. The setting `inlineInfo` (`initializationOptions`
+  or the `settings` of `workspace/didChangeConfiguration`; default `true`)
+  turns every line off and on, without a restart. When it changes, and whenever
+  the open documents are checked again (a `.cellens`, a CRD or a setting
+  changed), the server sends `workspace/codeLens/refresh` to a client whose
+  capabilities have `workspace.codeLens.refreshSupport`; a client without it
+  shows new lines when it next asks, such as after an edit. The lenses of a
+  version of a document are kept until it is checked again or a `.cellens`
+  changes, so asking again only sends them.
+
 Positions outside CEL expressions get no hover and no completion. Documents are
 synchronised in full; the server exits 0 after `shutdown` and `exit`, and 1 when
 the client leaves without `shutdown`. `go test -bench Diagnostics ./internal/lsp/`
-measures the 300 ms diagnostics budget on a 1,000-line CRD.
+measures the 300 ms diagnostics budget on a 1,000-line CRD, and
+`go test -bench CodeLens ./internal/lsp/` a code lens request on a CRD of 500
+rules and on policies, the first one after a change and one asked again.
 
 The command accepts the flags language clients pass: `--stdio` (the default and
 only transport) and `--clientProcessId=<pid>`, which makes the server exit when

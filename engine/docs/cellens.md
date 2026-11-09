@@ -132,7 +132,13 @@ server does not type check a MutatingAdmissionPolicy, so there its entries
 give completion and hover only.
 
 Completion after a typed value offers its fields, and hover shows the type as
-the entry writes it, with `Typed from .cellens, line 5`. Hover on a policy
+the entry writes it, with `Typed from .cellens, line 5`. The line above each
+rule (inline info, see [engine.md](engine.md)) shows each value the rule reads
+that an entry types, `self.spec.port: int · Edit | Remove`, each `dyn` value an
+entry could type, `self.spec.port: dyn · Give it a type`, and a value whose
+entry does not apply, `params: dyn · Edit | Remove`; their commands carry the
+entry's `file`, `document`, `version` or `variable` and `path`, and the
+`.cellens` the entry is in or would go in. Hover on a policy
 variable whose expression reads an assumed value still shows the type it has
 without the `.cellens`.
 

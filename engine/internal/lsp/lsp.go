@@ -1,6 +1,7 @@
 // Package lsp serves CEL language support for Kubernetes YAML files over the
 // Language Server Protocol: diagnostics for every CEL expression of an open
-// document, hover and completion inside them.
+// document, hover and completion inside them, and above each the inline info
+// of package inline as code lenses.
 //
 // Documents are synchronised in full. Positions use the protocol's default
 // encoding, UTF-16 code units. A YAML document that does not parse is reported
@@ -36,7 +37,8 @@ var ErrNoShutdown = errors.New("client ended the session without shutdown")
 // kubeversion.Default until the client chooses a Kubernetes version with
 // kubernetesVersion in initializationOptions or didChangeConfiguration. Every
 // experimental feature is off until the client lists it in experimental, in
-// the same two places.
+// the same two places, and the inline info is on until inlineInfo is false
+// there.
 type Server struct {
 	// Version is reported to the client in the initialize result.
 	Version string
@@ -99,8 +101,18 @@ type session struct {
 	kinds map[string]map[string]any
 	// lensShown are the diagnostics last sent for each .cellens file, by URI.
 	lensShown map[string][]map[string]any
-	init      bool
-	shutdown  bool
+	// inlineOff is true while the client's setting inlineInfo is false: the
+	// server then answers no code lenses.
+	inlineOff bool
+	// codeLensRefresh is true when the client lets the server ask it to request
+	// the code lenses again; refreshes counts the times it did, for the ids.
+	codeLensRefresh bool
+	refreshes       int
+	// lensChanges counts the changes to lenses; the code lenses a document
+	// keeps were made at one count, and are made again at another.
+	lensChanges int
+	init        bool
+	shutdown    bool
 }
 
 // document is an open file. Only the message loop uses it, so the cached
@@ -121,6 +133,11 @@ type document struct {
 	// assumed are the types the .cellens files assume in the document, as of
 	// its last check; parsed is made with them.
 	assumed []check.AssumedType
+	// codeLenses are the code lenses of this version as of its last check,
+	// made when the session's lensChanges was codeLensesAt; nil until a
+	// codeLens request makes them.
+	codeLenses   []any
+	codeLensesAt int
 }
 
 // diagnostics returns the problems of the document as it is, checking it only
@@ -326,6 +343,9 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	case "textDocument/codeAction":
 		res, err := ss.codeAction(ctx, msg.Params)
 		return reply(res, err)
+	case "textDocument/codeLens":
+		res, err := ss.codeLens(ctx, msg.Params)
+		return reply(res, err)
 	}
 	return reply(nil, &rpcError{jsonrpc.CodeMethodNotFound, "method not supported: " + msg.Method})
 }
@@ -360,6 +380,7 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 		return err
 	}
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
+	ss.codeLensRefresh = p.Capabilities.Workspace.CodeLens.RefreshSupport
 	ss.folders = p.folders()
 	ss.batch++ // the workspace scan and search work for one batch
 	if ss.features.Has(feature.CRDTypedPolicies) {
@@ -377,12 +398,17 @@ type kubeOptions struct {
 	// Experimental lists the experimental features to switch on. Empty means
 	// none; absent means no change.
 	Experimental *[]string `json:"experimental"`
+	// InlineInfo turns the code lenses on or off; absent means no change.
+	InlineInfo *bool `json:"inlineInfo"`
 }
 
-// configure applies the Kubernetes version and the experimental features in o.
-// It reports whether either in use changed, and why each value that is not
-// supported was ignored.
+// configure applies the Kubernetes version, the experimental features and
+// inlineInfo in o. It reports whether the version or the features in use
+// changed, and why each value that is not supported was ignored.
 func (ss *session) configure(o *kubeOptions) (changed bool, problems []message, err error) {
+	if o.InlineInfo != nil {
+		ss.inlineOff = !*o.InlineInfo
+	}
 	v, on := ss.kube, ss.features
 	if o.KubernetesVersion != nil {
 		v = kubeversion.Default()
@@ -441,10 +467,12 @@ func (ss *session) warn(problems []message) error {
 	return nil
 }
 
-// didChangeConfiguration applies a new kubernetesVersion and experimental list
-// and checks the open documents again when either changed. Turning on
-// crd-typed-policies starts a scan of the workspace for CRDs in the
-// background; the open documents are checked again when it ends.
+// didChangeConfiguration applies a new kubernetesVersion, experimental list
+// and inlineInfo, checks the open documents again when the version or the
+// features changed, and asks the client to request the code lenses again when
+// they may have changed. Turning on crd-typed-policies starts a scan of the
+// workspace for CRDs in the background; the open documents are checked again
+// when it ends.
 func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		Settings *kubeOptions `json:"settings"`
@@ -452,7 +480,7 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	if !decode(params, &p) || p.Settings == nil {
 		return nil
 	}
-	wasOn := ss.features.Has(feature.CRDTypedPolicies)
+	wasOn, wasOff := ss.features.Has(feature.CRDTypedPolicies), ss.inlineOff
 	changed, problems, err := ss.configure(p.Settings)
 	if err != nil {
 		return err
@@ -461,10 +489,16 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 		ss.batch++
 		ss.startScan(ctx)
 	}
-	if err := ss.warn(problems); err != nil || !changed {
+	if err := ss.warn(problems); err != nil {
 		return err
 	}
-	return ss.publishAll(ctx, "")
+	if changed {
+		return ss.publishAll(ctx, "") // which refreshes the lenses
+	}
+	if ss.inlineOff != wasOff {
+		return ss.refreshCodeLenses()
+	}
+	return nil
 }
 
 func (ss *session) initializeResult() any {
@@ -483,6 +517,7 @@ func (ss *session) initializeResult() any {
 			"textDocumentSync":   map[string]any{"openClose": true, "change": 1},
 			"hoverProvider":      true,
 			"codeActionProvider": map[string]any{"codeActionKinds": []string{quickFix}},
+			"codeLensProvider":   map[string]any{},
 			"completionProvider": map[string]any{
 				"triggerCharacters": []string{"."},
 			},
@@ -614,6 +649,7 @@ func (ss *session) publishWithCRDs(ctx context.Context, uri string, crdsChanged 
 func (ss *session) publish(ctx context.Context, uri string) error {
 	doc := ss.docs[uri]
 	doc.checked = false // the Kubernetes version may have changed
+	doc.codeLenses = nil
 	if assumed := ss.assumedFor(uri); !reflect.DeepEqual(assumed, doc.assumed) {
 		doc.assumed, doc.parsed = assumed, nil
 	}

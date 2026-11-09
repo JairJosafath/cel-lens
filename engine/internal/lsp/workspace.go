@@ -74,6 +74,9 @@ type initializeParams struct {
 			DidChangeWatchedFiles struct {
 				DynamicRegistration bool `json:"dynamicRegistration"`
 			} `json:"didChangeWatchedFiles"`
+			CodeLens struct {
+				RefreshSupport bool `json:"refreshSupport"`
+			} `json:"codeLens"`
 		} `json:"workspace"`
 	} `json:"capabilities"`
 }
@@ -621,6 +624,8 @@ func (ss *session) readFromDisk(ctx context.Context, uri string) bool {
 // except the one at skip, in the order of their URIs, and then those of the
 // .cellens files that changed. That pays what every batch owes (see settle):
 // what a batch's scan or search still finds, it publishes itself.
+// It then asks the client to request the code lenses again, whose lines
+// may have changed with the documents' types.
 func (ss *session) publishAll(ctx context.Context, skip string) error {
 	clear(ss.owed)
 	uris := make([]string, 0, len(ss.docs))
@@ -635,5 +640,8 @@ func (ss *session) publishAll(ctx context.Context, skip string) error {
 			return err
 		}
 	}
-	return ss.publishLenses(ctx, "")
+	if err := ss.publishLenses(ctx, ""); err != nil {
+		return err
+	}
+	return ss.refreshCodeLenses()
 }
