@@ -206,3 +206,27 @@ Run 41, the earlier failed run (v0.17.2, before #26), for comparison only: root
 package `FAIL ... 602.672s`, `internal/assist` 749 s, `pkg/check` 384 s.
 
 - A cold `-trimpath` build of the engine takes 5 min 15 s on an idle 8-core sandbox.
+
+## Dependencies (#34): Kyverno stays at v1.19.1
+
+v1.19.2 is the newest 1.19 release, and the OSV database lists the same three
+advisories for it as for v1.19.1, so it fixes nothing the check reports. It was
+tried and held back: its `pkg/cel/compiler` has a new file, `requestmap.go`,
+that imports `pkg/utils/admission`, and with it `api/kyverno/v1`, cosign and
+sigstore. With v1.19.2:
+
+- `go list -deps ./... | wc -l` goes from 844 packages to 2079, and
+  `go mod tidy` adds 197 modules to the 95 of `go.mod`;
+- `golang.org/x/crypto/openpgp v0.1.0-deprecated` comes into the build through
+  `github.com/sigstore/rekor/pkg/pki/pgp`. It is where the `openpgp` packages
+  went when `golang.org/x/crypto` dropped them, and GO-2026-5932 has no fixed
+  version for it.
+
+`TestIgnoredVulnerabilities` fails when `go.mod` requires another Kyverno than
+the reasons in `osv-scanner.toml` name. Before taking one, compare what the
+engine builds with it (`go list -deps ./... | grep kyverno/kyverno/`, two
+packages at v1.19.1) and run the OSV check of `SECURITY.md` again.
+
+`golang.org/x/crypto` is at `v0.58.1-0.20261009181718-2f1f834330b2`, the
+commit of its `master` branch that GO-2026-5932 names as fixed: no release
+after v0.58.0 has it. The next release replaces it.
