@@ -140,7 +140,18 @@ describe('CHANGELOG.md', () => {
     'where the two lines that write in `.cellens` open it at the entry',
     '**Remove** removes the entry at once',
     '**cel-lens: Give a Value a Type…**',
-    'how to give a type in each of the four forms',
+    'how to give a type in each form',
+    '**Give it a type** can take an example',
+    'Under **Examples in the workspace**',
+    '`config/samples/limit.yaml` with `rules.example.com/v1 ReplicaLimit` and the line it starts at',
+    '**Paste an example…** opens an untitled YAML editor beside the rule',
+    '**Use this example as the type** above it and in its editor title',
+    '**cel-lens: Use This Example as the Type** in the Command Palette, on that editor only',
+    "writes it as the value's `schema:`, and `.cellens` opens beside the rule at the entry",
+    'shows once as an information problem at its key in `.cellens`',
+    'closes its editor without asking to save; closing it writes nothing, even while the engine works on it',
+    'A whole resource pasted for a value inside it, such as a ReplicaLimit for `params.spec.config`, gives the schema of that value',
+    'is saved when `.cellens` had no unsaved edits',
   ])('names %s under Added in the Unreleased section', (text) => {
     expect(unreleasedAdded()).toContain(text);
   });

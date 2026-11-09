@@ -15,6 +15,7 @@ export const GIVE_VALUE_TYPE_COMMAND = 'cel-lens.giveValueType';
  * `cel-lens.removeType` has the name of the line's part, and takes the same argument.
  */
 export const ENGINE_TYPE_CHOICES = 'cel-lens.typeChoices';
+export const ENGINE_INFER_TYPE = 'cel-lens.inferType';
 export const ENGINE_SET_TYPE = 'cel-lens.setType';
 export const ENGINE_REMOVE_TYPE = 'cel-lens.removeType';
 
@@ -44,6 +45,8 @@ export interface TypeTarget {
   readonly document: string;
   /** A CustomResourceDefinition's version, such as `v1`. */
   readonly version?: string;
+  /** Where the value is below the root of its object or variable, such as `spec.config`. */
+  readonly path?: string;
   /** The type an entry gives the value now, such as `{name: string}`. */
   readonly type?: string;
   /** The kind an entry gives the value now, such as `apps/v1 Deployment`. */
@@ -76,6 +79,7 @@ export function parseTypeTarget(argument: unknown): TypeTarget | undefined {
     return undefined;
   }
   const version = text(argument['version']);
+  const path = text(argument['path']);
   const type = text(argument['type']);
   const kind = text(argument['kind']);
   const go = text(argument['go']);
@@ -85,6 +89,7 @@ export function parseTypeTarget(argument: unknown): TypeTarget | undefined {
     value: text(argument['value']) ?? 'this value',
     document,
     ...(version !== undefined && { version }),
+    ...(path !== undefined && { path }),
     ...(type !== undefined && { type }),
     ...(kind !== undefined && { kind }),
     ...(go !== undefined && { go }),
@@ -97,7 +102,8 @@ export function inCrd(target: TypeTarget): boolean {
   return target.document.startsWith(CRD_DOCUMENT_PREFIX);
 }
 
-function withoutType(target: TypeTarget): Record<string, unknown> {
+/** The engine's argument that names the value, without the type it has. */
+export function withoutType(target: TypeTarget): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(target.argument).filter(([key]) => !TYPE_KEYS.includes(key)),
   );
@@ -116,6 +122,14 @@ export function withKind(target: TypeTarget, kind: string): Record<string, unkno
 /** The engine's argument with `go`, such as `./api/v1#QuotaSpec`, and no other type the value has. */
 export function withGo(target: TypeTarget, go: string): Record<string, unknown> {
   return { ...withoutType(target), go };
+}
+
+/** The engine's argument with an OpenAPI `schema`, and no other type the value has. */
+export function withSchema(
+  target: TypeTarget,
+  schema: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return { ...withoutType(target), schema };
 }
 
 /** The form of an entry the engine writes for the person to fill in: a short type or a schema. */
@@ -161,6 +175,18 @@ export interface GoTypeChoice {
   readonly doc: string;
 }
 
+/** A document of the workspace of the value's kind, which the engine can work out a schema from. */
+export interface ExampleChoice {
+  /** Its file's URI. */
+  readonly uri: string;
+  /** Its file below the workspace folder, such as `config/samples/limit.yaml`. */
+  readonly file: string;
+  /** The line the document starts at, from 1. */
+  readonly line: number;
+  readonly apiVersion: string;
+  readonly kind: string;
+}
+
 /** The answer of `cel-lens.typeChoices`. */
 export interface TypeChoices {
   readonly kubernetesVersion: string;
@@ -176,6 +202,13 @@ export interface TypeChoices {
    * list, as a workspace without Go code may give, is none, not an old engine.
    */
   readonly outdated?: true;
+  /** The documents of the workspace of the value's kind. */
+  readonly examples: readonly ExampleChoice[];
+  /**
+   * The answer of a value's line has no `examples` key: the engine cannot work out a schema from
+   * an example (`cel-lens.inferType`), which every engine that lists examples can.
+   */
+  readonly cannotInfer?: true;
 }
 
 function parseKindChoice(value: unknown): KindChoice | undefined {
@@ -213,6 +246,26 @@ function parseGoTypeChoice(value: unknown): GoTypeChoice | undefined {
     : { folder, name, doc: text(value['doc']) ?? '' };
 }
 
+function parseExampleChoice(value: unknown): ExampleChoice | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const uri = text(value['uri']);
+  const file = text(value['file']);
+  const line = value['line'];
+  const apiVersion = text(value['apiVersion']);
+  const kind = text(value['kind']);
+  return uri === undefined ||
+    file === undefined ||
+    typeof line !== 'number' ||
+    !Number.isInteger(line) ||
+    line < 1 ||
+    apiVersion === undefined ||
+    kind === undefined
+    ? undefined
+    : { uri, file, line, apiVersion, kind };
+}
+
 /** Reads the answer of `cel-lens.typeChoices`; one without a `builtIn` list gives `undefined`. */
 export function parseTypeChoices(value: unknown): TypeChoices | undefined {
   if (!isRecord(value) || !Array.isArray(value['builtIn'])) {
@@ -221,6 +274,7 @@ export function parseTypeChoices(value: unknown): TypeChoices | undefined {
   const crdsNote = text(value['crdsNote']);
   const goTypes = value['goTypes'];
   const goTypesNote = text(value['goTypesNote']);
+  const examples = value['examples'];
   return {
     kubernetesVersion: text(value['kubernetesVersion']) ?? '',
     builtIn: parseKindChoices(value['builtIn']),
@@ -231,6 +285,10 @@ export function parseTypeChoices(value: unknown): TypeChoices | undefined {
       : [],
     ...(goTypesNote !== undefined && { goTypesNote }),
     ...(goTypes === undefined && { outdated: true }),
+    examples: Array.isArray(examples)
+      ? examples.map(parseExampleChoice).filter((choice) => choice !== undefined)
+      : [],
+    ...(examples === undefined && { cannotInfer: true }),
   };
 }
 
@@ -244,6 +302,8 @@ export type TypeChoice =
   | { readonly action: 'write'; readonly form: SnippetForm }
   | { readonly action: 'pickGo' }
   | { readonly action: 'go'; readonly go: string }
+  | { readonly action: 'example'; readonly uri: string; readonly line: number }
+  | { readonly action: 'paste' }
   | { readonly action: 'type'; readonly type: string }
   | { readonly action: 'kind'; readonly kind: string }
   | { readonly action: 'openCrdSetting' }
@@ -336,12 +396,25 @@ export function goTypeLine(count?: number, outdated = false): PickEntry<TypeChoi
   };
 }
 
+/** The line of the type picker that opens an editor beside the rule to paste an example into. */
+export const PASTE_EXAMPLE_LINE: PickEntry<TypeChoice> = {
+  label: '$(clippy) Paste an example…',
+  detail: 'YAML or JSON, in an editor beside the rule; a schema is worked out from it',
+  value: { action: 'paste' },
+};
+
+/** `Paste an example…` once the engine said it cannot work out a schema from one. */
+const PASTE_NEEDS_ENGINE_LINE: PickEntry<TypeChoice> = {
+  ...PASTE_EXAMPLE_LINE,
+  description: 'needs a newer engine',
+};
+
 /**
  * The lines the type picker of a policy's value starts with, before the engine lists the kinds;
  * `entry` for a value with an entry, whose write lines open it.
  */
 export function firstLines(entry = false): PickLine<TypeChoice>[] {
-  return [writeLine('schema', entry), goTypeLine(), writeLine('type', entry)];
+  return [writeLine('schema', entry), goTypeLine(), writeLine('type', entry), PASTE_EXAMPLE_LINE];
 }
 
 /** The placeholder of the type picker of a policy's value. */
@@ -407,11 +480,30 @@ function crdLines(choices: TypeChoices): PickLine<TypeChoice>[] {
 }
 
 /**
+ * The documents of the workspace of the value's kind, under their separator: each by its file,
+ * with its kind as the description and the line it starts at as the detail.
+ */
+function exampleLines(choices: TypeChoices): PickLine<TypeChoice>[] {
+  if (choices.examples.length === 0) {
+    return [];
+  }
+  return [
+    { separator: true, label: 'Examples in the workspace' },
+    ...choices.examples.map((example): PickEntry<TypeChoice> => ({
+      label: `$(file) ${example.file}`,
+      description: `${example.apiVersion} ${example.kind}`,
+      detail: `Document at line ${String(example.line)}`,
+      value: { action: 'example', uri: example.uri, line: example.line },
+    })),
+  ];
+}
+
+/**
  * The lines of the type picker of a policy's value: `Write a schema in .cellens…`,
- * `Use a Go type…` and `Write a short type in .cellens…`, then the built-in kinds and the kinds
- * of the workspace's CRDs, each group under its separator. A kind's description is its group and
- * version, marked `beta` or `alpha` when it is not GA. `entry` for a value with an entry, whose
- * write lines open it.
+ * `Use a Go type…` and `Write a short type in .cellens…`, then the examples of the workspace and
+ * `Paste an example…`, then the built-in kinds and the kinds of the workspace's CRDs, each group
+ * under its separator. A kind's description is its group and version, marked `beta` or `alpha`
+ * when it is not GA. `entry` for a value with an entry, whose write lines open it.
  */
 export function typeLines(choices: TypeChoices, entry = false): PickLine<TypeChoice>[] {
   const builtIn: PickLine<TypeChoice>[] =
@@ -431,6 +523,8 @@ export function typeLines(choices: TypeChoices, entry = false): PickLine<TypeCho
     writeLine('schema', entry),
     goTypeLine(choices.goTypes.length, choices.outdated === true),
     writeLine('type', entry),
+    ...exampleLines(choices),
+    choices.cannotInfer === true ? PASTE_NEEDS_ENGINE_LINE : PASTE_EXAMPLE_LINE,
     ...builtIn,
     ...crdLines(choices),
   ];
@@ -555,6 +649,9 @@ const OUTDATED_FIX = `set cel-lens.serverPath to a newer cel-lens-core, then run
 /** What the flow says when the engine is too old to write a type in `.cellens` or list Go types. */
 export const OUTDATED_ENGINE_MESSAGE = `This cel-lens engine is too old to write a type in .cellens or list Go types: ${OUTDATED_FIX}.`;
 
+/** What the flow says when the engine is too old to work out a schema from an example. */
+export const OUTDATED_EXAMPLE_MESSAGE = `This cel-lens engine is too old to work out a type from an example: ${OUTDATED_FIX}.`;
+
 /** The line of the Go types picker when the engine is too old to list them; picking it opens the setting. */
 export const OUTDATED_ENGINE_LINE: PickEntry<TypeChoice> = {
   label: '$(warning) This cel-lens engine cannot list Go types',
@@ -652,6 +749,8 @@ export function isCurrentChoice(target: TypeTarget): (choice: TypeChoice) => boo
         return choice.form === 'schema'
           ? target.schema === true
           : target.type !== undefined && !pickedType;
+      case 'example':
+      case 'paste':
       case 'openCrdSetting':
       case 'openServerPathSetting':
       case 'showLogs':
@@ -704,6 +803,20 @@ export function parseEntryPlace(value: unknown): EntryPlace | undefined {
   return cellens === undefined || start === undefined || end === undefined
     ? undefined
     : { cellens, selection: { start, end } };
+}
+
+/** The answer of `cel-lens.setType` or `cel-lens.removeType`: the `.cellens` it changed, and how. */
+export interface ChangeAnswer {
+  readonly cellens: string;
+  /** `added`, `replaced`, `created`, `removed`, `deleted`, or `unchanged` for a snippet. */
+  readonly change: string;
+}
+
+/** Reads the answer of `cel-lens.setType` or `cel-lens.removeType`; anything else gives `undefined`. */
+export function parseChangeAnswer(value: unknown): ChangeAnswer | undefined {
+  const cellens = isRecord(value) ? text(value['cellens']) : undefined;
+  const change = isRecord(value) ? text(value['change']) : undefined;
+  return cellens === undefined || change === undefined ? undefined : { cellens, change };
 }
 
 /** Whether a value is the answer of `cel-lens.setType` or `cel-lens.removeType`: `{cellens, change}`. */

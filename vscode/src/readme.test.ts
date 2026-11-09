@@ -176,6 +176,7 @@ describe('README.md as the store page', () => {
     'of the workspace folder of the `.cellens`',
     'its **Back** button returns to the first',
     'with a button to `cel-lens.serverPath`',
+    'is saved when `.cellens` had no unsaved edits; what you write in `.cellens` is yours to save',
     '**Edit** opens the same picker on what the value has',
     'open `.cellens` at its entry',
     '**Remove**',
@@ -185,7 +186,7 @@ describe('README.md as the store page', () => {
     expect(readmeSection(README, 'Give a value a type')).toContain(text);
   });
 
-  it('says how to give a type in each of the four forms, in the order of the picker, each under its heading with a picture for a person to take', () => {
+  it('says how to give a type in each form, in the order of the picker, each under its heading with a picture for a person to take', () => {
     const section = readmeSection(README, 'Give a value a type') ?? '';
     const forms = section.split(/^(?=### )/m).slice(1);
 
@@ -193,6 +194,7 @@ describe('README.md as the store page', () => {
       '### A schema',
       '### A Go type',
       '### A short type',
+      '### An example',
       '### A kind',
       '### A value of a CRD',
       '### Edit or remove a type',
@@ -201,16 +203,40 @@ describe('README.md as the store page', () => {
       'images/give-type-schema.png',
       'images/give-type-go.png',
       'images/give-type-short.png',
+      'images/give-type-example.png',
+      'images/give-type-paste.png',
       'images/give-type-kind.png',
     ]);
     expect(
-      forms.slice(0, 4).map((form) => readmePicturePlaceholders(form.split('\n')[2] ?? '')),
-    ).toEqual(readmePicturePlaceholders(section).map((file) => [file]));
-    expect(forms.slice(0, 3).map((form) => /\*\*([^*]+)\*\*/.exec(form)?.[1])).toEqual([
+      forms.slice(0, 5).map((form) => readmePicturePlaceholders(form.split('\n')[2] ?? '')),
+    ).toEqual([
+      ['images/give-type-schema.png'],
+      ['images/give-type-go.png'],
+      ['images/give-type-short.png'],
+      ['images/give-type-example.png'],
+      ['images/give-type-kind.png'],
+    ]);
+    expect(forms.slice(0, 4).map((form) => /\*\*([^*]+)\*\*/.exec(form)?.[1])).toEqual([
       'Write a schema in .cellens…',
       'Use a Go type…',
       'Write a short type in .cellens…',
+      'Examples in the workspace',
     ]);
+  });
+
+  it.each([
+    'Pick one, and cel-lens works out an OpenAPI schema from it',
+    "writes it as the entry's `schema:` and opens `.cellens` beside the rule at the entry",
+    'shows once as an information problem at its key in `.cellens`',
+    '**Paste an example…**',
+    '**Use this example as the type** above it, or the check in its editor title',
+    'closes the editor without asking to save. Closing it yourself writes nothing.',
+    'the reason shows once and the editor stays open',
+    'or a whole resource that holds it',
+    'with its workspace folder in a multi-root workspace',
+  ])('says how to give a type from an example: %s', (text) => {
+    const example = (readmeSection(README, 'Give a value a type') ?? '').split('### An example')[1];
+    expect(example?.split('### A kind')[0]).toContain(text);
   });
 
   it('says where the palette shows the commands, as their when clauses in package.json do', () => {

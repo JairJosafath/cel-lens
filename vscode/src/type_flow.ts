@@ -1,5 +1,13 @@
 import {
+  isWholeResource,
+  notePlaces,
+  parseInferredSchema,
+  type ExampleArgument,
+  type NotePlace,
+} from './example_schema';
+import {
   EDIT_TYPE_COMMAND,
+  ENGINE_INFER_TYPE,
   ENGINE_REMOVE_TYPE,
   ENGINE_SET_TYPE,
   ENGINE_TYPE_CHOICES,
@@ -10,6 +18,7 @@ import {
   INT_OR_STRING_PLACEHOLDER,
   KIND_PLACEHOLDER,
   OUTDATED_ENGINE_LINE,
+  OUTDATED_EXAMPLE_MESSAGE,
   REMOVE_TYPE_COMMAND,
   VALUE_PICK_PLACEHOLDER,
   VALUE_PICK_TITLE,
@@ -21,10 +30,10 @@ import {
   goTypesIn,
   hasEntry,
   inCrd,
-  isChangeAnswer,
   isCurrentChoice,
   lineValues,
   parentFolder,
+  parseChangeAnswer,
   parseEntryPlace,
   parseTypeChoices,
   parseTypeTarget,
@@ -34,8 +43,10 @@ import {
   valueLines,
   withGo,
   withKind,
+  withSchema,
   withSnippet,
   withType,
+  withoutType,
   type PickLine,
   type SnippetForm,
   type TextRange,
@@ -75,6 +86,17 @@ export interface Picked<T> {
   readonly typed: string;
 }
 
+/** What runs when the person uses a pasted example: its text, and how to close its editor. */
+export type PasteUse = (text: string, editor: PastedEditor) => Promise<void>;
+
+/** The editor of a pasted example, as the flow uses it. */
+export interface PastedEditor {
+  /** Fires when the person closes the editor: nothing is written after that. */
+  readonly closed: AbortSignal;
+  /** Closes the editor without asking to save. */
+  close(): Promise<void>;
+}
+
 /** What the flow shows a person; the extension shows it with VS Code. */
 export interface TypeUi {
   /** Shows the quick pick; the line picked, `BACK` for its Back button, or `undefined` on Escape. */
@@ -88,14 +110,31 @@ export interface TypeUi {
   workspacePath(uri: string): string;
   /** The URI of the workspace folder `uri` is in, if any. */
   workspaceFolder(uri: string): string | undefined;
+  /** The text of a file, the editor's when it is open. */
+  readText(uri: string): Promise<string>;
+  /**
+   * Opens an editor beside the rule to paste an example of `value` into, and resolves once it is
+   * open; `inside` for a value below the root of its object. Each time the person uses the
+   * example, `use` gets its text and the editor; closing it ends it, and nothing is written.
+   */
+  pasteExample(value: string, inside: boolean, use: PasteUse): Promise<void>;
+  /** Whether `uri` is open with edits not saved. */
+  isDirty(uri: string): boolean;
+  /** Saves `uri` when it is open. */
+  save(uri: string): Promise<void>;
+  /** Shows the notes on what an example left open, quietly, at their lines of `cellens`. */
+  showNotes(cellens: string, notes: readonly NotePlace[]): void;
   inform(message: string): Promise<void>;
   /** Shows an error once; `offerLogs` adds the button that opens the logs. */
   showError(message: string, offerLogs: boolean): Promise<void>;
   openExperimentalSetting(): Promise<void>;
   /** Opens the setting `cel-lens.serverPath`, which picks the engine. */
   openServerPathSetting(): Promise<void>;
-  /** Says once that the engine is too old for this, with a button to `cel-lens.serverPath`. */
-  showOutdatedEngine(): Promise<void>;
+  /**
+   * Says once that the engine is too old for this, with a button to `cel-lens.serverPath`: the
+   * message given, else that it cannot write in `.cellens` or list Go types.
+   */
+  showOutdatedEngine(message?: string): Promise<void>;
   showLogs(): void;
 }
 
@@ -151,7 +190,12 @@ export class TypeFlow {
   async removeType(argument: unknown): Promise<void> {
     const target = this.target(REMOVE_TYPE_COMMAND, argument);
     if (target !== undefined) {
-      await this.change(ENGINE_REMOVE_TYPE, target.argument, `remove the type of ${target.value}`);
+      await this.change(
+        target,
+        ENGINE_REMOVE_TYPE,
+        target.argument,
+        `remove the type of ${target.value}`,
+      );
     }
   }
 
@@ -202,10 +246,19 @@ export class TypeFlow {
     const choices = inCrd(target)
       ? undefined
       : this.typeChoices(target, listing.signal).then((found) => {
-          listed = found === undefined ? undefined : goTypesIn(found, root);
+          listed =
+            found === undefined
+              ? undefined
+              : {
+                  ...goTypesIn(found, root),
+                  examples: found.examples.map((example) => ({
+                    ...example,
+                    file: this.ui.workspacePath(example.uri),
+                  })),
+                };
           return listed;
         });
-    const outdated = (): boolean => listed?.outdated === true;
+    const known = (): TypeChoices | undefined => listed;
     const entry = hasEntry(target);
     let filter = '';
     try {
@@ -226,22 +279,19 @@ export class TypeFlow {
         if (picked === undefined || picked === BACK) {
           return;
         }
-        if (picked.value.action === 'pickGo' && choices !== undefined && !outdated()) {
-          const step = await this.pickGoType(
-            target,
-            title,
-            action,
-            choices,
-            picked.typed,
-            outdated,
-          );
+        if (
+          picked.value.action === 'pickGo' &&
+          choices !== undefined &&
+          known()?.outdated !== true
+        ) {
+          const step = await this.pickGoType(target, title, action, choices, picked.typed, known);
           if (step === BACK) {
             filter = picked.typed;
             continue;
           }
           return;
         }
-        await this.apply(target, picked.value, action, outdated);
+        await this.apply(target, picked.value, action, known);
         return;
       }
     } finally {
@@ -259,7 +309,7 @@ export class TypeFlow {
     action: string,
     choices: Promise<TypeChoices | undefined>,
     typed: string,
-    outdated: () => boolean,
+    known: () => TypeChoices | undefined,
   ): Promise<typeof BACK | undefined> {
     const picked = await this.ui.pick<TypeChoice>({
       title: `${title} › Go type`,
@@ -280,25 +330,25 @@ export class TypeFlow {
       return BACK;
     }
     if (picked !== undefined) {
-      await this.apply(target, picked.value, action, outdated);
+      await this.apply(target, picked.value, action, known);
     }
     return undefined;
   }
 
   /**
-   * Does what the line picked says, at once. `outdated` says whether the engine has already
-   * answered that it is too old for the lines that write in `.cellens` and the Go types; one that
-   * has not answered yet refuses a `snippet` itself.
+   * Does what the line picked says, at once. `known` is what the engine has answered so far, which
+   * may say it is too old for the lines that write in `.cellens`, the Go types or
+   * `Paste an example…`; one that has not answered yet refuses a `snippet` or an example itself.
    */
   private async apply(
     target: TypeTarget,
     choice: TypeChoice,
     action: string,
-    outdated: () => boolean,
+    known: () => TypeChoices | undefined,
   ): Promise<void> {
     switch (choice.action) {
       case 'write':
-        if (outdated()) {
+        if (known()?.outdated === true) {
           await this.ui.showOutdatedEngine();
           return;
         }
@@ -306,18 +356,38 @@ export class TypeFlow {
         return;
       case 'go':
         if (target.go === undefined || !sameGo(choice.go, target.go)) {
-          await this.change(ENGINE_SET_TYPE, withGo(target, choice.go), action);
+          await this.change(target, ENGINE_SET_TYPE, withGo(target, choice.go), action);
         }
         return;
       case 'type':
         if (choice.type !== target.type) {
-          await this.change(ENGINE_SET_TYPE, withType(target, choice.type), action);
+          await this.change(target, ENGINE_SET_TYPE, withType(target, choice.type), action);
         }
         return;
       case 'kind':
         if (choice.kind !== target.kind) {
-          await this.change(ENGINE_SET_TYPE, withKind(target, choice.kind), action);
+          await this.change(target, ENGINE_SET_TYPE, withKind(target, choice.kind), action);
         }
+        return;
+      case 'example':
+        await this.typeFromWorkspace(target, choice.uri, choice.line, action);
+        return;
+      case 'paste':
+        if (known()?.cannotInfer === true) {
+          await this.ui.showOutdatedEngine(OUTDATED_EXAMPLE_MESSAGE);
+          return;
+        }
+        await this.ui.pasteExample(target.value, target.path !== undefined, (text, editor) =>
+          this.typeFromExample(
+            target,
+            {
+              text,
+              ...(target.path !== undefined && isWholeResource(text) && { path: target.path }),
+            },
+            action,
+            editor,
+          ),
+        );
         return;
       case 'openCrdSetting':
         await this.ui.openExperimentalSetting();
@@ -329,13 +399,80 @@ export class TypeFlow {
         this.ui.showLogs();
         return;
       case 'pickGo':
-        if (outdated()) {
+        if (known()?.outdated === true) {
           await this.ui.showOutdatedEngine();
         }
         return;
       case 'none':
         return;
     }
+  }
+
+  /** A schema from a document of the workspace: the one at `line` of the file, the value at its path. */
+  private async typeFromWorkspace(
+    target: TypeTarget,
+    uri: string,
+    line: number,
+    action: string,
+  ): Promise<void> {
+    let text: string;
+    try {
+      text = await this.ui.readText(uri);
+    } catch (error) {
+      this.log.error(`Could not read ${uri}: ${String(error)}`);
+      await this.ui.showError(
+        `cel-lens could not read the example for ${target.value}. Show the logs for the reason.`,
+        true,
+      );
+      return;
+    }
+    await this.typeFromExample(
+      target,
+      { text, line, ...(target.path !== undefined && { path: target.path }) },
+      action,
+    );
+  }
+
+  /**
+   * Has the engine work out a schema from the example, writes it as the value's `schema:`, and
+   * opens `.cellens` beside the rule at the entry, with the notes on what the example left open
+   * at their lines. A pasted example's editor closes once the schema is written, before
+   * `.cellens` opens beside the rule; a failure keeps it open, to fix the example, and closing
+   * it while the engine works writes nothing.
+   */
+  private async typeFromExample(
+    target: TypeTarget,
+    example: ExampleArgument,
+    action: string,
+    editor?: PastedEditor,
+  ): Promise<void> {
+    let answer: unknown;
+    try {
+      answer = await this.engine(ENGINE_INFER_TYPE, example);
+    } catch (error) {
+      await this.report(action, error);
+      return;
+    }
+    const inferred = parseInferredSchema(answer);
+    if (inferred === undefined) {
+      this.log.warn(
+        `${ENGINE_INFER_TYPE} gave no schema; the engine may not match this extension.`,
+      );
+      return;
+    }
+    if (editor?.closed.aborted === true) {
+      this.log.warn(`Did not ${action}: the editor of the example was closed.`);
+      return;
+    }
+    if (
+      !(await this.change(target, ENGINE_SET_TYPE, withSchema(target, inferred.schema), action))
+    ) {
+      return;
+    }
+    await editor?.close();
+    await this.writeInCellens(target, 'schema', action, (text, at) =>
+      notePlaces(text, at, inferred.notes, example.path),
+    );
   }
 
   /**
@@ -348,7 +485,7 @@ export class TypeFlow {
   ): Promise<TypeChoices | undefined> {
     let answer: unknown;
     try {
-      answer = await this.engine(ENGINE_TYPE_CHOICES, undefined, signal);
+      answer = await this.engine(ENGINE_TYPE_CHOICES, withoutType(target), signal);
     } catch (error) {
       // Not awaited: a notification stays pending while it is open, and the picker is open.
       void this.report(`list the kinds and Go types for ${target.value}`, error);
@@ -366,12 +503,14 @@ export class TypeFlow {
   /**
    * Has the engine write an entry to fill in, a short type or a schema, or find the entry the
    * value has, and opens `.cellens` there once the edit is applied: the engine sends the edit
-   * before it answers.
+   * before it answers. `notes`, given the text of `.cellens` and the line of the entry's type,
+   * places the notes to show there.
    */
   private async writeInCellens(
     target: TypeTarget,
     form: SnippetForm,
     action: string,
+    notes?: (text: string, at: number) => NotePlace[],
   ): Promise<void> {
     let answer: unknown;
     try {
@@ -395,6 +534,12 @@ export class TypeFlow {
     }
     try {
       await this.ui.openCellens(place.cellens, place.selection);
+      if (notes !== undefined) {
+        const placed = notes(await this.ui.readText(place.cellens), place.selection.start.line);
+        if (placed.length > 0) {
+          this.ui.showNotes(place.cellens, placed);
+        }
+      }
     } catch (error) {
       this.log.error(`Could not open ${place.cellens}: ${String(error)}`);
       await this.ui.showError(
@@ -404,21 +549,40 @@ export class TypeFlow {
     }
   }
 
-  /** Sets or removes the entry; a failure is shown once. */
-  private async change(command: string, argument: unknown, action: string): Promise<void> {
+  /**
+   * Sets or removes the entry at once, and whether it did; a failure is shown once. A `.cellens`
+   * with no unsaved edit before is saved once the engine's edit is in, as the person typed
+   * nothing; one with edits of theirs is left for them to save.
+   */
+  private async change(
+    target: TypeTarget,
+    command: string,
+    argument: unknown,
+    action: string,
+  ): Promise<boolean> {
+    const clean = !this.ui.isDirty(target.cellens);
+    let answer: unknown;
     try {
-      this.checkChange(command, await this.engine(command, argument));
+      answer = await this.engine(command, argument);
     } catch (error) {
       await this.report(action, error);
+      return false;
     }
-  }
-
-  private checkChange(command: string, answer: unknown): void {
-    if (!isChangeAnswer(answer)) {
+    const changed = parseChangeAnswer(answer);
+    if (changed === undefined) {
       this.log.warn(
         `${command} gave no answer it documents; the engine may not match this extension.`,
       );
+      return true;
     }
+    if (clean && changed.cellens === target.cellens && changed.change !== 'deleted') {
+      try {
+        await this.ui.save(changed.cellens);
+      } catch (error) {
+        this.log.error(`Could not save ${changed.cellens}: ${String(error)}`);
+      }
+    }
+    return true;
   }
 
   /** Says once that `action` failed: the engine's reason when it refused, else a button to the logs. */

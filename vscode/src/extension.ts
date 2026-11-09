@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { SHOW_ACTIONS_COMMAND, SHOW_LOGS_COMMAND } from './actions_menu';
 import { ColorPainter, chooseColorStyle } from './color_painter';
 import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
+import { ExampleEditors, ExampleNotes } from './example_editor';
 import { INLINE_INFO_SETTING_NAME, TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
 import { toggleInlineInfo } from './inline_info_setting';
 import { offerLegacyColorStyleMove } from './legacy_color_style';
@@ -39,7 +40,9 @@ export function activate(
     status.setState(state);
   });
   controller = server;
-  const ui = typeUi(log);
+  const examples = new ExampleEditors(log);
+  const notes = new ExampleNotes();
+  const ui = typeUi(log, examples, notes);
   const types = new TypeFlow(
     (command, argument, signal) => server.runEngineCommand(command, argument, signal),
     ui,
@@ -49,6 +52,8 @@ export function activate(
     log,
     server,
     status,
+    examples,
+    notes,
     new ColorPainter(),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(INLINE_INFO_SETTING_NAME)) {

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { OPEN_ENGINE_SETTING_LABEL, SHOW_LOGS_LABEL } from './button_labels';
+import type { ExampleEditors, ExampleNotes } from './example_editor';
 import { EXPERIMENTAL_SETTING } from './experimental';
 import { readInlineInfo } from './inline_info_setting';
 import { openServerPathSetting } from './open_server_setting';
@@ -121,13 +122,38 @@ async function openCellens(cellens: string, selection: TextRange): Promise<void>
   });
 }
 
-/** Shows the flow with VS Code's quick pick, editors and notifications. */
-export function typeUi(log: Pick<vscode.LogOutputChannel, 'show'>): TypeUi {
+/** The document of `uri` if it is open. */
+function openDocument(uri: string): vscode.TextDocument | undefined {
+  const parsed = vscode.Uri.parse(uri).toString();
+  return vscode.workspace.textDocuments.find((document) => document.uri.toString() === parsed);
+}
+
+/** Shows the flow with VS Code's quick pick, editors, diagnostics and notifications. */
+export function typeUi(
+  log: Pick<vscode.LogOutputChannel, 'show'>,
+  examples: Pick<ExampleEditors, 'open'>,
+  notes: Pick<ExampleNotes, 'show'>,
+): TypeUi {
   return {
     pick,
     openCellens,
     workspaceFolder(uri) {
       return vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(uri))?.uri.toString();
+    },
+    async readText(uri) {
+      return (await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))).getText();
+    },
+    async pasteExample(value, inside, use) {
+      await examples.open(value, inside, use);
+    },
+    isDirty(uri) {
+      return openDocument(uri)?.isDirty === true;
+    },
+    async save(uri) {
+      await openDocument(uri)?.save();
+    },
+    showNotes(cellens, placed) {
+      notes.show(cellens, placed);
     },
     workspacePath(uri) {
       // VS Code writes a workspace folder itself as its full path: its name says it shorter.
@@ -155,12 +181,10 @@ export function typeUi(log: Pick<vscode.LogOutputChannel, 'show'>): TypeUi {
       );
     },
     openServerPathSetting,
-    async showOutdatedEngine() {
+    async showOutdatedEngine(message = OUTDATED_ENGINE_MESSAGE) {
       if (
-        (await vscode.window.showErrorMessage(
-          OUTDATED_ENGINE_MESSAGE,
-          OPEN_ENGINE_SETTING_LABEL,
-        )) === OPEN_ENGINE_SETTING_LABEL
+        (await vscode.window.showErrorMessage(message, OPEN_ENGINE_SETTING_LABEL)) ===
+        OPEN_ENGINE_SETTING_LABEL
       ) {
         await openServerPathSetting();
       }

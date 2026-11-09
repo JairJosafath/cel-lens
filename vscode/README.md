@@ -55,8 +55,8 @@ The extension carries the cel-lens engine for your platform, so there is nothing
 Where Kubernetes gives a CEL value no type, it is `dyn`, and cel-lens can't check, complete or explain it: an `x-kubernetes-int-or-string` field to a CRD's rule, or the `params` of a policy whose `paramKind` is a custom kind. A `.cellens` file says what such a value is; commit it, so everyone gets the same types. cel-lens writes it with you:
 
 1. On the line above the rule, click **Give it a type** after the value (such as `params: dyn · Give it a type`), or **+N more** and then the value. Or run **cel-lens: Give a Value a Type…** and pick one of the values of the open file.
-2. The picker is titled after the value, such as **Give params a type**. It opens at once and lists the Go types and kinds as the engine finds them. Pick one of the four forms below.
-3. The entry goes in the nearest `.cellens` at or above the file, or a new one at the root of its workspace folder, and the rules are checked again with the type.
+2. The picker is titled after the value, such as **Give params a type**. It opens at once and lists the Go types, examples and kinds as the engine finds them. Pick one of the forms below.
+3. The entry goes in the nearest `.cellens` at or above the file, or a new one at the root of its workspace folder, and the rules are checked again with the type. A type written at once (a Go type, a kind, `int` or `string`, or one from an example), or removed, is saved when `.cellens` had no unsaved edits; what you write in `.cellens` is yours to save.
 
 A schema or a short type is written in `.cellens` itself: cel-lens adds the entry and opens `.cellens` beside the rule (in the editor group that already shows it, if one does), with the cursor where the type goes. There you have the engine's completion, hover and problems as you type, and the line above the rule follows each change.
 
@@ -78,6 +78,16 @@ Pick **Use a Go type…** when the value is a struct of the workspace's Go code,
 
 Pick **Write a short type in .cellens…** for a CEL type that needs nothing more, such as `int` or `{name: string, replicas: int}`. The entry starts as `type: "{}"`, the cursor between the braces.
 
+### An example
+
+<!-- Picture to take: images/give-type-example.png, the picker titled `Give params a type` in a dark theme, opened from `params: dyn · Give it a type` above a rule of a ValidatingAdmissionPolicy whose paramKind is ReplicaLimit: `Examples in the workspace` with `config/samples/limit.yaml`, `rules.example.com/v1 ReplicaLimit` and `Document at line 1`, then `Paste an example…`. -->
+
+Under **Examples in the workspace**, the picker lists the documents of the workspace of the value's kind, such as the samples in `config/samples/` for a policy's `params`, each by its file (with its workspace folder in a multi-root workspace), its kind and the line it starts at. Pick one, and cel-lens works out an OpenAPI schema from it (from the value's own part of it, such as its `spec.config`), writes it as the entry's `schema:` and opens `.cellens` beside the rule at the entry, for you to refine. What the example leaves open, such as the items of an empty list or a field that is a number in one document and a string in another, shows once as an information problem at its key in `.cellens`; it goes when you edit there.
+
+<!-- Picture to take: images/give-type-paste.png, the untitled editor beside a ValidatingAdmissionPolicy after Paste an example…, in a dark theme: `Use this example as the type` above the comment `# Paste an example of params below: YAML or JSON, one document or several.`, a ReplicaLimit pasted below it, and the check icon in the editor title. -->
+
+Or pick **Paste an example…**: an editor opens beside the rule, with a comment that says what to paste. Paste an example of the value there, or a whole resource that holds it (cel-lens then takes the value's part of it), YAML or JSON, one document or several, and click **Use this example as the type** above it, or the check in its editor title: cel-lens does the same as for a document of the workspace, and closes the editor without asking to save. Closing it yourself writes nothing. When the engine cannot read the example, the reason shows once and the editor stays open, to fix it.
+
 ### A kind
 
 <!-- Picture to take: images/give-type-kind.png, the picker titled `Give params a type` in a dark theme with `deploy` typed in the filter and `Deployment`, `apps/v1`, highlighted under Built-in kinds. -->
@@ -94,17 +104,18 @@ A value of a CRD takes an int or a string: its picker offers `int` and `string` 
 
 ## Commands
 
-The Command Palette lists the commands under **cel-lens**: **cel-lens: Show Logs** on any file, the others on YAML files. None has a keybinding.
+The Command Palette lists the commands under **cel-lens**: **cel-lens: Show Logs** on any file, the others on YAML files, and **cel-lens: Use This Example as the Type** only on the editor of a pasted example. None has a keybinding.
 
-| Command                               | What it does                                                                                                               |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **cel-lens: Give a Value a Type…**    | Lists the values the rules of the open file read as `dyn` or with a type from `.cellens`, and gives the one picked a type. |
-| **cel-lens: Toggle Inline Info**      | Turns the line above each CEL rule off and on.                                                                             |
-| **cel-lens: Choose Color Style**      | Picks how CEL is colored: CEL, Classic or Off.                                                                             |
-| **cel-lens: Pick Kubernetes Version** | Picks the Kubernetes version the results match.                                                                            |
-| **cel-lens: Show Actions**            | Opens the status bar menu.                                                                                                 |
-| **cel-lens: Restart Engine**          | Restarts the engine, such as after changing `cel-lens.serverPath`.                                                         |
-| **cel-lens: Show Logs**               | Opens the **cel-lens** output channel.                                                                                     |
+| Command                                    | What it does                                                                                                               |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| **cel-lens: Give a Value a Type…**         | Lists the values the rules of the open file read as `dyn` or with a type from `.cellens`, and gives the one picked a type. |
+| **cel-lens: Use This Example as the Type** | On the editor **Paste an example…** opens: gives the value the schema worked out from the example in it.                   |
+| **cel-lens: Toggle Inline Info**           | Turns the line above each CEL rule off and on.                                                                             |
+| **cel-lens: Choose Color Style**           | Picks how CEL is colored: CEL, Classic or Off.                                                                             |
+| **cel-lens: Pick Kubernetes Version**      | Picks the Kubernetes version the results match.                                                                            |
+| **cel-lens: Show Actions**                 | Opens the status bar menu.                                                                                                 |
+| **cel-lens: Restart Engine**               | Restarts the engine, such as after changing `cel-lens.serverPath`.                                                         |
+| **cel-lens: Show Logs**                    | Opens the **cel-lens** output channel.                                                                                     |
 
 ## Settings
 

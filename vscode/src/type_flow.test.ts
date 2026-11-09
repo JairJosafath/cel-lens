@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import type { NotePlace } from './example_schema';
 import {
   BACK,
   INLINE_INFO_OFF_MESSAGE,
   NO_VALUES_MESSAGE,
   TypeFlow,
+  type PasteUse,
+  type PastedEditor,
   type PickRequest,
   type Picked,
   type TypeUi,
@@ -19,6 +22,7 @@ import {
 } from './value_types';
 
 const CELLENS = 'file:///ws/.cellens';
+const SAMPLES = 'file:///ws/config/samples/limit.yaml';
 
 /** The argument of the line's parts for `params.spec.config` of a policy's params. */
 const CONFIG = {
@@ -66,6 +70,48 @@ const CHOICES = {
     { folder: 'file:///ws/api/v1', name: 'QuotaSpec', doc: 'QuotaSpec is the quota of a team.' },
     { folder: 'file:///ws/api/v1', name: 'TeamSpec', doc: '' },
   ],
+  examples: [
+    {
+      uri: SAMPLES,
+      file: 'config/samples/limit.yaml',
+      line: 12,
+      apiVersion: 'rules.example.com/v1',
+      kind: 'ReplicaLimit',
+    },
+  ],
+};
+
+/** The schema the engine works out from an example, and what it leaves open. */
+const INFERRED = {
+  schema: {
+    type: 'object',
+    properties: {
+      teams: { type: 'array', items: { 'x-kubernetes-preserve-unknown-fields': true } },
+    },
+  },
+  notes: ['teams: an empty list says nothing about its items'],
+};
+
+/** `.cellens` once the engine wrote the schema of `params.spec.config`. */
+const WRITTEN = [
+  'types:',
+  '  - file: policies/limits.yaml',
+  '    document: ValidatingAdmissionPolicy limits',
+  '    variable: params',
+  '    path: spec.config',
+  '    schema:',
+  '      properties:',
+  '        teams:',
+  '          items:',
+  '            x-kubernetes-preserve-unknown-fields: true',
+  '          type: array',
+  '      type: object',
+].join('\n');
+
+/** Where the engine puts the cursor on the type of the entry it wrote: below `schema:`. */
+const AT_SCHEMA: TextRange = {
+  start: { line: 6, character: 6 },
+  end: { line: 6, character: 6 },
 };
 
 /** Where the engine puts the cursor in `.cellens`: between the braces of `type: "{}"`. */
@@ -86,6 +132,8 @@ const GO_LINE = '$(symbol-struct) Use a Go type…';
 const SHORT_LINE = '$(edit) Write a short type in .cellens…';
 /** What FakeUi.next takes for a click on a picker's Back button. */
 const PRESS_BACK = 'the Back button';
+const EXAMPLE_LINE = '$(file) config/samples/limit.yaml';
+const PASTE_LINE = '$(clippy) Paste an example…';
 
 /** A ResponseError as the language client rejects with it. */
 function responseError(code: number, message: string): Error {
@@ -112,6 +160,7 @@ function fakeEngine(): {
   const signals: (AbortSignal | undefined)[] = [];
   const answers = new Map<string, unknown>([
     ['cel-lens.typeChoices', CHOICES],
+    ['cel-lens.inferType', INFERRED],
     ['cel-lens.setType', { cellens: CELLENS, change: 'added' }],
     ['cel-lens.removeType', { cellens: CELLENS, change: 'removed' }],
   ]);
@@ -167,6 +216,22 @@ class FakeUi implements TypeUi {
   logsShown = 0;
   /** The workspace folders, by URI; a URI below none is outside every one. */
   folders = ['file:///ws'];
+  /** What readText answers, by URI; another URI fails. */
+  readonly texts = new Map<string, string>([
+    [SAMPLES, 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\n'],
+    [CELLENS, WRITTEN],
+  ]);
+  /** The editors of pasted examples opened, with what using one runs. */
+  readonly pasted: { value: string; inside: boolean; use: PasteUse }[] = [];
+  /** The files open with edits not saved, by URI. */
+  readonly dirty = new Set<string>();
+  /** The files saved, oldest first. */
+  readonly saved: string[] = [];
+  /** The messages of the too-old notices shown; `undefined` for the one about .cellens. */
+  readonly outdatedMessages: (string | undefined)[] = [];
+  readonly notes: { cellens: string; notes: readonly NotePlace[] }[] = [];
+  /** The editors closed and opened, in order. */
+  readonly steps: string[] = [];
 
   async pick<T>(request: PickRequest<T>): Promise<Picked<T> | typeof BACK | undefined> {
     const early = this.atOnce > 0 && request.lines instanceof Promise;
@@ -201,7 +266,33 @@ class FakeUi implements TypeUi {
       return Promise.reject(this.openFailure);
     }
     this.opened.push({ cellens, selection });
+    this.steps.push(`open ${cellens}`);
     return Promise.resolve();
+  }
+
+  readText(uri: string): Promise<string> {
+    const text = this.texts.get(uri);
+    return text === undefined
+      ? Promise.reject(new Error(`cannot read ${uri}`))
+      : Promise.resolve(text);
+  }
+
+  pasteExample(value: string, inside: boolean, use: PasteUse): Promise<void> {
+    this.pasted.push({ value, inside, use });
+    return Promise.resolve();
+  }
+
+  isDirty(uri: string): boolean {
+    return this.dirty.has(uri);
+  }
+
+  save(uri: string): Promise<void> {
+    this.saved.push(uri);
+    return Promise.resolve();
+  }
+
+  showNotes(cellens: string, notes: readonly NotePlace[]): void {
+    this.notes.push({ cellens, notes });
   }
 
   workspacePath(uri: string): string {
@@ -217,7 +308,8 @@ class FakeUi implements TypeUi {
     return Promise.resolve();
   }
 
-  showOutdatedEngine(): Promise<void> {
+  showOutdatedEngine(message?: string): Promise<void> {
+    this.outdatedMessages.push(message);
     this.outdatedShown += 1;
     return Promise.resolve();
   }
@@ -258,6 +350,17 @@ function setUp(): {
   return { engine, ui, logs, flow: new TypeFlow(engine.run, ui, log) };
 }
 
+/** The editor of a pasted example, faked: closing it is a step of `ui`. */
+function editorOf(ui: FakeUi, closed = new AbortController().signal): PastedEditor {
+  return {
+    closed,
+    close: () => {
+      ui.steps.push('close the example');
+      return Promise.resolve();
+    },
+  };
+}
+
 function labels(pick: ShownPick | undefined): string[] | undefined {
   return pick?.lines.map((line) => line.label);
 }
@@ -268,7 +371,7 @@ describe('giveType', () => {
 
     await flow.giveType(CONFIG);
 
-    expect(engine.calls).toEqual([{ command: 'cel-lens.typeChoices', argument: undefined }]);
+    expect(engine.calls).toEqual([{ command: 'cel-lens.typeChoices', argument: CONFIG }]);
     expect(ui.picks).toHaveLength(1);
     expect(ui.picks[0]).toMatchObject({
       title: 'Give params.spec.config a type',
@@ -278,6 +381,9 @@ describe('giveType', () => {
       SCHEMA_LINE,
       GO_LINE,
       SHORT_LINE,
+      'Examples in the workspace',
+      EXAMPLE_LINE,
+      PASTE_LINE,
       'Built-in kinds · Kubernetes 1.37',
       '$(symbol-class) Deployment',
       'Workspace CRDs',
@@ -287,6 +393,7 @@ describe('giveType', () => {
       SCHEMA_LINE,
       GO_LINE,
       SHORT_LINE,
+      PASTE_LINE,
     ]);
     expect(ui.picks[0]?.active).toBeUndefined();
   });
@@ -365,7 +472,10 @@ describe('giveType', () => {
     await flow.giveType({ ...CONFIG, cellens: 'file:///ws/policies/.cellens' });
 
     expect(engine.calls).toEqual([
-      { command: 'cel-lens.typeChoices', argument: undefined },
+      {
+        command: 'cel-lens.typeChoices',
+        argument: { ...CONFIG, cellens: 'file:///ws/policies/.cellens' },
+      },
       {
         command: 'cel-lens.setType',
         argument: {
@@ -451,13 +561,13 @@ describe('giveType', () => {
     expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
   });
 
-  it('offers the three first lines alone, and logs, when the kinds are not in the form the engine documents', async () => {
+  it('offers the first lines alone, and logs, when the kinds are not in the form the engine documents', async () => {
     const { flow, ui, engine, logs } = setUp();
     engine.answers.set('cel-lens.typeChoices', { kinds: [] });
 
     await flow.giveType(CONFIG);
 
-    expect(labels(ui.picks[0])).toEqual([SCHEMA_LINE, GO_LINE, SHORT_LINE]);
+    expect(labels(ui.picks[0])).toEqual([SCHEMA_LINE, GO_LINE, SHORT_LINE, PASTE_LINE]);
     expect(logs).toEqual([
       'cel-lens.typeChoices gave no kinds; the engine may not match this extension.',
     ]);
@@ -632,6 +742,33 @@ describe('the review of #8', () => {
     expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
   });
 
+  it("says the engine cannot work out a type from an example, without opening an editor, when it lists no examples (#9's review)", async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('cel-lens.typeChoices', { ...CHOICES, examples: undefined });
+    ui.next.push(PASTE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.picks[0]?.lines.find((line) => line.label === PASTE_LINE)).toMatchObject({
+      description: 'needs a newer engine',
+    });
+    expect(ui.outdatedMessages).toEqual([
+      'This cel-lens engine is too old to work out a type from an example: set cel-lens.serverPath to a newer cel-lens-core, then run cel-lens: Restart Engine.',
+    ]);
+    expect(ui.pasted).toEqual([]);
+  });
+
+  it("opens the editor of Paste an example… on an engine that lists examples but no Go types (#9's review)", async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('cel-lens.typeChoices', { ...CHOICES, goTypes: undefined });
+    ui.next.push(PASTE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.outdatedShown).toBe(0);
+    expect(ui.pasted).toHaveLength(1);
+  });
+
   it("says on Use a Go type… that it needs a newer engine, and says why when it is picked, with no Go types picker (#8's re-review)", async () => {
     const { flow, ui, engine } = setUp();
     engine.answers.set('cel-lens.typeChoices', { ...CHOICES, goTypes: undefined });
@@ -708,6 +845,67 @@ describe('the review of #8', () => {
   });
 });
 
+describe("saving .cellens after a write the person did not type (#9's review)", () => {
+  it.each([
+    ['a kind', CONFIG, '$(symbol-class) Deployment'],
+    ['int', SURGE, '$(symbol-numeric) int'],
+    ['a document of the workspace', CONFIG, EXAMPLE_LINE],
+  ])(
+    'saves .cellens once the engine wrote %s, when it had no unsaved edits',
+    async (_name, value, line) => {
+      const { flow, ui } = setUp();
+      ui.next.push(line);
+
+      await flow.giveType(value);
+
+      expect(ui.saved).toEqual([CELLENS]);
+    },
+  );
+
+  it('saves .cellens once the engine removed an entry', async () => {
+    const { flow, ui } = setUp();
+
+    await flow.removeType({ ...CONFIG, type: 'int' });
+
+    expect(ui.saved).toEqual([CELLENS]);
+  });
+
+  it.each([
+    [
+      'it had unsaved edits',
+      (ui: FakeUi) => ui.dirty.add(CELLENS),
+      { cellens: CELLENS, change: 'added' },
+    ],
+    [
+      'the engine wrote another .cellens',
+      () => undefined,
+      { cellens: 'file:///ws/policies/.cellens', change: 'added' },
+    ],
+    ['the engine deleted it', () => undefined, { cellens: CELLENS, change: 'deleted' }],
+  ])('leaves .cellens unsaved when %s', async (_name, before, answer) => {
+    const { flow, ui, engine } = setUp();
+    before(ui);
+    engine.answers.set('cel-lens.setType', answer);
+    engine.answers.set('cel-lens.removeType', answer);
+    ui.next.push('$(symbol-class) Deployment');
+
+    await flow.giveType(CONFIG);
+    await flow.removeType({ ...CONFIG, type: 'int' });
+
+    expect(ui.saved).toEqual([]);
+  });
+
+  it('leaves .cellens unsaved after a snippet, as the person types the type', async () => {
+    const { flow, ui } = setUp();
+    ui.next.push(SHORT_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.opened).toHaveLength(1);
+    expect(ui.saved).toEqual([]);
+  });
+});
+
 describe('writing in .cellens', () => {
   it('shows once why the engine did not write the entry, and opens nothing', async () => {
     const { flow, ui, engine } = setUp();
@@ -752,6 +950,233 @@ describe('writing in .cellens', () => {
       },
     ]);
     expect(logs).toEqual([`Could not open ${CELLENS}: Error: cannot open file:///ws/.cellens`]);
+  });
+});
+
+describe('a type from an example', () => {
+  it("asks the engine for the examples of the value's kind with the value, without the type it has", async () => {
+    const { flow, engine } = setUp();
+
+    await flow.editType({ ...CONFIG, kind: 'apps/v1 Deployment' });
+
+    expect(engine.calls).toEqual([{ command: 'cel-lens.typeChoices', argument: CONFIG }]);
+  });
+
+  it('works out a schema from the document of the workspace picked, at its line and the path of the value, and writes it as schema:', async () => {
+    const { flow, ui, engine } = setUp();
+    ui.next.push(EXAMPLE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(engine.calls.slice(1, 3)).toEqual([
+      {
+        command: 'cel-lens.inferType',
+        argument: {
+          text: 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\n',
+          line: 12,
+          path: 'spec.config',
+        },
+      },
+      { command: 'cel-lens.setType', argument: { ...CONFIG, schema: INFERRED.schema } },
+    ]);
+  });
+
+  it('then opens .cellens beside the rule at the new entry, where the engine puts the cursor on its type', async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('snippet', { cellens: CELLENS, change: 'unchanged', selection: AT_SCHEMA });
+    ui.next.push(EXAMPLE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(engine.calls.at(-1)).toEqual({
+      command: 'cel-lens.setType',
+      argument: { ...CONFIG, snippet: 'schema' },
+    });
+    expect(ui.opened).toEqual([{ cellens: CELLENS, selection: AT_SCHEMA }]);
+  });
+
+  it('shows the notes on what the example left open once, at the key of .cellens each is about', async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('snippet', { cellens: CELLENS, change: 'unchanged', selection: AT_SCHEMA });
+    ui.next.push(EXAMPLE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.notes).toEqual([
+      {
+        cellens: CELLENS,
+        notes: [
+          {
+            line: 7,
+            start: 8,
+            end: 13,
+            blockEnd: 10,
+            message: 'teams: an empty list says nothing about its items',
+          },
+        ],
+      },
+    ]);
+    expect(ui.errors).toEqual([]);
+  });
+
+  it('shows no notes when the example leaves nothing open', async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('cel-lens.inferType', { ...INFERRED, notes: [] });
+    ui.next.push(EXAMPLE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.opened).toHaveLength(1);
+    expect(ui.notes).toEqual([]);
+  });
+
+  it.each([
+    ['works out no schema', 'cel-lens.inferType'],
+    ['does not write it', 'cel-lens.setType'],
+  ])('shows once why the engine %s, and opens nothing', async (_name, command) => {
+    const { flow, ui, engine } = setUp();
+    engine.failures.set(command, responseError(-32602, `${command}: no example in the text`));
+    ui.next.push(EXAMPLE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.errors).toEqual([
+      {
+        message: 'cel-lens could not give params.spec.config a type: no example in the text.',
+        offerLogs: false,
+      },
+    ]);
+    expect(ui.opened).toEqual([]);
+  });
+
+  it('shows once that the example could not be read, and logs why', async () => {
+    const { flow, ui, engine, logs } = setUp();
+    ui.texts.delete(SAMPLES);
+    ui.next.push(EXAMPLE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.errors).toEqual([
+      {
+        message:
+          'cel-lens could not read the example for params.spec.config. Show the logs for the reason.',
+        offerLogs: true,
+      },
+    ]);
+    expect(logs).toEqual([`Could not read ${SAMPLES}: Error: cannot read ${SAMPLES}`]);
+    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
+  });
+
+  it('opens an editor for a pasted example of the value, and writes nothing until it is used', async () => {
+    const { flow, ui, engine } = setUp();
+    ui.next.push(PASTE_LINE);
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.pasted.map(({ value, inside }) => ({ value, inside }))).toEqual([
+      { value: 'params.spec.config', inside: true },
+    ]);
+    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
+  });
+
+  it('works out the schema from the pasted text as it is, writes it, closes the editor, then opens .cellens beside the rule', async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('snippet', { cellens: CELLENS, change: 'unchanged', selection: AT_SCHEMA });
+    ui.next.push(PASTE_LINE);
+    await flow.giveType(CONFIG);
+
+    await ui.pasted[0]?.use('teams: []\n', editorOf(ui));
+
+    expect(engine.calls.slice(1).map((call) => call.argument)).toEqual([
+      { text: 'teams: []\n' },
+      { ...CONFIG, schema: INFERRED.schema },
+      { ...CONFIG, snippet: 'schema' },
+    ]);
+    expect(ui.steps).toEqual(['close the example', `open ${CELLENS}`]);
+    expect(ui.notes).toHaveLength(1);
+  });
+
+  it('keeps the editor of a pasted example open, and says once why, when the engine cannot read it', async () => {
+    const { flow, ui, engine } = setUp();
+    engine.failures.set(
+      'cel-lens.inferType',
+      responseError(-32602, 'cel-lens.inferType: yaml: line 3: did not find expected key'),
+    );
+    ui.next.push(PASTE_LINE);
+    await flow.giveType(CONFIG);
+
+    await ui.pasted[0]?.use('a: [', editorOf(ui));
+
+    expect(ui.steps).toEqual([]);
+    expect(ui.errors).toEqual([
+      {
+        message:
+          'cel-lens could not give params.spec.config a type: yaml: line 3: did not find expected key.',
+        offerLogs: false,
+      },
+    ]);
+  });
+
+  it("writes nothing when the editor of a pasted example is closed while the engine works out its schema (#9's review)", async () => {
+    const { flow, ui, engine } = setUp();
+    ui.next.push(PASTE_LINE);
+    await flow.giveType(CONFIG);
+    const closed = new AbortController();
+    closed.abort();
+
+    await ui.pasted[0]?.use('teams: []\n', editorOf(ui, closed.signal));
+
+    expect(engine.calls.map((call) => call.command)).toEqual([
+      'cel-lens.typeChoices',
+      'cel-lens.inferType',
+    ]);
+    expect(ui.steps).toEqual([]);
+  });
+
+  it.each([
+    ['YAML', 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\nspec:\n  config: {}\n'],
+    ['JSON, after the comment', '# An example\n{"apiVersion": "v1", "kind": "X", "spec": {}}'],
+  ])(
+    "sends the value's path with a whole resource pasted as %s, so the schema is the value's (#9's review)",
+    async (_name, text) => {
+      const { flow, ui, engine } = setUp();
+      ui.next.push(PASTE_LINE);
+      await flow.giveType(CONFIG);
+
+      await ui.pasted[0]?.use(text, editorOf(ui));
+
+      expect(engine.calls[1]).toEqual({
+        command: 'cel-lens.inferType',
+        argument: { text, path: 'spec.config' },
+      });
+    },
+  );
+
+  it("lists the examples by their path in the workspace, so two folders' files differ (#9's review)", async () => {
+    const { flow, ui, engine } = setUp();
+    const example = { file: 'config/limit.yaml', line: 1, apiVersion: 'v1', kind: 'ConfigMap' };
+    engine.answers.set('cel-lens.typeChoices', {
+      ...CHOICES,
+      examples: [
+        { ...example, uri: 'file:///ws/a/config/limit.yaml' },
+        { ...example, uri: 'file:///ws/b/config/limit.yaml' },
+      ],
+    });
+
+    await flow.giveType(CONFIG);
+
+    expect(labels(ui.picks[0])?.filter((label) => label.startsWith('$(file)'))).toEqual([
+      '$(file) a/config/limit.yaml',
+      '$(file) b/config/limit.yaml',
+    ]);
+  });
+
+  it('offers no example and no paste for a value of a CRD', async () => {
+    const { flow, ui } = setUp();
+
+    await flow.giveType(SURGE);
+
+    expect(labels(ui.picks[0])).not.toContain(PASTE_LINE);
   });
 });
 
@@ -922,7 +1347,7 @@ describe('a failure shown once', () => {
     expect(cancelled.ui.errors).toEqual([]);
   });
 
-  it('shows the failure of the list of kinds once, and keeps the three first lines in the picker', async () => {
+  it('shows the failure of the list of kinds once, and keeps the first lines in the picker', async () => {
     const { flow, ui, engine } = setUp();
     engine.failures.set('cel-lens.typeChoices', new Error('the cel-lens engine is not running'));
     ui.next.push(GO_LINE);
@@ -930,7 +1355,7 @@ describe('a failure shown once', () => {
     await flow.giveType(CONFIG);
 
     expect(ui.picks.map(labels)).toEqual([
-      [SCHEMA_LINE, GO_LINE, SHORT_LINE],
+      [SCHEMA_LINE, GO_LINE, SHORT_LINE, PASTE_LINE],
       ['$(warning) The Go types could not be listed'],
     ]);
     expect(ui.errors).toEqual([

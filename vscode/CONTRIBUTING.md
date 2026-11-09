@@ -137,6 +137,16 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
   (`CelLensClient.registerFeature`) and the extension sends the requests itself. The
   flow is in `src/type_flow.ts` and `src/value_types.ts`, which do not import
   `vscode`, and `src/type_commands.ts` shows it.
+- **Types from examples:** `cel-lens.typeChoices` gets the value's argument, so it
+  also lists the documents of the workspace of its kind. A document picked, or the
+  text of an untitled editor `Paste an example…` opens, goes to
+  `cel-lens.inferType`; its schema is set with `cel-lens.setType`, and a second
+  `setType` with a `snippet`, which the engine answers `unchanged`, gives the place of
+  the entry to open. The engine's notes are placed at their keys of `.cellens` by
+  `src/example_schema.ts` (no `vscode`) and shown as information diagnostics by
+  `ExampleNotes` in `src/example_editor.ts`, where `ExampleEditors` keeps the pasted
+  examples' editors, their code lens and the context key
+  `cel-lens.exampleDocuments` that the `when` clauses of `cel-lens.useExample` read.
 
 ### Kubernetes version
 

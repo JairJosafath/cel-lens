@@ -5,6 +5,7 @@ import {
   OUTDATED_ENGINE_MESSAGE,
   INT_OR_STRING_LINES,
   NO_GO_TYPES_LINE,
+  PASTE_EXAMPLE_LINE,
   WRITE_SCHEMA_LINE,
   WRITE_SHORT_TYPE_LINE,
   editTypeTitle,
@@ -30,6 +31,7 @@ import {
   valueLines,
   withGo,
   withKind,
+  withSchema,
   withSnippet,
   withType,
   writeLine,
@@ -91,6 +93,22 @@ const CHOICES: TypeChoices = {
     { folder: 'file:///ws/api/v1', name: 'QuotaSpec', doc: 'QuotaSpec is the quota of a team.' },
     { folder: 'file:///ws/internal/limits', name: 'Limit', doc: '' },
   ],
+  examples: [
+    {
+      uri: 'file:///ws/config/samples/limit.yaml',
+      file: 'config/samples/limit.yaml',
+      line: 1,
+      apiVersion: 'rules.example.com/v1',
+      kind: 'ReplicaLimit',
+    },
+    {
+      uri: 'file:///ws/config/samples/limit.yaml',
+      file: 'config/samples/limit.yaml',
+      line: 12,
+      apiVersion: 'rules.example.com/v1',
+      kind: 'ReplicaLimit',
+    },
+  ],
 };
 
 describe('parseTypeTarget', () => {
@@ -101,6 +119,7 @@ describe('parseTypeTarget', () => {
       value: 'self.spec.maxSurge',
       document: 'CustomResourceDefinition widgets.example.com',
       version: 'v1',
+      path: 'spec.maxSurge',
     });
   });
 
@@ -173,6 +192,10 @@ describe('the arguments of setType', () => {
     const typed = target({ ...CRD_VALUE, ...entry });
 
     expect(withGo(typed, './api/v1#QuotaSpec')).toEqual({ ...CRD_VALUE, go: './api/v1#QuotaSpec' });
+    expect(withSchema(typed, { type: 'integer' })).toEqual({
+      ...CRD_VALUE,
+      schema: { type: 'integer' },
+    });
     expect(withSnippet(typed, 'schema')).toEqual({ ...CRD_VALUE, snippet: 'schema' });
     expect(withSnippet(typed, 'type')).toEqual({ ...CRD_VALUE, snippet: 'type' });
   });
@@ -233,11 +256,40 @@ describe('parseTypeChoices', () => {
         { folder: 'file:///repo/api/v1', name: 'Limit', doc: '' },
       ],
       goTypesNote: 'the workspace has more than 1000 types: the first 1000 are listed',
+      examples: [],
+      cannotInfer: true,
     });
   });
 
-  it('reads no Go types from an engine that lists none', () => {
-    expect(parseTypeChoices({ builtIn: [], crds: [] })?.goTypes).toEqual([]);
+  it("reads an answer with no examples key as an engine that cannot work out a type from an example, and [] as none (#9's review)", () => {
+    expect(parseTypeChoices({ builtIn: [], goTypes: [] })?.cannotInfer).toBe(true);
+    expect(
+      parseTypeChoices({ builtIn: [], goTypes: [], examples: [] })?.cannotInfer,
+    ).toBeUndefined();
+  });
+
+  it('reads no Go types and no examples from an engine that lists none', () => {
+    expect(parseTypeChoices({ builtIn: [], crds: [] })).toMatchObject({
+      goTypes: [],
+      examples: [],
+    });
+  });
+
+  it("reads the examples of the value's kind, leaving out those it cannot use", () => {
+    const example = {
+      uri: 'file:///repo/config/samples/limit.yaml',
+      file: 'config/samples/limit.yaml',
+      line: 1,
+      apiVersion: 'rules.example.com/v1',
+      kind: 'ReplicaLimit',
+    };
+
+    expect(
+      parseTypeChoices({
+        builtIn: [],
+        examples: [example, { ...example, line: 0 }, { ...example, uri: '' }, 'limit.yaml'],
+      })?.examples,
+    ).toEqual([example]);
   });
 
   it.each([null, [], { crds: [] }, { builtIn: 'Deployment' }])(
@@ -249,11 +301,25 @@ describe('parseTypeChoices', () => {
 });
 
 describe('typeLines', () => {
-  it('offers a schema, a Go type and a short type, in that order, then the built-in kinds, then the CRDs, each group under a separator', () => {
+  it('offers a schema, a Go type and a short type, in that order, then the examples in the workspace and Paste an example…, then the built-in kinds, then the CRDs, each group under a separator', () => {
     expect(typeLines(CHOICES)).toEqual([
       WRITE_SCHEMA_LINE,
       goTypeLine(2),
       WRITE_SHORT_TYPE_LINE,
+      { separator: true, label: 'Examples in the workspace' },
+      {
+        label: '$(file) config/samples/limit.yaml',
+        description: 'rules.example.com/v1 ReplicaLimit',
+        detail: 'Document at line 1',
+        value: { action: 'example', uri: 'file:///ws/config/samples/limit.yaml', line: 1 },
+      },
+      {
+        label: '$(file) config/samples/limit.yaml',
+        description: 'rules.example.com/v1 ReplicaLimit',
+        detail: 'Document at line 12',
+        value: { action: 'example', uri: 'file:///ws/config/samples/limit.yaml', line: 12 },
+      },
+      PASTE_EXAMPLE_LINE,
       { separator: true, label: 'Built-in kinds · Kubernetes 1.37' },
       {
         label: '$(symbol-class) Deployment',
@@ -283,15 +349,19 @@ describe('typeLines', () => {
       '$(symbol-struct) Use a Go type…',
       '$(edit) Write a short type in .cellens…',
     ]);
+    expect(PASTE_EXAMPLE_LINE).toMatchObject({
+      label: '$(clippy) Paste an example…',
+      value: { action: 'paste' },
+    });
   });
 
-  it('starts with the same three lines while the engine lists the kinds', () => {
-    expect(firstLines().map((line) => line.label)).toEqual(
-      typeLines(CHOICES)
-        .slice(0, 3)
-        .map((line) => line.label),
-    );
-    expect(firstLines()[1]).toEqual(goTypeLine());
+  it('starts with the same three lines and Paste an example… while the engine lists the kinds', () => {
+    expect(firstLines()).toEqual([
+      WRITE_SCHEMA_LINE,
+      goTypeLine(),
+      WRITE_SHORT_TYPE_LINE,
+      PASTE_EXAMPLE_LINE,
+    ]);
   });
 
   it("says on the lines that write in .cellens that they open the entry of a value that has one, there and while it loads (#8's review)", () => {
@@ -308,6 +378,20 @@ describe('typeLines', () => {
       'Such as {name: string, replicas: int}; opens .cellens beside the rule at the entry it has, to write a short type there',
     );
     expect(writeLine('schema')).toEqual(WRITE_SCHEMA_LINE);
+  });
+
+  it('has no group of examples when the workspace has none, and still offers Paste an example…', () => {
+    expect(
+      typeLines({ ...CHOICES, examples: [] })
+        .slice(0, 5)
+        .map((line) => line.label),
+    ).toEqual([
+      '$(edit) Write a schema in .cellens…',
+      '$(symbol-struct) Use a Go type…',
+      '$(edit) Write a short type in .cellens…',
+      '$(clippy) Paste an example…',
+      'Built-in kinds · Kubernetes 1.37',
+    ]);
   });
 
   it.each([
@@ -339,8 +423,8 @@ describe('typeLines', () => {
 
   it('has no CRD group when the workspace defines none, and no version in the separator when none is known', () => {
     expect(
-      typeLines({ ...CHOICES, kubernetesVersion: '', crds: [] })
-        .slice(3)
+      typeLines({ ...CHOICES, kubernetesVersion: '', crds: [], examples: [] })
+        .slice(4)
         .map((l) => l.label),
     ).toEqual([
       'Built-in kinds',
@@ -349,12 +433,10 @@ describe('typeLines', () => {
     ]);
   });
 
-  it('is only the three ways to write or use a type with no kind at all', () => {
-    expect(typeLines({ kubernetesVersion: '1.37', builtIn: [], crds: [], goTypes: [] })).toEqual([
-      WRITE_SCHEMA_LINE,
-      goTypeLine(0),
-      WRITE_SHORT_TYPE_LINE,
-    ]);
+  it('is only the ways to write or use a type with no kind and no example at all', () => {
+    expect(
+      typeLines({ kubernetesVersion: '1.37', builtIn: [], crds: [], goTypes: [], examples: [] }),
+    ).toEqual([WRITE_SCHEMA_LINE, goTypeLine(0), WRITE_SHORT_TYPE_LINE, PASTE_EXAMPLE_LINE]);
   });
 });
 

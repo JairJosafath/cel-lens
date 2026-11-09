@@ -92,6 +92,12 @@
         "command": "cel-lens.removeType",
         "title": "Remove the Value's Type",
         "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.useExample",
+        "title": "Use This Example as the Type",
+        "category": "cel-lens",
+        "icon": "$(check)"
       }
     ],
     "configuration": {
@@ -224,6 +230,17 @@
         {
           "command": "cel-lens.removeType",
           "when": "false"
+        },
+        {
+          "command": "cel-lens.useExample",
+          "when": "editorLangId == yaml && resource in cel-lens.exampleDocuments"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "cel-lens.useExample",
+          "when": "editorLangId == yaml && resource in cel-lens.exampleDocuments",
+          "group": "navigation"
         }
       ]
     }

@@ -5,24 +5,33 @@ import {
   Range,
   ViewColumn,
   Uri,
+  Diagnostic,
   PRESS_BACK,
   activeEditor,
   addWorkspaceFolder,
+  closeDocument,
   commandFailure,
   commandResults,
+  diagnosticCollections,
   errorChoice,
   executedCommands,
+  fileTexts,
   quickPicks,
   reset,
+  runCommand,
   settings,
   settle,
   showFailure,
   shownDocuments,
   shownErrors,
   shownInfos,
+  savedDocuments,
+  untitledDocuments,
   visibleEditors,
   window,
+  workspace,
 } from '../test/vscode';
+import { ExampleEditors, ExampleNotes } from './example_editor';
 import { OPEN_YAML_MESSAGE, giveValueType, typeUi } from './type_commands';
 import { INLINE_INFO_OFF_MESSAGE, NO_VALUES_MESSAGE, TypeFlow } from './type_flow';
 import { GO_TYPE_PLACEHOLDER } from './value_types';
@@ -75,6 +84,7 @@ const CHOICES = {
     },
     { folder: 'file:///workspace/repo/internal/limits', name: 'Limit', doc: '' },
   ],
+  examples: [],
 };
 
 /** Where the engine puts the cursor in `.cellens`: between the braces of `type: "{}"`. */
@@ -83,6 +93,38 @@ const SELECTION = { start: { line: 9, character: 11 }, end: { line: 9, character
 const SCHEMA_LINE = '$(edit) Write a schema in .cellens…';
 const GO_LINE = '$(symbol-struct) Use a Go type…';
 const SHORT_LINE = '$(edit) Write a short type in .cellens…';
+const PASTE_LINE = '$(clippy) Paste an example…';
+
+const SAMPLES = 'file:///workspace/repo/config/samples/limit.yaml';
+const SAMPLE =
+  'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\nspec:\n  config:\n    teams: []\n';
+
+/** The schema the engine works out from an example, and what it leaves open. */
+const INFERRED = {
+  schema: {
+    type: 'object',
+    properties: {
+      teams: { type: 'array', items: { 'x-kubernetes-preserve-unknown-fields': true } },
+    },
+  },
+  notes: ['teams: an empty list says nothing about its items'],
+};
+
+/** `.cellens` once the engine wrote the schema, the cursor on line 9 (`SELECTION`) below its `schema:`. */
+const WRITTEN = [
+  'types:',
+  '  - file: policies/limits.yaml',
+  '    document: ValidatingAdmissionPolicy limits',
+  '    variable: params',
+  '    path: spec.config',
+  '    schema:',
+  '      properties:',
+  '        teams:',
+  '          items:',
+  '            x-kubernetes-preserve-unknown-fields: true',
+  '          type: array',
+  '      type: object',
+].join('\n');
 
 type Run = (command: string, argument?: unknown, signal?: AbortSignal) => Promise<unknown>;
 
@@ -101,6 +143,9 @@ function fakeEngine(): {
   const answer = (command: string, argument: unknown): unknown => {
     if (command === 'cel-lens.typeChoices') {
       return CHOICES;
+    }
+    if (command === 'cel-lens.inferType') {
+      return INFERRED;
     }
     const snippet = typeof argument === 'object' && argument !== null && 'snippet' in argument;
     return snippet
@@ -130,6 +175,11 @@ function fakeEngine(): {
   };
 }
 
+/** The UI of the flow, with the editors of pasted examples and the notes on them. */
+function uiOf(log: ReturnType<typeof window.createOutputChannel>): ReturnType<typeof typeUi> {
+  return typeUi(log, new ExampleEditors(log), new ExampleNotes());
+}
+
 function setUp(): {
   engine: ReturnType<typeof fakeEngine>;
   log: ReturnType<typeof window.createOutputChannel>;
@@ -138,7 +188,7 @@ function setUp(): {
 } {
   const engine = fakeEngine();
   const log = window.createOutputChannel('cel-lens');
-  const ui = typeUi(log);
+  const ui = uiOf(log);
   return { engine, log, ui, flow: new TypeFlow(engine.run, ui, log) };
 }
 
@@ -166,7 +216,7 @@ describe('Give it a type, against the VS Code stand-in', () => {
         busy: true,
         buttons: [],
         value: '',
-        labels: [SCHEMA_LINE, GO_LINE, SHORT_LINE],
+        labels: [SCHEMA_LINE, GO_LINE, SHORT_LINE, PASTE_LINE],
       },
     ]);
     expect(quickPicks.shown[0]).toEqual([
@@ -188,6 +238,11 @@ describe('Give it a type, against the VS Code stand-in', () => {
         description: 'CEL',
         detail: 'Such as {name: string, replicas: int}; opens .cellens beside the rule',
         value: { action: 'write', form: 'type' },
+      },
+      {
+        label: PASTE_LINE,
+        detail: 'YAML or JSON, in an editor beside the rule; a schema is worked out from it',
+        value: { action: 'paste' },
       },
       { label: 'Built-in kinds · Kubernetes 1.37', kind: -1 },
       {
@@ -221,14 +276,14 @@ describe('Give it a type, against the VS Code stand-in', () => {
     await settle();
 
     expect(quickPicks.created).toMatchObject([
-      { busy: true, labels: [SCHEMA_LINE, GO_LINE, SHORT_LINE] },
+      { busy: true, labels: [SCHEMA_LINE, GO_LINE, SHORT_LINE, PASTE_LINE] },
     ]);
     expect(quickPicks.shown).toEqual([]);
 
     listed(CHOICES);
     await giving;
 
-    expect(quickPicks.shown[0]).toHaveLength(8);
+    expect(quickPicks.shown[0]).toHaveLength(9);
     expect(engine.calls.at(-1)).toEqual({
       command: 'cel-lens.setType',
       argument: { ...CONFIG, kind: 'apps/v1 Deployment' },
@@ -350,6 +405,113 @@ describe('Give it a type, against the VS Code stand-in', () => {
     expect(shownDocuments).toEqual([]);
   });
 
+  it('gives a value the type of a document of the workspace: reads its file, and opens .cellens beside the rule with the notes at their keys, as information', async () => {
+    const { flow, engine } = setUp();
+    addWorkspaceFolder('repo');
+    fileTexts.set(SAMPLES, SAMPLE);
+    fileTexts.set(CELLENS, WRITTEN);
+    const listed = engine.hold('cel-lens.typeChoices');
+    quickPicks.next = '$(file) config/samples/limit.yaml';
+
+    const giving = flow.giveType(CONFIG);
+    await settle();
+    listed({
+      ...CHOICES,
+      examples: [
+        {
+          uri: SAMPLES,
+          file: 'config/samples/limit.yaml',
+          line: 1,
+          apiVersion: 'rules.example.com/v1',
+          kind: 'ReplicaLimit',
+        },
+      ],
+    });
+    await giving;
+
+    expect(engine.calls.slice(1)).toEqual([
+      { command: 'cel-lens.inferType', argument: { text: SAMPLE, line: 1, path: 'spec.config' } },
+      { command: 'cel-lens.setType', argument: { ...CONFIG, schema: INFERRED.schema } },
+      { command: 'cel-lens.setType', argument: { ...CONFIG, snippet: 'schema' } },
+    ]);
+    expect(shownDocuments).toEqual([
+      {
+        uri: CELLENS,
+        selection: new Range(9, 11, 9, 11),
+        viewColumn: ViewColumn.Beside,
+        preserveFocus: false,
+        preview: false,
+      },
+    ]);
+    const note = new Diagnostic(
+      new Range(7, 8, 7, 13),
+      'teams: an empty list says nothing about its items',
+      2,
+    );
+    note.source = 'cel-lens example';
+    expect(diagnosticCollections[0]?.entries.get(CELLENS)).toEqual([note]);
+    expect(shownErrors).toEqual([]);
+  });
+
+  it('pastes an example: opens it beside the rule, and Use this example as the type writes its schema, closes it without asking, then opens .cellens beside the rule', async () => {
+    const { flow, engine } = setUp();
+    fileTexts.set(CELLENS, WRITTEN);
+    quickPicks.next = PASTE_LINE;
+
+    await flow.giveType(CONFIG);
+    expect(shownDocuments).toMatchObject([
+      { uri: 'untitled:Untitled-1', viewColumn: ViewColumn.Beside },
+    ]);
+    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
+
+    const [document] = untitledDocuments;
+    if (document !== undefined) {
+      document.text += 'teams: []\n';
+    }
+    await runCommand('cel-lens.useExample', 'untitled:Untitled-1');
+
+    expect(engine.calls.slice(1).map((call) => call.argument)).toEqual([
+      { text: document?.text },
+      { ...CONFIG, schema: INFERRED.schema },
+      { ...CONFIG, snippet: 'schema' },
+    ]);
+    expect(executedCommands.map((each) => each.command)).toContain(
+      'workbench.action.revertAndCloseActiveEditor',
+    );
+    expect(shownDocuments.map((shown) => shown.uri)).toEqual([
+      'untitled:Untitled-1',
+      'untitled:Untitled-1',
+      CELLENS,
+    ]);
+    expect(diagnosticCollections[0]?.entries.get(CELLENS)).toHaveLength(1);
+  });
+
+  it("saves .cellens once the engine wrote a kind, when it had no unsaved edits, and leaves it unsaved when it had (#9's review)", async () => {
+    const { flow } = setUp();
+    fileTexts.set(CELLENS, WRITTEN);
+    const cellens = await workspace.openTextDocument(Uri.parse(CELLENS));
+    quickPicks.next = '$(symbol-class) Deployment';
+
+    await flow.giveType(CONFIG);
+    expect(savedDocuments).toEqual([CELLENS]);
+
+    cellens.isDirty = true;
+    await flow.giveType(CONFIG);
+    expect(savedDocuments).toEqual([CELLENS]);
+  });
+
+  it('writes nothing when the editor of a pasted example is closed', async () => {
+    const { flow, engine } = setUp();
+    quickPicks.next = PASTE_LINE;
+    await flow.giveType(CONFIG);
+
+    closeDocument({ uri: Uri.parse('untitled:Untitled-1') });
+    await runCommand('cel-lens.useExample', 'untitled:Untitled-1');
+
+    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
+    expect(shownDocuments).toHaveLength(1);
+  });
+
   it("goes back from the Go types to the first picker with the Back button (#8's review)", async () => {
     const { flow, engine } = setUp();
     quickPicks.queue.push(GO_LINE, PRESS_BACK, '$(symbol-class) Deployment');
@@ -375,7 +537,7 @@ describe('Give it a type, against the VS Code stand-in', () => {
     addWorkspaceFolder('operator');
     quickPicks.queue.push(GO_LINE, '$(symbol-struct) QuotaSpec');
 
-    const giving = new TypeFlow(engine.run, typeUi(log), log).giveType({
+    const giving = new TypeFlow(engine.run, uiOf(log), log).giveType({
       ...CONFIG,
       cellens: 'file:///workspace/charts/.cellens',
     });
@@ -413,7 +575,7 @@ describe('Give it a type, against the VS Code stand-in', () => {
     errorChoice.next = 'Open Engine Setting';
     quickPicks.next = SCHEMA_LINE;
 
-    await new TypeFlow(run, typeUi(log), log).giveType(CONFIG);
+    await new TypeFlow(run, uiOf(log), log).giveType(CONFIG);
 
     expect(shownErrors).toEqual([
       {
@@ -452,7 +614,7 @@ describe('typeUi', () => {
     const log = window.createOutputChannel('cel-lens');
     errorChoice.next = 'Show Logs';
 
-    await typeUi(log).showError('cel-lens could not remove the type.', true);
+    await uiOf(log).showError('cel-lens could not remove the type.', true);
 
     expect(shownErrors).toEqual([
       { message: 'cel-lens could not remove the type.', buttons: ['Show Logs'] },
@@ -461,13 +623,13 @@ describe('typeUi', () => {
   });
 
   it('shows the reason a refusal gives with no button', async () => {
-    await typeUi(window.createOutputChannel('cel-lens')).showError('Run it again.', false);
+    await uiOf(window.createOutputChannel('cel-lens')).showError('Run it again.', false);
 
     expect(shownErrors).toEqual([{ message: 'Run it again.', buttons: [] }]);
   });
 
   it('opens the cel-lens.experimental setting', async () => {
-    await typeUi(window.createOutputChannel('cel-lens')).openExperimentalSetting();
+    await uiOf(window.createOutputChannel('cel-lens')).openExperimentalSetting();
 
     expect(executedCommands).toEqual([
       { command: 'workbench.action.openSettings', args: ['cel-lens.experimental'] },
@@ -490,7 +652,7 @@ describe('typeUi', () => {
         addWorkspaceFolder(folder);
       }
 
-      expect(typeUi(window.createOutputChannel('cel-lens')).workspacePath(uri)).toBe(expected);
+      expect(uiOf(window.createOutputChannel('cel-lens')).workspacePath(uri)).toBe(expected);
     },
   );
 });

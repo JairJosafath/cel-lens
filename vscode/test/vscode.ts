@@ -26,6 +26,9 @@ const registry = new Map<string, (...args: unknown[]) => unknown>();
 /** The commands run with commands.executeCommand, oldest first. */
 export const executedCommands: { command: string; args: unknown[] }[] = [];
 
+/** The context keys set with the `setContext` command, which lives in the window, by name. */
+export const contextKeys = new Map<string, unknown>();
+
 /** The error the next calls to commands.executeCommand reject with, after recording the call, if any. */
 export const commandFailure: { error: Error | undefined } = { error: undefined };
 
@@ -45,6 +48,10 @@ export const commands = {
     return Promise.resolve([...registry.keys()]);
   },
   executeCommand<T>(command: string, ...args: unknown[]): Thenable<T> {
+    if (command === 'setContext') {
+      contextKeys.set(String(args[0]), args[1]);
+      return Promise.resolve(undefined as T);
+    }
     executedCommands.push({ command, args });
     if (commandFailure.error !== undefined) {
       return Promise.reject(commandFailure.error);
@@ -426,6 +433,9 @@ type LooseWindowMember =
   | 'activeColorTheme'
   | 'onDidChangeActiveColorTheme';
 
+/** The workspace members whose real types are overloaded or too large to rebuild. */
+type LooseWorkspaceMember = 'openTextDocument' | 'textDocuments';
+
 export const ColorThemeKind = { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 } as const;
 
 /** A range of the document; the tests compare these fields. */
@@ -478,10 +488,17 @@ export const theme = { kind: ColorThemeKind.Dark as number };
 const visibleListeners = new Set<() => void>();
 const themeListeners = new Set<() => void>();
 
+/** The part of a TextDocumentContentChangeEvent the tests fire: the lines replaced and the text. */
+interface ContentChange {
+  range: { start: { line: number }; end: { line: number } };
+  text: string;
+}
+
 /** The part of a TextDocumentChangeEvent the tests fire, typed from the real API. */
 interface DocumentChange {
   document: Pick<vscode.TextDocument, 'languageId' | 'getText'> &
     Partial<Pick<vscode.TextDocument, 'uri'>>;
+  contentChanges?: readonly ContentChange[];
 }
 
 /**
@@ -527,10 +544,61 @@ export function changeTheme(kind: number): void {
   }
 }
 
-/** Tells the listeners of onDidChangeTextDocument that a document changed. */
-export function changeDocument(document: DocumentChange['document']): void {
+/** Tells the listeners of onDidChangeTextDocument that a document changed, with these changes if given. */
+export function changeDocument(
+  document: DocumentChange['document'],
+  contentChanges?: readonly ContentChange[],
+): void {
   for (const listener of documentListeners) {
-    listener({ document });
+    listener({ document, ...(contentChanges !== undefined && { contentChanges }) });
+  }
+}
+
+/** The URIs of the documents saved with save(), oldest first. */
+export const savedDocuments: string[] = [];
+
+/**
+ * A document workspace.openTextDocument opens: its text changes as a test types or pastes, and
+ * a test says whether it has edits not saved.
+ */
+export class FakeTextDocument {
+  isDirty = false;
+
+  constructor(
+    readonly uri: vscode.Uri,
+    readonly languageId: string,
+    public text: string,
+  ) {}
+
+  getText(): string {
+    return this.text;
+  }
+
+  save(): Promise<boolean> {
+    savedDocuments.push(this.uri.toString());
+    this.isDirty = false;
+    return Promise.resolve(true);
+  }
+}
+
+/** The documents workspace.textDocuments lists: each one workspace.openTextDocument opened. */
+export const openDocuments: FakeTextDocument[] = [];
+
+/** The text of the files workspace.openTextDocument opens, by URI; it fails on another file. */
+export const fileTexts = new Map<string, string>();
+
+/** Every untitled document workspace.openTextDocument made, oldest first. */
+export const untitledDocuments: FakeTextDocument[] = [];
+
+/** The part of a TextDocument the listeners of onDidCloseTextDocument get. */
+type ClosedDocument = Pick<vscode.TextDocument, 'uri'>;
+
+const closeListeners = new Set<(document: ClosedDocument) => void>();
+
+/** Tells the listeners of onDidCloseTextDocument that a document closed, as closing its editor does. */
+export function closeDocument(document: ClosedDocument): void {
+  for (const listener of closeListeners) {
+    listener(document);
   }
 }
 
@@ -589,12 +657,15 @@ export const window = {
     quickPicks.options.push(options);
     return Promise.resolve(items.find((item) => item.label === quickPicks.next));
   },
-  showTextDocument(uri: vscode.Uri, options?: vscode.TextDocumentShowOptions): Promise<object> {
+  showTextDocument(
+    target: vscode.Uri | { uri: vscode.Uri },
+    options?: vscode.TextDocumentShowOptions,
+  ): Promise<object> {
     if (showFailure.error !== undefined) {
       return Promise.reject(showFailure.error);
     }
     shownDocuments.push({
-      uri: uri.toString(),
+      uri: ('uri' in target ? target.uri : target).toString(),
       selection: options?.selection,
       ...(options?.viewColumn !== undefined && { viewColumn: options.viewColumn }),
       ...(options?.preserveFocus !== undefined && { preserveFocus: options.preserveFocus }),
@@ -754,6 +825,39 @@ export const settingUpdates: { name: string; value: unknown; target: number; fol
   [];
 
 export const workspace = {
+  /** A file's text from `fileTexts`, or a new untitled document with the content given. */
+  openTextDocument(
+    target: vscode.Uri | { language?: string; content?: string },
+  ): Promise<FakeTextDocument> {
+    if (!('scheme' in target)) {
+      const document = new FakeTextDocument(
+        Uri.parse(`untitled:Untitled-${String(untitledDocuments.length + 1)}`),
+        target.language ?? 'plaintext',
+        target.content ?? '',
+      );
+      untitledDocuments.push(document);
+      openDocuments.push(document);
+      return Promise.resolve(document);
+    }
+    const open = openDocuments.find((document) => document.uri.toString() === target.toString());
+    if (open !== undefined) {
+      return Promise.resolve(open);
+    }
+    const text = fileTexts.get(target.toString());
+    if (text === undefined) {
+      return Promise.reject(new Error(`cannot open ${target.toString()}`));
+    }
+    const document = new FakeTextDocument(target, 'yaml', text);
+    openDocuments.push(document);
+    return Promise.resolve(document);
+  },
+  get textDocuments(): readonly FakeTextDocument[] {
+    return openDocuments;
+  },
+  onDidCloseTextDocument(listener: (document: ClosedDocument) => void): Disposable {
+    closeListeners.add(listener);
+    return new Disposable(() => closeListeners.delete(listener));
+  },
   onDidChangeTextDocument(listener: (event: DocumentChange) => void): Disposable {
     documentListeners.add(listener);
     return new Disposable(() => documentListeners.delete(listener));
@@ -800,14 +904,28 @@ export const workspace = {
     return new Disposable(() => configListeners.delete(listener));
   },
 } satisfies Partial<
-  Omit<typeof vscode.workspace, 'onDidChangeTextDocument' | 'onDidOpenTextDocument'>
-> & {
-  onDidChangeTextDocument?: FiredEvent<
-    typeof vscode.workspace.onDidChangeTextDocument,
-    DocumentChange
-  >;
-  onDidOpenTextDocument?: FiredEvent<typeof vscode.workspace.onDidOpenTextDocument, OpenedDocument>;
-};
+  Omit<
+    typeof vscode.workspace,
+    | 'onDidChangeTextDocument'
+    | 'onDidOpenTextDocument'
+    | 'onDidCloseTextDocument'
+    | LooseWorkspaceMember
+  >
+> &
+  Partial<Record<LooseWorkspaceMember, unknown>> & {
+    onDidCloseTextDocument?: FiredEvent<
+      typeof vscode.workspace.onDidCloseTextDocument,
+      ClosedDocument
+    >;
+    onDidChangeTextDocument?: FiredEvent<
+      typeof vscode.workspace.onDidChangeTextDocument,
+      DocumentChange
+    >;
+    onDidOpenTextDocument?: FiredEvent<
+      typeof vscode.workspace.onDidOpenTextDocument,
+      OpenedDocument
+    >;
+  };
 
 /** A diagnostic as the code under test reads it: the members of vscode.Diagnostic with plain positions. */
 export interface FakeDiagnostic {
@@ -820,12 +938,81 @@ export interface FakeDiagnostic {
 /** The diagnostics `languages.getDiagnostics` returns, by document URI. */
 export const diagnostics = new Map<string, FakeDiagnostic[]>();
 
-/** The overloaded getDiagnostics returns real Diagnostics; the stand-in's carry only what is read. */
-type LooseLanguagesMember = 'getDiagnostics';
+/**
+ * The overloaded getDiagnostics returns real Diagnostics, and a DiagnosticCollection has more
+ * than the code under test uses; the stand-in's carry only what is read.
+ */
+type LooseLanguagesMember = 'getDiagnostics' | 'createDiagnosticCollection';
+
+export const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 } as const;
+
+/** A diagnostic the code under test makes. */
+export class Diagnostic {
+  source: string | undefined;
+
+  constructor(
+    readonly range: Range,
+    readonly message: string,
+    readonly severity: number,
+  ) {}
+}
+
+/** A code lens a provider gives. */
+export class CodeLens {
+  constructor(
+    readonly range: Range,
+    readonly command?: vscode.Command,
+  ) {}
+}
+
+/** A diagnostic collection that keeps what is set, by URI. */
+export class FakeDiagnosticCollection {
+  readonly entries = new Map<string, readonly Diagnostic[]>();
+  disposed = false;
+
+  constructor(readonly name: string | undefined) {}
+
+  set(uri: vscode.Uri, entries: readonly Diagnostic[]): void {
+    this.entries.set(uri.toString(), entries);
+  }
+
+  delete(uri: vscode.Uri): void {
+    this.entries.delete(uri.toString());
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.entries.clear();
+  }
+}
+
+/** Every diagnostic collection created, oldest first. */
+export const diagnosticCollections: FakeDiagnosticCollection[] = [];
+
+/** The code lens providers registered, with their selectors, oldest first. */
+export const codeLensProviders: {
+  selector: vscode.DocumentSelector;
+  provider: vscode.CodeLensProvider;
+}[] = [];
 
 export const languages = {
   getDiagnostics(resource: vscode.Uri): FakeDiagnostic[] {
     return diagnostics.get(resource.toString()) ?? [];
+  },
+  createDiagnosticCollection(name?: string): FakeDiagnosticCollection {
+    const collection = new FakeDiagnosticCollection(name);
+    diagnosticCollections.push(collection);
+    return collection;
+  },
+  registerCodeLensProvider(
+    selector: vscode.DocumentSelector,
+    provider: vscode.CodeLensProvider,
+  ): Disposable {
+    const registration = { selector, provider };
+    codeLensProviders.push(registration);
+    return new Disposable(() => {
+      codeLensProviders.splice(codeLensProviders.indexOf(registration), 1);
+    });
   },
 } satisfies Partial<Omit<typeof vscode.languages, LooseLanguagesMember>> &
   Partial<Record<LooseLanguagesMember, unknown>>;
@@ -884,8 +1071,16 @@ export function reset(): void {
   workspaceFolderSettings.clear();
   workspaceFolderNames.length = 0;
   executedCommands.length = 0;
+  contextKeys.clear();
   commandFailure.error = undefined;
   commandResults.clear();
+  fileTexts.clear();
+  untitledDocuments.length = 0;
+  openDocuments.length = 0;
+  savedDocuments.length = 0;
+  closeListeners.clear();
+  codeLensProviders.length = 0;
+  diagnosticCollections.length = 0;
   shownDocuments.length = 0;
   showFailure.error = undefined;
   diagnostics.clear();

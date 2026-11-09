@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { EXAMPLE_DOCUMENTS_CONTEXT, USE_EXAMPLE_COMMAND } from './example_editor';
+
 interface Command {
   command: string;
   title: string;
@@ -15,7 +17,10 @@ interface Setting {
 interface Manifest {
   contributes: {
     commands: Command[];
-    menus: { commandPalette: { command: string; when: string }[] };
+    menus: {
+      commandPalette: { command: string; when: string }[];
+      'editor/title'?: { command: string; when: string; group?: string }[];
+    };
     configuration: { properties: Record<string, Setting> };
   };
 }
@@ -31,7 +36,17 @@ const INTERNAL_COMMANDS = [
 ];
 const SHOWN_WITHOUT_YAML = ['cel-lens.showLogs'];
 const SETTINGS = Object.entries(configuration.properties);
-const TITLE_VERBS = ['Choose', 'Edit', 'Give', 'Pick', 'Remove', 'Restart', 'Show', 'Toggle'];
+const TITLE_VERBS = [
+  'Choose',
+  'Edit',
+  'Give',
+  'Pick',
+  'Remove',
+  'Restart',
+  'Show',
+  'Toggle',
+  'Use',
+];
 
 function startsWithVerb(title: string): boolean {
   return TITLE_VERBS.includes(title.split(' ')[0] ?? '');
@@ -73,6 +88,32 @@ describe('commands in package.json', () => {
       }
     },
   );
+});
+
+describe('Use This Example as the Type', () => {
+  const where = `resource in ${EXAMPLE_DOCUMENTS_CONTEXT}`;
+
+  it('shows in the Command Palette only on the editor of a pasted example', () => {
+    expect(menus.commandPalette.find((e) => e.command === USE_EXAMPLE_COMMAND)?.when).toBe(
+      `editorLangId == yaml && ${where}`,
+    );
+  });
+
+  it("is the one icon of the editor title, shown only on the editor of a pasted example, which is YAML (#9's review)", () => {
+    expect(menus['editor/title']).toEqual([
+      {
+        command: USE_EXAMPLE_COMMAND,
+        when: `editorLangId == yaml && ${where}`,
+        group: 'navigation',
+      },
+    ]);
+    expect(commands.find((c) => c.command === USE_EXAMPLE_COMMAND)).toEqual({
+      command: USE_EXAMPLE_COMMAND,
+      title: 'Use This Example as the Type',
+      category: 'cel-lens',
+      icon: '$(check)',
+    });
+  });
 });
 
 describe('settings in package.json', () => {
