@@ -223,10 +223,14 @@ class FakeUi implements TypeUi {
   ]);
   /** The editors of pasted examples opened, with what using one runs. */
   readonly pasted: { value: string; inside: boolean; use: PasteUse }[] = [];
-  /** The files open with edits not saved, by URI. */
-  readonly dirty = new Set<string>();
+  /**
+   * What openState answers for a file, by URI, call after call: the last stays; a file with none
+   * is not open.
+   */
+  readonly states = new Map<string, { dirty: boolean; version: number }[]>();
   /** The files saved, oldest first. */
   readonly saved: string[] = [];
+  saveFailure: Error | undefined;
   /** The messages of the too-old notices shown; `undefined` for the one about .cellens. */
   readonly outdatedMessages: (string | undefined)[] = [];
   readonly notes: { cellens: string; notes: readonly NotePlace[] }[] = [];
@@ -282,11 +286,15 @@ class FakeUi implements TypeUi {
     return Promise.resolve();
   }
 
-  isDirty(uri: string): boolean {
-    return this.dirty.has(uri);
+  openState(uri: string): { dirty: boolean; version: number } | undefined {
+    const states = this.states.get(uri);
+    return states !== undefined && states.length > 1 ? states.shift() : states?.[0];
   }
 
   save(uri: string): Promise<void> {
+    if (this.saveFailure !== undefined) {
+      return Promise.reject(this.saveFailure);
+    }
     this.saved.push(uri);
     return Promise.resolve();
   }
@@ -873,7 +881,7 @@ describe("saving .cellens after a write the person did not type (#9's review)", 
   it.each([
     [
       'it had unsaved edits',
-      (ui: FakeUi) => ui.dirty.add(CELLENS),
+      (ui: FakeUi) => ui.states.set(CELLENS, [{ dirty: true, version: 3 }]),
       { cellens: CELLENS, change: 'added' },
     ],
     [
@@ -893,6 +901,43 @@ describe("saving .cellens after a write the person did not type (#9's review)", 
     await flow.removeType({ ...CONFIG, type: 'int' });
 
     expect(ui.saved).toEqual([]);
+  });
+
+  it("saves .cellens open with no unsaved edits when only the engine's edit changed it (#14)", async () => {
+    const { flow, ui } = setUp();
+    ui.states.set(CELLENS, [
+      { dirty: false, version: 3 },
+      { dirty: true, version: 4 },
+    ]);
+    ui.next.push('$(symbol-class) Deployment');
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.saved).toEqual([CELLENS]);
+  });
+
+  it('leaves .cellens unsaved when the person typed in it while the engine wrote (#14)', async () => {
+    const { flow, ui } = setUp();
+    ui.states.set(CELLENS, [
+      { dirty: false, version: 3 },
+      { dirty: true, version: 6 },
+    ]);
+    ui.next.push('$(symbol-class) Deployment');
+
+    await flow.giveType(CONFIG);
+
+    expect(ui.saved).toEqual([]);
+  });
+
+  it('logs, and shows nothing, when .cellens cannot be saved (#14)', async () => {
+    const { flow, ui, logs } = setUp();
+    ui.saveFailure = new Error('the disk is full');
+    ui.next.push('$(symbol-class) Deployment');
+
+    await flow.giveType(CONFIG);
+
+    expect(logs).toEqual([`Could not save ${CELLENS}: Error: the disk is full`]);
+    expect(ui.errors).toEqual([]);
   });
 
   it('leaves .cellens unsaved after a snippet, as the person types the type', async () => {
@@ -1135,9 +1180,16 @@ describe('a type from an example', () => {
 
   it.each([
     ['YAML', 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\nspec:\n  config: {}\n'],
-    ['JSON, after the comment', '# An example\n{"apiVersion": "v1", "kind": "X", "spec": {}}'],
+    [
+      'JSON, after the comment',
+      '# An example\n{"apiVersion": "rules.example.com/v1", "kind": "ReplicaLimit", "spec": {}}',
+    ],
+    [
+      'a YAML list (#14)',
+      '- apiVersion: rules.example.com/v1\n  kind: ReplicaLimit\n  spec: {config: {}}\n',
+    ],
   ])(
-    "sends the value's path with a whole resource pasted as %s, so the schema is the value's (#9's review)",
+    "sends the value's path with a whole resource of its kind pasted as %s, so the schema is the value's",
     async (_name, text) => {
       const { flow, ui, engine } = setUp();
       ui.next.push(PASTE_LINE);
@@ -1151,6 +1203,84 @@ describe('a type from an example', () => {
       });
     },
   );
+
+  it('reads a pasted resource of another kind, such as an object reference, as the value itself (#14)', async () => {
+    const { flow, ui, engine } = setUp();
+    ui.next.push(PASTE_LINE);
+    await flow.giveType(CONFIG);
+    const text = 'apiVersion: v1\nkind: Secret\nname: quota\n';
+
+    await ui.pasted[0]?.use(text, editorOf(ui));
+
+    expect(engine.calls[1]).toEqual({ command: 'cel-lens.inferType', argument: { text } });
+  });
+
+  it.each([
+    ["Use the whole Deployment's spec.config", { path: 'spec.config' }],
+    ['Use it as the value itself', {}],
+  ])(
+    "asks whether a pasted resource holds the value when the value's kinds are not known, and takes %s (#14's review)",
+    async (answer, path) => {
+      const { flow, ui, engine } = setUp();
+      const text = 'apiVersion: apps/v1\nkind: Deployment\nspec:\n  config: {}\n';
+      engine.answers.set('cel-lens.typeChoices', { ...CHOICES, examples: [] });
+      ui.next.push(PASTE_LINE);
+      await flow.giveType(CONFIG);
+      ui.next.push(
+        answer.startsWith('Use the whole')
+          ? `$(symbol-class) ${answer}`
+          : `$(symbol-field) ${answer}`,
+      );
+
+      await ui.pasted[0]?.use(text, editorOf(ui));
+
+      expect(ui.picks[1]).toMatchObject({
+        title: 'Use this example as the type',
+        placeholder: 'Is the pasted example params.spec.config itself, or does it hold it?',
+      });
+      expect(labels(ui.picks[1])).toEqual([
+        "$(symbol-class) Use the whole Deployment's spec.config",
+        '$(symbol-field) Use it as the value itself',
+      ]);
+      expect(engine.calls[1]).toEqual({
+        command: 'cel-lens.inferType',
+        argument: { text, ...path },
+      });
+    },
+  );
+
+  it("writes nothing, and keeps the example's editor, when that question is closed with Escape (#14's review)", async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('cel-lens.typeChoices', { ...CHOICES, examples: [] });
+    ui.next.push(PASTE_LINE);
+    await flow.giveType(CONFIG);
+
+    await ui.pasted[0]?.use('apiVersion: v1\nkind: Secret\nname: quota\n', editorOf(ui));
+
+    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
+    expect(ui.steps).toEqual([]);
+  });
+
+  it('says the engine is too old, not its own words, when it does not know inferType, as Paste picked before typeChoices answered finds (#14)', async () => {
+    const { flow, ui, engine } = setUp();
+    engine.failures.set(
+      'cel-lens.inferType',
+      responseError(
+        -32602,
+        'unknown command "cel-lens.inferType": cel-lens runs cel-lens.typeChoices, cel-lens.checkType, cel-lens.setType, cel-lens.removeType',
+      ),
+    );
+    ui.next.push(PASTE_LINE);
+    await flow.giveType(CONFIG);
+
+    await ui.pasted[0]?.use('teams: []\n', editorOf(ui));
+
+    expect(ui.outdatedMessages).toEqual([
+      'This cel-lens engine is too old to work out a type from an example: set cel-lens.serverPath to a newer cel-lens-core, then run cel-lens: Restart Engine.',
+    ]);
+    expect(ui.errors).toEqual([]);
+    expect(ui.steps).toEqual([]);
+  });
 
   it("lists the examples by their path in the workspace, so two folders' files differ (#9's review)", async () => {
     const { flow, ui, engine } = setUp();

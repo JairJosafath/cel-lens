@@ -1,6 +1,10 @@
 import {
-  isWholeResource,
+  USE_EXAMPLE_TITLE,
   notePlaces,
+  pastedAsLines,
+  pastedKinds,
+  pastedPath,
+  type PastedAs,
   parseInferredSchema,
   type ExampleArgument,
   type NotePlace,
@@ -39,6 +43,7 @@ import {
   parseTypeTarget,
   snippetRefusal,
   sameGo,
+  unknownInferType,
   typeLines,
   valueLines,
   withGo,
@@ -118,8 +123,8 @@ export interface TypeUi {
    * example, `use` gets its text and the editor; closing it ends it, and nothing is written.
    */
   pasteExample(value: string, inside: boolean, use: PasteUse): Promise<void>;
-  /** Whether `uri` is open with edits not saved. */
-  isDirty(uri: string): boolean;
+  /** Whether `uri` is open with edits not saved, and its version; `undefined` when it is not open. */
+  openState(uri: string): { readonly dirty: boolean; readonly version: number } | undefined;
   /** Saves `uri` when it is open. */
   save(uri: string): Promise<void>;
   /** Shows the notes on what an example left open, quietly, at their lines of `cellens`. */
@@ -378,15 +383,7 @@ export class TypeFlow {
           return;
         }
         await this.ui.pasteExample(target.value, target.path !== undefined, (text, editor) =>
-          this.typeFromExample(
-            target,
-            {
-              text,
-              ...(target.path !== undefined && isWholeResource(text) && { path: target.path }),
-            },
-            action,
-            editor,
-          ),
+          this.typeFromPaste(target, text, action, editor, known),
         );
         return;
       case 'openCrdSetting':
@@ -434,6 +431,40 @@ export class TypeFlow {
   }
 
   /**
+   * A schema from a pasted example: of the value at its path in a pasted resource of its kind, or
+   * of the example itself. When the value's kinds are not known, a pasted resource may be either,
+   * such as a Deployment for `object.spec.template` or an object reference, so the person says
+   * which; Escape writes nothing.
+   */
+  private async typeFromPaste(
+    target: TypeTarget,
+    text: string,
+    action: string,
+    editor: PastedEditor,
+    known: () => TypeChoices | undefined,
+  ): Promise<void> {
+    const kinds = known()?.examples.map((example) => example.kind) ?? [];
+    let as = pastedPath(text, target.path, kinds);
+    if (as === 'ask' && target.path !== undefined) {
+      const picked = await this.ui.pick<PastedAs>({
+        title: USE_EXAMPLE_TITLE,
+        placeholder: `Is the pasted example ${target.value} itself, or does it hold it?`,
+        lines: pastedAsLines(pastedKinds(text)[0] ?? 'resource', target.path),
+      });
+      if (picked === undefined || picked === BACK) {
+        return;
+      }
+      as = picked.value === 'whole' ? 'send' : 'none';
+    }
+    await this.typeFromExample(
+      target,
+      { text, ...(as === 'send' && target.path !== undefined && { path: target.path }) },
+      action,
+      editor,
+    );
+  }
+
+  /**
    * Has the engine work out a schema from the example, writes it as the value's `schema:`, and
    * opens `.cellens` beside the rule at the entry, with the notes on what the example left open
    * at their lines. A pasted example's editor closes once the schema is written, before
@@ -450,6 +481,11 @@ export class TypeFlow {
     try {
       answer = await this.engine(ENGINE_INFER_TYPE, example);
     } catch (error) {
+      if (unknownInferType(error)) {
+        this.log.warn(`Could not ${action}, as the engine is too old: ${String(error)}`);
+        await this.ui.showOutdatedEngine(OUTDATED_EXAMPLE_MESSAGE);
+        return;
+      }
       await this.report(action, error);
       return;
     }
@@ -550,9 +586,11 @@ export class TypeFlow {
   }
 
   /**
-   * Sets or removes the entry at once, and whether it did; a failure is shown once. A `.cellens`
-   * with no unsaved edit before is saved once the engine's edit is in, as the person typed
-   * nothing; one with edits of theirs is left for them to save.
+   * Sets or removes the entry at once, and whether it did; a failure is shown once. The
+   * `.cellens` the line named is saved once the engine's edit is in when it had no unsaved edits
+   * before and nothing but that edit changed it meanwhile (its version moved by one), as the
+   * person typed nothing; one with edits of theirs, or another `.cellens` the engine wrote, is
+   * left for them to save.
    */
   private async change(
     target: TypeTarget,
@@ -560,7 +598,7 @@ export class TypeFlow {
     argument: unknown,
     action: string,
   ): Promise<boolean> {
-    const clean = !this.ui.isDirty(target.cellens);
+    const before = this.ui.openState(target.cellens);
     let answer: unknown;
     try {
       answer = await this.engine(command, argument);
@@ -575,7 +613,13 @@ export class TypeFlow {
       );
       return true;
     }
-    if (clean && changed.cellens === target.cellens && changed.change !== 'deleted') {
+    const after = this.ui.openState(target.cellens);
+    if (
+      before?.dirty !== true &&
+      changed.cellens === target.cellens &&
+      changed.change !== 'deleted' &&
+      (before === undefined || after?.version === before.version + 1)
+    ) {
       try {
         await this.ui.save(changed.cellens);
       } catch (error) {

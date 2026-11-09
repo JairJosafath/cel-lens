@@ -139,14 +139,22 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
   `vscode`, and `src/type_commands.ts` shows it.
 - **Types from examples:** `cel-lens.typeChoices` gets the value's argument, so it
   also lists the documents of the workspace of its kind. A document picked, or the
-  text of an untitled editor `Paste an example…` opens, goes to
-  `cel-lens.inferType`; its schema is set with `cel-lens.setType`, and a second
-  `setType` with a `snippet`, which the engine answers `unchanged`, gives the place of
-  the entry to open. The engine's notes are placed at their keys of `.cellens` by
-  `src/example_schema.ts` (no `vscode`) and shown as information diagnostics by
-  `ExampleNotes` in `src/example_editor.ts`, where `ExampleEditors` keeps the pasted
-  examples' editors, their code lens and the context key
-  `cel-lens.exampleDocuments` that the `when` clauses of `cel-lens.useExample` read.
+  text of the editor `Paste an example…` opens, goes to `cel-lens.inferType`, with
+  the value's `path` for a pasted resource of the value's kind (its root read with
+  the `yaml` package, which esbuild bundles; with the value's kinds not known, the
+  person says whether the resource holds the value); its schema is set with
+  `cel-lens.setType`, and a second `setType` with a `snippet`, which the engine
+  answers `unchanged`, gives the place of the entry to open. The engine's notes are
+  placed at their keys of `.cellens` by `src/example_schema.ts` (no `vscode`) and
+  shown as information diagnostics by `ExampleNotes` in `src/example_editor.ts`,
+  where `ExampleEditors` keeps the pasted examples' editors and their code lens.
+  Their files live in memory (`ExampleFiles`, a file system provider of the scheme
+  `cel-lens-example`, which the `when` clauses of `cel-lens.useExample` name and
+  `onFileSystem:cel-lens-example` activates on). A change is saved there a moment
+  later with **Save without Formatting** while the editor is active, never with
+  `TextDocument.save()`, whose save participants would trim or format what is
+  typed; an editor closed with a change not yet saved is reverted, so none asks to
+  save.
 
 ### Kubernetes version
 

@@ -431,7 +431,8 @@ type LooseWindowMember =
   | 'onDidChangeVisibleTextEditors'
   | 'onDidChangeTextEditorVisibleRanges'
   | 'activeColorTheme'
-  | 'onDidChangeActiveColorTheme';
+  | 'onDidChangeActiveColorTheme'
+  | 'tabGroups';
 
 /** The workspace members whose real types are overloaded or too large to rebuild. */
 type LooseWorkspaceMember = 'openTextDocument' | 'textDocuments';
@@ -563,6 +564,8 @@ export const savedDocuments: string[] = [];
  */
 export class FakeTextDocument {
   isDirty = false;
+  /** Goes up by one with each change, as a test makes them. */
+  version = 1;
 
   constructor(
     readonly uri: vscode.Uri,
@@ -581,25 +584,63 @@ export class FakeTextDocument {
   }
 }
 
+/** The file system providers registered, by scheme. */
+export const fileSystemProviders = new Map<string, vscode.FileSystemProvider>();
+
+export const FileType = { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 } as const;
+
+/** The errors a file system provider throws, by the names of the real ones. */
+export class FileSystemError extends Error {
+  static FileNotFound(uri?: string | vscode.Uri): FileSystemError {
+    return new FileSystemError(`file not found: ${String(uri)}`);
+  }
+
+  static NoPermissions(message?: string | vscode.Uri): FileSystemError {
+    return new FileSystemError(`no permissions: ${String(message)}`);
+  }
+}
+
+/** The input of a tab that shows a text document. */
+export class TabInputText {
+  constructor(readonly uri: vscode.Uri) {}
+}
+
+/** The tabs of the window, one group: each document window.showTextDocument shows has one. */
+export const openTabs: { input: TabInputText }[] = [];
+
+/** The URIs of the tabs window.tabGroups.close closed, oldest first. */
+export const closedTabs: string[] = [];
+
 /** The documents workspace.textDocuments lists: each one workspace.openTextDocument opened. */
 export const openDocuments: FakeTextDocument[] = [];
 
 /** The text of the files workspace.openTextDocument opens, by URI; it fails on another file. */
 export const fileTexts = new Map<string, string>();
 
-/** Every untitled document workspace.openTextDocument made, oldest first. */
-export const untitledDocuments: FakeTextDocument[] = [];
-
 /** The part of a TextDocument the listeners of onDidCloseTextDocument get. */
 type ClosedDocument = Pick<vscode.TextDocument, 'uri'>;
 
 const closeListeners = new Set<(document: ClosedDocument) => void>();
 
-/** Tells the listeners of onDidCloseTextDocument that a document closed, as closing its editor does. */
+/**
+ * Tells the listeners of onDidCloseTextDocument that a document closed, as closing its editor
+ * does: workspace.textDocuments no longer lists it.
+ */
 export function closeDocument(document: ClosedDocument): void {
+  const open = openDocuments.findIndex((each) => each.uri.toString() === document.uri.toString());
+  if (open !== -1) {
+    openDocuments.splice(open, 1);
+  }
   for (const listener of closeListeners) {
     listener(document);
   }
+}
+
+/** Changes a document's language as VS Code does: it closes, then opens again at once. */
+export function changeLanguage(document: FakeTextDocument): void {
+  closeDocument(document);
+  openDocuments.push(document);
+  openDocument(document);
 }
 
 /** Tells the listeners of onDidOpenTextDocument that a document was opened, as after a language mode change. */
@@ -664,8 +705,12 @@ export const window = {
     if (showFailure.error !== undefined) {
       return Promise.reject(showFailure.error);
     }
+    const uri = 'uri' in target ? target.uri : target;
+    if (!openTabs.some((tab) => tab.input.uri.toString() === uri.toString())) {
+      openTabs.push({ input: new TabInputText(uri) });
+    }
     shownDocuments.push({
-      uri: ('uri' in target ? target.uri : target).toString(),
+      uri: uri.toString(),
       selection: options?.selection,
       ...(options?.viewColumn !== undefined && { viewColumn: options.viewColumn }),
       ...(options?.preserveFocus !== undefined && { preserveFocus: options.preserveFocus }),
@@ -696,6 +741,18 @@ export const window = {
   ): Promise<T | undefined> {
     shownInfos.push(message);
     return Promise.resolve(buttons.find((button) => button === infoChoice.next));
+  },
+  tabGroups: {
+    get all(): { tabs: { input: TabInputText }[] }[] {
+      return [{ tabs: openTabs }];
+    },
+    close(tabs: readonly { input: TabInputText }[]): Promise<boolean> {
+      for (const tab of tabs) {
+        closedTabs.push(tab.input.uri.toString());
+        openTabs.splice(openTabs.indexOf(tab), 1);
+      }
+      return Promise.resolve(true);
+    },
   },
   createOutputChannel(name: string): LogChannel {
     // Both overloads of the real function return a channel; tests only ask for the log kind.
@@ -826,33 +883,30 @@ export const settingUpdates: { name: string; value: unknown; target: number; fol
 
 export const workspace = {
   /** A file's text from `fileTexts`, or a new untitled document with the content given. */
-  openTextDocument(
-    target: vscode.Uri | { language?: string; content?: string },
-  ): Promise<FakeTextDocument> {
-    if (!('scheme' in target)) {
-      const document = new FakeTextDocument(
-        Uri.parse(`untitled:Untitled-${String(untitledDocuments.length + 1)}`),
-        target.language ?? 'plaintext',
-        target.content ?? '',
-      );
-      untitledDocuments.push(document);
-      openDocuments.push(document);
-      return Promise.resolve(document);
-    }
+  /** The open document, else a file's text from its file system provider, or `fileTexts`. */
+  async openTextDocument(target: vscode.Uri): Promise<FakeTextDocument> {
     const open = openDocuments.find((document) => document.uri.toString() === target.toString());
     if (open !== undefined) {
-      return Promise.resolve(open);
+      return open;
     }
-    const text = fileTexts.get(target.toString());
+    const provider = fileSystemProviders.get(target.scheme);
+    const text =
+      provider === undefined
+        ? fileTexts.get(target.toString())
+        : new TextDecoder().decode(await provider.readFile(target));
     if (text === undefined) {
-      return Promise.reject(new Error(`cannot open ${target.toString()}`));
+      throw new Error(`cannot open ${target.toString()}`);
     }
     const document = new FakeTextDocument(target, 'yaml', text);
     openDocuments.push(document);
-    return Promise.resolve(document);
+    return document;
   },
   get textDocuments(): readonly FakeTextDocument[] {
     return openDocuments;
+  },
+  registerFileSystemProvider(scheme: string, provider: vscode.FileSystemProvider): Disposable {
+    fileSystemProviders.set(scheme, provider);
+    return new Disposable(() => fileSystemProviders.delete(scheme));
   },
   onDidCloseTextDocument(listener: (document: ClosedDocument) => void): Disposable {
     closeListeners.add(listener);
@@ -1022,14 +1076,17 @@ export const openedUrls: string[] = [];
 
 /** A URI that is only its text, which is all the tests look at. */
 class FakeUri implements vscode.Uri {
-  readonly scheme = '';
+  /** The scheme its text starts with, such as `file`. */
+  readonly scheme: string;
   readonly authority = '';
   readonly path = '';
   readonly query = '';
   readonly fragment = '';
   readonly fsPath = '';
 
-  constructor(private readonly text: string) {}
+  constructor(private readonly text: string) {
+    this.scheme = /^([a-z][a-z0-9+.-]*):/i.exec(text)?.[1] ?? '';
+  }
 
   with(): vscode.Uri {
     return this;
@@ -1075,8 +1132,10 @@ export function reset(): void {
   commandFailure.error = undefined;
   commandResults.clear();
   fileTexts.clear();
-  untitledDocuments.length = 0;
   openDocuments.length = 0;
+  fileSystemProviders.clear();
+  openTabs.length = 0;
+  closedTabs.length = 0;
   savedDocuments.length = 0;
   closeListeners.clear();
   codeLensProviders.length = 0;

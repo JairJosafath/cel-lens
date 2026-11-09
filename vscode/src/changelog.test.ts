@@ -144,19 +144,22 @@ describe('CHANGELOG.md', () => {
     '**Give it a type** can take an example',
     'Under **Examples in the workspace**',
     '`config/samples/limit.yaml` with `rules.example.com/v1 ReplicaLimit` and the line it starts at',
-    '**Paste an example…** opens an untitled YAML editor beside the rule',
+    '**Paste an example…** opens an editor beside the rule, named after the value (such as **Example of params.yaml**) and kept in memory, so closing it never asks to save',
     '**Use this example as the type** above it and in its editor title',
     '**cel-lens: Use This Example as the Type** in the Command Palette, on that editor only',
     "writes it as the value's `schema:`, and `.cellens` opens beside the rule at the entry",
     'shows once as an information problem at its key in `.cellens`',
-    'closes its editor without asking to save; closing it writes nothing, even while the engine works on it',
-    'A whole resource pasted for a value inside it, such as a ReplicaLimit for `params.spec.config`, gives the schema of that value',
-    'is saved when `.cellens` had no unsaved edits',
+    'Using a pasted example closes its editor; closing it writes nothing, even while the engine works on it, and a window reload closes the examples of the window before',
+    "A whole resource of the value's kind pasted for a value inside it, such as a ReplicaLimit for `params.spec.config`, gives the schema of that value, also from a YAML list of resources",
+    'a resource of another kind, such as an object reference, is the value itself',
+    `a question says which ("Use the whole Deployment's spec.template" or "Use it as the value itself")`,
+    'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; nothing is saved when the engine writes another `.cellens`',
+    'An engine too old to work out a type from an example says so, whenever the example is used',
   ])('names %s under Added in the Unreleased section', (text) => {
     expect(unreleasedAdded()).toContain(text);
   });
 
-  it.each(['input box', 'Write a struct…', 'Pick a kind…'])(
+  it.each(['input box', 'Write a struct…', 'Pick a kind…', 'untitled'])(
     'names no %s, which no release had, in the Unreleased section',
     (text) => {
       expect(unreleasedAdded()).not.toContain(text);

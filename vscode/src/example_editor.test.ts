@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CodeLens,
@@ -6,28 +6,37 @@ import {
   DiagnosticSeverity,
   FakeEditor,
   Range,
+  TabInputText,
   Uri,
   ViewColumn,
   activeEditor,
+  changeActiveEditor,
   changeDocument,
+  changeLanguage,
   closeDocument,
+  closedTabs,
   codeLensProviders,
   commands,
-  contextKeys,
   diagnosticCollections,
   executedCommands,
+  fileSystemProviders,
+  openDocuments,
+  openTabs,
   reset,
   runCommand,
+  savedDocuments,
   settle,
+  showFailure,
   shownDocuments,
-  untitledDocuments,
   visibleEditors,
   window,
   type FakeTextDocument,
 } from '../test/vscode';
 import {
-  EXAMPLE_DOCUMENTS_CONTEXT,
+  EXAMPLE_SCHEME,
   ExampleEditors,
+  SAVE_DELAY_MS,
+  ExampleFiles,
   ExampleNotes,
   USE_EXAMPLE_COMMAND,
 } from './example_editor';
@@ -35,6 +44,9 @@ import { exampleComment, type NotePlace } from './example_schema';
 import type { PastedEditor } from './type_flow';
 
 const CELLENS = 'file:///workspace/repo/.cellens';
+
+/** The in-memory file of the first example of `params.spec.config`, named for its tab. */
+const EXAMPLE = 'cel-lens-example:/Example%20of%20params.spec.config.yaml';
 
 /** What using an example got: its text, and its editor. */
 interface Used {
@@ -56,65 +68,145 @@ async function openExample(): Promise<{
     used.push({ text, editor });
     return Promise.resolve();
   });
-  const document = untitledDocuments[0];
+  const document = openDocuments[0];
   if (document === undefined) {
-    throw new Error('no untitled document was opened');
+    throw new Error('no example was opened');
   }
   return { editors, document, used, log };
 }
 
-/** The value the extension gave the context key of the editors of examples. */
-function exampleDocuments(): unknown {
-  return contextKeys.get(EXAMPLE_DOCUMENTS_CONTEXT);
+/** The text of an in-memory file of a pasted example. */
+async function memory(uri: string): Promise<string> {
+  const provider = fileSystemProviders.get(EXAMPLE_SCHEME);
+  if (provider === undefined) {
+    throw new Error('no file system provider for the examples');
+  }
+  return new TextDecoder().decode(await provider.readFile(Uri.parse(uri)));
 }
 
 describe('ExampleEditors', () => {
-  afterEach(reset);
+  afterEach(() => {
+    vi.useRealTimers();
+    reset();
+  });
 
-  it('opens an untitled YAML editor beside the rule, starting with what to paste, the cursor below it', async () => {
+  it('opens an in-memory YAML file beside the rule, named after the value for its tab, starting with what to paste, the cursor below it (#14)', async () => {
     const { document } = await openExample();
 
     expect(document).toMatchObject({
-      uri: Uri.parse('untitled:Untitled-1'),
+      uri: Uri.parse(EXAMPLE),
       languageId: 'yaml',
       text: exampleComment('params.spec.config', true),
     });
+    expect(await memory(EXAMPLE)).toBe(exampleComment('params.spec.config', true));
     expect(shownDocuments).toEqual([
       {
-        uri: 'untitled:Untitled-1',
+        uri: EXAMPLE,
         selection: new Range(3, 0, 3, 0),
         viewColumn: ViewColumn.Beside,
         preserveFocus: false,
         preview: false,
       },
     ]);
-    expect(exampleDocuments()).toEqual(['untitled:Untitled-1']);
   });
 
-  it('gives its editor, and no other untitled YAML, the code lens Use this example as the type', async () => {
+  it('names a second example of the same value apart (#14)', async () => {
+    const { editors } = await openExample();
+
+    await editors.open('params.spec.config', true, () => Promise.resolve());
+
+    expect(openDocuments.map((document) => document.uri.toString())).toEqual([
+      EXAMPLE,
+      'cel-lens-example:/Example%20of%20params.spec.config%20(2).yaml',
+    ]);
+  });
+
+  it("saves a change of the active example to memory a moment later with Save without Formatting, never TextDocument.save(), so no save participant runs on what is typed (#14's review)", async () => {
+    vi.useFakeTimers();
+    const { document } = await openExample();
+    activeEditor.languageId = 'yaml';
+    activeEditor.uri = EXAMPLE;
+    const change = [{ range: { start: { line: 3 }, end: { line: 3 } }, text: 'teams: x' }];
+
+    document.isDirty = true;
+    changeDocument(document, change);
+    changeDocument(document, change);
+    vi.advanceTimersByTime(SAVE_DELAY_MS - 1);
+    expect(executedCommands).toEqual([]);
+    vi.advanceTimersByTime(1);
+
+    expect(executedCommands).toEqual([
+      { command: 'workbench.action.files.saveWithoutFormatting', args: [] },
+    ]);
+    expect(savedDocuments).toEqual([]);
+  });
+
+  it("waits to save an example that is not the active editor until it is again, and leaves other files alone (#14's review)", async () => {
+    vi.useFakeTimers();
+    const { document } = await openExample();
+    const other = {
+      uri: Uri.parse(CELLENS),
+      languageId: 'plaintext',
+      getText: () => '',
+      isDirty: true,
+    };
+    activeEditor.languageId = 'yaml';
+    activeEditor.uri = CELLENS;
+    document.isDirty = true;
+
+    changeDocument(document, [{ range: { start: { line: 3 }, end: { line: 3 } }, text: 'a' }]);
+    changeDocument(other, [{ range: { start: { line: 0 }, end: { line: 0 } }, text: 'a' }]);
+    vi.advanceTimersByTime(SAVE_DELAY_MS);
+    expect(executedCommands).toEqual([]);
+
+    activeEditor.uri = EXAMPLE;
+    changeActiveEditor('yaml');
+    vi.advanceTimersByTime(SAVE_DELAY_MS);
+
+    expect(executedCommands).toEqual([
+      { command: 'workbench.action.files.saveWithoutFormatting', args: [] },
+    ]);
+    expect(savedDocuments).toEqual([]);
+  });
+
+  it("keeps an example across a change of its language, which closes it and opens it again (#14's review)", async () => {
+    const { document, used } = await openExample();
+
+    changeLanguage(document);
+    await settle();
+    await runCommand(USE_EXAMPLE_COMMAND, EXAMPLE);
+
+    expect(used).toHaveLength(1);
+    expect(used[0]?.editor.closed.aborted).toBe(false);
+    expect(await memory(EXAMPLE)).toBe(exampleComment('params.spec.config', true));
+  });
+
+  it('gives its editor, in any language, and no other, the code lens Use this example as the type', async () => {
     const { editors, document } = await openExample();
 
     expect(codeLensProviders).toEqual([
-      { selector: { scheme: 'untitled', language: 'yaml' }, provider: editors },
+      { selector: { scheme: EXAMPLE_SCHEME }, provider: editors },
     ]);
     expect(editors.provideCodeLenses(document)).toEqual([
       new CodeLens(new Range(0, 0, 0, 0), {
         title: 'Use this example as the type',
         command: USE_EXAMPLE_COMMAND,
-        arguments: ['untitled:Untitled-1'],
+        arguments: [EXAMPLE],
       }),
     ]);
-    expect(editors.provideCodeLenses({ uri: Uri.parse('untitled:Untitled-9') })).toEqual([]);
+    expect(editors.provideCodeLenses({ uri: Uri.parse('cel-lens-example:/Other.yaml') })).toEqual(
+      [],
+    );
   });
 
   it.each([
-    ['the code lens, with its URI', () => ['untitled:Untitled-1']],
-    ['the editor title, with its Uri', () => [Uri.parse('untitled:Untitled-1')]],
+    ['the code lens, with its URI', () => [EXAMPLE]],
+    ['the editor title, with its Uri', () => [Uri.parse(EXAMPLE)]],
     [
       'the Command Palette, on the active editor',
       () => {
         activeEditor.languageId = 'yaml';
-        activeEditor.uri = 'untitled:Untitled-1';
+        activeEditor.uri = EXAMPLE;
         return [];
       },
     ],
@@ -129,26 +221,50 @@ describe('ExampleEditors', () => {
     ]);
   });
 
-  it('closes the editor without asking to save: shows it in its group, reverts and closes it, and drops it from the when clauses', async () => {
+  it('closes its tab without asking, and forgets its file once it closed', async () => {
+    const { document, used } = await openExample();
+    await runCommand(USE_EXAMPLE_COMMAND, EXAMPLE);
+
+    await used[0]?.editor.close();
+    closeDocument(document);
+    await settle();
+
+    expect(closedTabs).toEqual([EXAMPLE]);
+    expect(shownDocuments).toHaveLength(1);
+    await expect(memory(EXAMPLE)).rejects.toThrow('file not found');
+  });
+
+  it("reverts and closes an example with a change not yet saved, in its group, with no save participant and no question (#14's review)", async () => {
     const { document, used } = await openExample();
     const editor = new FakeEditor(document);
     editor.viewColumn = ViewColumn.Two;
     visibleEditors.push(editor);
-    await runCommand(USE_EXAMPLE_COMMAND, 'untitled:Untitled-1');
+    await runCommand(USE_EXAMPLE_COMMAND, EXAMPLE);
+    document.isDirty = true;
 
     await used[0]?.editor.close();
 
     expect(shownDocuments.at(-1)).toEqual({
-      uri: 'untitled:Untitled-1',
+      uri: EXAMPLE,
       selection: undefined,
       viewColumn: ViewColumn.Two,
       preserveFocus: false,
     });
-    expect(executedCommands.at(-1)).toEqual({
-      command: 'workbench.action.revertAndCloseActiveEditor',
-      args: [],
-    });
-    expect(exampleDocuments()).toEqual([]);
+    expect(executedCommands).toEqual([
+      { command: 'workbench.action.revertAndCloseActiveEditor', args: [] },
+    ]);
+    expect(savedDocuments).toEqual([]);
+  });
+
+  it("logs, and lets the flow go on, when the example's editor cannot be closed (#14's review)", async () => {
+    const { document, used, log } = await openExample();
+    await runCommand(USE_EXAMPLE_COMMAND, EXAMPLE);
+    document.isDirty = true;
+    showFailure.error = new Error('the editor is gone');
+
+    await expect(used[0]?.editor.close()).resolves.toBeUndefined();
+
+    expect(log.lines).toEqual([`Could not close ${EXAMPLE}: Error: the editor is gone`]);
   });
 
   it('writes nothing once its editor is closed, and logs the stray use', async () => {
@@ -156,13 +272,10 @@ describe('ExampleEditors', () => {
 
     closeDocument(document);
     await settle();
-    await runCommand(USE_EXAMPLE_COMMAND, 'untitled:Untitled-1');
+    await runCommand(USE_EXAMPLE_COMMAND, EXAMPLE);
 
     expect(used).toEqual([]);
-    expect(exampleDocuments()).toEqual([]);
-    expect(log.lines).toEqual([
-      'cel-lens.useExample ran on untitled:Untitled-1, which holds no example.',
-    ]);
+    expect(log.lines).toEqual([`cel-lens.useExample ran on ${EXAMPLE}, which holds no example.`]);
   });
 
   it('uses an example once at a time, while the engine works on it', async () => {
@@ -176,13 +289,14 @@ describe('ExampleEditors', () => {
         finish = resolve;
       });
     });
+    const uri = 'cel-lens-example:/Example%20of%20params.yaml';
 
-    const first = runCommand(USE_EXAMPLE_COMMAND, 'untitled:Untitled-1');
-    await runCommand(USE_EXAMPLE_COMMAND, 'untitled:Untitled-1');
+    const first = runCommand(USE_EXAMPLE_COMMAND, uri);
+    await runCommand(USE_EXAMPLE_COMMAND, uri);
     expect(uses).toBe(1);
     finish();
     await first;
-    const again = runCommand(USE_EXAMPLE_COMMAND, 'untitled:Untitled-1');
+    const again = runCommand(USE_EXAMPLE_COMMAND, uri);
     await settle();
 
     expect(uses).toBe(2);
@@ -192,40 +306,64 @@ describe('ExampleEditors', () => {
 
   it("tells a use that its editor closed, and does not open it again to close it (#9's review)", async () => {
     const { document, used } = await openExample();
-    await runCommand(USE_EXAMPLE_COMMAND, 'untitled:Untitled-1');
-    const shown = shownDocuments.length;
+    await runCommand(USE_EXAMPLE_COMMAND, EXAMPLE);
 
     closeDocument(document);
+    await settle();
     await used[0]?.editor.close();
 
     expect(used[0]?.editor.closed.aborted).toBe(true);
-    expect(shownDocuments).toHaveLength(shown);
-    expect(executedCommands.map((each) => each.command)).not.toContain(
-      'workbench.action.revertAndCloseActiveEditor',
+    expect(shownDocuments).toHaveLength(1);
+    expect(closedTabs).toEqual([]);
+  });
+
+  it('closes the editors of pasted examples a window reload restored, as their files are gone, and no other (#14)', () => {
+    openTabs.push(
+      { input: new TabInputText(Uri.parse(EXAMPLE)) },
+      { input: new TabInputText(Uri.parse(CELLENS)) },
     );
+
+    new ExampleEditors(window.createOutputChannel('cel-lens')).dispose();
+
+    expect(closedTabs).toEqual([EXAMPLE]);
   });
 
-  it("empties the context key of the examples when an instance starts, as after a restart of the extension host, and on dispose (#9's review)", async () => {
-    const { editors } = await openExample();
-    expect(exampleDocuments()).toEqual(['untitled:Untitled-1']);
-
-    editors.dispose();
-    expect(exampleDocuments()).toEqual([]);
-
-    contextKeys.set(EXAMPLE_DOCUMENTS_CONTEXT, ['untitled:Untitled-1']);
-    const next = new ExampleEditors(window.createOutputChannel('cel-lens'));
-    await settle();
-    expect(exampleDocuments()).toEqual([]);
-    next.dispose();
-  });
-
-  it('frees its command and its code lens provider on dispose', async () => {
+  it('frees its command, its code lens provider and its files on dispose', async () => {
     const { editors } = await openExample();
 
     editors.dispose();
 
     expect(await commands.getCommands()).toEqual([]);
     expect(codeLensProviders).toEqual([]);
+    expect(fileSystemProviders.size).toBe(0);
+  });
+});
+
+describe('ExampleFiles', () => {
+  const uri = Uri.parse(EXAMPLE);
+
+  it('keeps a file in memory: written, stated, read and deleted', () => {
+    const files = new ExampleFiles();
+
+    files.writeFile(uri, new TextEncoder().encode('teams: []\n'));
+
+    expect(files.stat(uri)).toMatchObject({ type: 1, size: 10 });
+    expect(new TextDecoder().decode(files.readFile(uri))).toBe('teams: []\n');
+    files.delete(uri);
+    expect(() => files.readFile(uri)).toThrow('file not found');
+  });
+
+  it('has no file of the window before a reload, nor folders, nor renames', () => {
+    const files = new ExampleFiles();
+
+    expect(() => files.stat(uri)).toThrow('file not found');
+    expect(files.readDirectory()).toEqual([]);
+    expect(() => {
+      files.createDirectory();
+    }).toThrow('no permissions');
+    expect(() => {
+      files.rename();
+    }).toThrow('no permissions');
   });
 });
 

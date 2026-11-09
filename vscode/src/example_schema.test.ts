@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   EXAMPLE_CURSOR_LINE,
   exampleComment,
-  isWholeResource,
+  pastedAsLines,
+  pastedKinds,
+  pastedPath,
   moveNotes,
   notePlaces,
   parseInferredSchema,
@@ -98,22 +100,84 @@ describe('exampleComment', () => {
   });
 });
 
-describe('isWholeResource', () => {
+describe('pastedKinds', () => {
   it.each([
-    ['a YAML resource', 'apiVersion: v1\nkind: ConfigMap\ndata: {}\n', true],
-    ['YAML documents, the comment left out', '# An example\n---\napiVersion: v1\nkind: X\n', true],
-    ['a JSON resource after the comment', '# An example\n{"apiVersion": "v1", "kind": "X"}', true],
-    ['a JSON list of resources', '[{"apiVersion": "v1", "kind": "X"}]', true],
-    ['a value', 'teams: []\nmax: 3\n', false],
-    ['a value that holds a resource', 'template:\n  apiVersion: v1\n  kind: Pod\n', false],
+    ['a YAML resource', 'apiVersion: v1\nkind: ConfigMap\ndata: {}\n', ['ConfigMap']],
+    ['YAML documents, the comment left out', '# An example\n---\napiVersion: v1\nkind: X\n', ['X']],
     [
-      'a JSON value that holds a resource',
-      '{"template": {"apiVersion": "v1", "kind": "Pod"}}',
-      false,
+      'a YAML list of resources',
+      '- apiVersion: v1\n  kind: A\n  spec: {}\n- kind: B # second\n  apiVersion: v1\n',
+      ['A', 'B'],
     ],
-    ['nothing', '', false],
-  ])('reads %s as a whole resource: %s', (_name, text, expected) => {
-    expect(isWholeResource(text)).toBe(expected);
+    ["a YAML list indented more (#14's review)", '-   apiVersion: v1\n    kind: A\n', ['A']],
+    [
+      "a flow-style YAML resource (#14's review)",
+      '{apiVersion: v1, kind: ConfigMap}\n',
+      ['ConfigMap'],
+    ],
+    ['a quoted kind', 'apiVersion: "apps/v1"\nkind: "Deployment"\n', ['Deployment']],
+    ['a JSON resource after the comment', '# An example\n{"apiVersion": "v1", "kind": "X"}', ['X']],
+    ['a JSON list of resources', '[{"apiVersion": "v1", "kind": "X"}, {"kind": "Y"}]', ['X']],
+    [
+      'a v1 List, by its items',
+      'apiVersion: v1\nkind: List\nitems:\n- {apiVersion: v1, kind: A}\n',
+      ['A'],
+    ],
+    [
+      'an object reference, which looks like a resource',
+      'apiVersion: v1\nkind: Secret\nname: s\n',
+      ['Secret'],
+    ],
+    ['a value', 'teams: []\nmax: 3\n', []],
+    ['a value that holds a resource', 'template:\n  apiVersion: v1\n  kind: Pod\n', []],
+    ['a list of values', '- name: a\n  kind: x\n', []],
+    ['a JSON value that holds a resource', '{"template": {"apiVersion": "v1", "kind": "Pod"}}', []],
+    ['YAML it cannot read', 'apiVersion: v1\nkind: [\n', []],
+    ['nothing', '', []],
+  ])('reads the kinds of %s at its root', (_name, text, expected) => {
+    expect(pastedKinds(text)).toEqual(expected);
+  });
+});
+
+describe('pastedPath', () => {
+  const limit = 'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\nspec: {}\n';
+  const reference = 'apiVersion: v1\nkind: Secret\nname: quota\n';
+
+  it.each([
+    ['a value at the root of its object', limit, undefined, ['ReplicaLimit'], 'none'],
+    ['the value alone', 'teams: []\n', 'spec.config', ['ReplicaLimit'], 'none'],
+    ["a resource of the value's kind", limit, 'spec.config', ['ReplicaLimit'], 'send'],
+    [
+      'a resource of another kind, such as an object reference',
+      reference,
+      'spec.ref',
+      ['ReplicaLimit'],
+      'none',
+    ],
+    [
+      "a resource when the value's kinds are not known, which may be either (#14's review)",
+      reference,
+      'spec.ref',
+      [],
+      'ask',
+    ],
+  ])('takes the path for %s: %s', (_name, text, path, kinds, expected) => {
+    expect(pastedPath(text, path, kinds)).toBe(expected);
+  });
+
+  it("asks whether the resource holds the value first, then whether it is the value (#14's review)", () => {
+    expect(pastedAsLines('Deployment', 'spec.template')).toEqual([
+      {
+        label: "$(symbol-class) Use the whole Deployment's spec.template",
+        detail: 'The value is the spec.template of each pasted Deployment',
+        value: 'whole',
+      },
+      {
+        label: '$(symbol-field) Use it as the value itself',
+        detail: 'The pasted Deployment is an example of the value, such as an object reference',
+        value: 'value',
+      },
+    ]);
   });
 });
 

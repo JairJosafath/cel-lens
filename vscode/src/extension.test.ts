@@ -139,8 +139,8 @@ describe('activate', () => {
     expect(shownErrors).toHaveLength(before + 1);
   });
 
-  it('activates on YAML files only', () => {
-    expect(manifest.activationEvents).toEqual(['onLanguage:yaml']);
+  it('activates on YAML files, and on the in-memory files of pasted examples a reload restores (#14)', () => {
+    expect(manifest.activationEvents).toEqual(['onLanguage:yaml', 'onFileSystem:cel-lens-example']);
   });
 
   it('registers the pick version command', async () => {

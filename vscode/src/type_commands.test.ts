@@ -26,7 +26,8 @@ import {
   shownErrors,
   shownInfos,
   savedDocuments,
-  untitledDocuments,
+  closedTabs,
+  openDocuments,
   visibleEditors,
   window,
   workspace,
@@ -96,6 +97,9 @@ const SHORT_LINE = '$(edit) Write a short type in .cellens…';
 const PASTE_LINE = '$(clippy) Paste an example…';
 
 const SAMPLES = 'file:///workspace/repo/config/samples/limit.yaml';
+
+/** The in-memory file of the first example of `params.spec.config`, named for its tab. */
+const EXAMPLE = 'cel-lens-example:/Example%20of%20params.spec.config.yaml';
 const SAMPLE =
   'apiVersion: rules.example.com/v1\nkind: ReplicaLimit\nspec:\n  config:\n    teams: []\n';
 
@@ -170,7 +174,14 @@ function fakeEngine(): {
       calls.push({ command, argument });
       const waiting = held.get(command);
       const given = waiting === undefined ? undefined : await waiting;
-      return given ?? answer(command, argument);
+      const answered = given ?? answer(command, argument);
+      // The engine's edit of .cellens, when it is open: one more version, not saved.
+      const edited = openDocuments.find((document) => document.uri.toString() === CELLENS);
+      if (edited !== undefined && parseChange(answered)) {
+        edited.version += 1;
+        edited.isDirty = true;
+      }
+      return answered;
     },
   };
 }
@@ -178,6 +189,17 @@ function fakeEngine(): {
 /** The UI of the flow, with the editors of pasted examples and the notes on them. */
 function uiOf(log: ReturnType<typeof window.createOutputChannel>): ReturnType<typeof typeUi> {
   return typeUi(log, new ExampleEditors(log), new ExampleNotes());
+}
+
+/** Whether an answer is of an edit the engine made: added, replaced, created, removed. */
+function parseChange(answer: unknown): boolean {
+  return (
+    typeof answer === 'object' &&
+    answer !== null &&
+    'change' in answer &&
+    answer.change !== 'unchanged' &&
+    !('selection' in answer)
+  );
 }
 
 function setUp(): {
@@ -453,37 +475,45 @@ describe('Give it a type, against the VS Code stand-in', () => {
     expect(shownErrors).toEqual([]);
   });
 
-  it('pastes an example: opens it beside the rule, and Use this example as the type writes its schema, closes it without asking, then opens .cellens beside the rule', async () => {
+  it('pastes an example: opens it beside the rule in memory, and Use this example as the type writes its schema, closes its tab without asking, then opens .cellens beside the rule', async () => {
     const { flow, engine } = setUp();
     fileTexts.set(CELLENS, WRITTEN);
     quickPicks.next = PASTE_LINE;
 
     await flow.giveType(CONFIG);
-    expect(shownDocuments).toMatchObject([
-      { uri: 'untitled:Untitled-1', viewColumn: ViewColumn.Beside },
-    ]);
+    expect(shownDocuments).toMatchObject([{ uri: EXAMPLE, viewColumn: ViewColumn.Beside }]);
     expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
 
-    const [document] = untitledDocuments;
+    const [document] = openDocuments;
     if (document !== undefined) {
       document.text += 'teams: []\n';
     }
-    await runCommand('cel-lens.useExample', 'untitled:Untitled-1');
+    await runCommand('cel-lens.useExample', EXAMPLE);
 
     expect(engine.calls.slice(1).map((call) => call.argument)).toEqual([
       { text: document?.text },
       { ...CONFIG, schema: INFERRED.schema },
       { ...CONFIG, snippet: 'schema' },
     ]);
-    expect(executedCommands.map((each) => each.command)).toContain(
-      'workbench.action.revertAndCloseActiveEditor',
-    );
-    expect(shownDocuments.map((shown) => shown.uri)).toEqual([
-      'untitled:Untitled-1',
-      'untitled:Untitled-1',
-      CELLENS,
-    ]);
+    expect(closedTabs).toEqual([EXAMPLE]);
+    expect(shownDocuments.map((shown) => shown.uri)).toEqual([EXAMPLE, CELLENS]);
     expect(diagnosticCollections[0]?.entries.get(CELLENS)).toHaveLength(1);
+  });
+
+  it('leaves .cellens unsaved when the person typed in it while the engine wrote (#14)', async () => {
+    const { flow, engine } = setUp();
+    fileTexts.set(CELLENS, WRITTEN);
+    const cellens = await workspace.openTextDocument(Uri.parse(CELLENS));
+    const written = engine.hold('cel-lens.setType');
+    quickPicks.next = '$(symbol-class) Deployment';
+
+    const giving = flow.giveType(CONFIG);
+    await settle();
+    cellens.version += 1;
+    written();
+    await giving;
+
+    expect(savedDocuments).toEqual([]);
   });
 
   it("saves .cellens once the engine wrote a kind, when it had no unsaved edits, and leaves it unsaved when it had (#9's review)", async () => {
@@ -505,8 +535,9 @@ describe('Give it a type, against the VS Code stand-in', () => {
     quickPicks.next = PASTE_LINE;
     await flow.giveType(CONFIG);
 
-    closeDocument({ uri: Uri.parse('untitled:Untitled-1') });
-    await runCommand('cel-lens.useExample', 'untitled:Untitled-1');
+    closeDocument({ uri: Uri.parse(EXAMPLE) });
+    await settle();
+    await runCommand('cel-lens.useExample', EXAMPLE);
 
     expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
     expect(shownDocuments).toHaveLength(1);

@@ -146,8 +146,11 @@ export function typeUi(
     async pasteExample(value, inside, use) {
       await examples.open(value, inside, use);
     },
-    isDirty(uri) {
-      return openDocument(uri)?.isDirty === true;
+    openState(uri) {
+      const document = openDocument(uri);
+      return document === undefined
+        ? undefined
+        : { dirty: document.isDirty, version: document.version };
     },
     async save(uri) {
       await openDocument(uri)?.save();

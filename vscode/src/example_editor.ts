@@ -1,29 +1,84 @@
 import * as vscode from 'vscode';
 
-import { EXAMPLE_CURSOR_LINE, exampleComment, moveNotes, type NotePlace } from './example_schema';
+import {
+  EXAMPLE_CURSOR_LINE,
+  USE_EXAMPLE_TITLE,
+  exampleComment,
+  moveNotes,
+  type NotePlace,
+} from './example_schema';
 import type { PasteUse } from './type_flow';
 
 /** The command that uses the example pasted in an editor `Paste an example…` opened. */
 export const USE_EXAMPLE_COMMAND = 'cel-lens.useExample';
 
-/** What the code lens above a pasted example says. */
-export const USE_EXAMPLE_TITLE = 'Use this example as the type';
+/**
+ * The scheme of the documents of pasted examples, which the extension keeps in memory: the `when`
+ * clauses of the command in the editor title and the Command Palette name it.
+ */
+export const EXAMPLE_SCHEME = 'cel-lens-example';
 
 /**
- * The context key that lists the URIs of the editors of pasted examples, for the `when` clauses
- * of the command in the editor title and the Command Palette: `resource in cel-lens.exampleDocuments`.
+ * The files of the pasted examples, in memory. Every change of one is saved here at once, so its
+ * editor is never dirty and closes without asking to save. A window reload loses them, and the
+ * editors of the window before are closed (`ExampleEditors`).
  */
-export const EXAMPLE_DOCUMENTS_CONTEXT = 'cel-lens.exampleDocuments';
+export class ExampleFiles implements vscode.FileSystemProvider {
+  private readonly files = new Map<string, { data: Uint8Array; mtime: number }>();
 
-/** The command that reverts the active editor and closes it, so it asks nothing. */
-const REVERT_AND_CLOSE = 'workbench.action.revertAndCloseActiveEditor';
+  /** The files change only through VS Code, which needs no event for that. */
+  readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> = () =>
+    new vscode.Disposable(() => undefined);
+
+  watch(): vscode.Disposable {
+    return new vscode.Disposable(() => undefined);
+  }
+
+  stat(uri: vscode.Uri): vscode.FileStat {
+    const file = this.file(uri);
+    return { type: vscode.FileType.File, ctime: 0, mtime: file.mtime, size: file.data.byteLength };
+  }
+
+  readDirectory(): [string, vscode.FileType][] {
+    return [];
+  }
+
+  createDirectory(): void {
+    throw vscode.FileSystemError.NoPermissions('pasted examples have no folders');
+  }
+
+  readFile(uri: vscode.Uri): Uint8Array {
+    return this.file(uri).data;
+  }
+
+  writeFile(uri: vscode.Uri, content: Uint8Array): void {
+    this.files.set(uri.toString(), { data: content, mtime: Date.now() });
+  }
+
+  delete(uri: vscode.Uri): void {
+    this.files.delete(uri.toString());
+  }
+
+  rename(): void {
+    throw vscode.FileSystemError.NoPermissions('pasted examples cannot be renamed');
+  }
+
+  private file(uri: vscode.Uri): { data: Uint8Array; mtime: number } {
+    const file = this.files.get(uri.toString());
+    if (file === undefined) {
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+    return file;
+  }
+}
 
 /**
  * An editor of a pasted example: its document, what using it runs, whether that runs now, and
  * what fires when it closes.
  */
 interface Example {
-  readonly document: vscode.TextDocument;
+  /** A language change gives the same URI a new document. */
+  document: vscode.TextDocument;
   readonly use: PasteUse;
   readonly closed: AbortController;
   running: boolean;
@@ -34,31 +89,82 @@ function isUri(value: unknown): value is vscode.Uri {
   return value instanceof Object && 'scheme' in value && 'fsPath' in value;
 }
 
+/** The tabs of the window that show a text document whose URI `match` takes. */
+function tabsOf(match: (uri: vscode.Uri) => boolean): vscode.Tab[] {
+  return vscode.window.tabGroups.all
+    .flatMap((group) => group.tabs)
+    .filter((tab) => tab.input instanceof vscode.TabInputText && match(tab.input.uri));
+}
+
+/** How long an example's editor waits after a change before it saves it to memory. */
+export const SAVE_DELAY_MS = 150;
+
+/** The command that saves the active editor with no save participant: no trim, no format. */
+const SAVE_WITHOUT_FORMATTING = 'workbench.action.files.saveWithoutFormatting';
+
+/** The command that reverts the active editor and closes it, so it asks nothing. */
+const REVERT_AND_CLOSE = 'workbench.action.revertAndCloseActiveEditor';
+
 /**
- * The untitled YAML editors `Paste an example…` opens beside the rule: each starts with a comment
- * that says what to paste, and has `Use this example as the type` as a code lens above it and in
- * its editor title. Using it hands its text to the flow, which closes it without asking to save
- * once the type is written; closing it otherwise writes nothing, even while it is being used.
- * The context key lives in the window, so a new instance, as after a restart of the extension
- * host, and `dispose()` empty it.
+ * The editors `Paste an example…` opens beside the rule, of in-memory YAML files named after the
+ * value, such as `Example of params.yaml`: each starts with a comment that says what to paste,
+ * and has `Use this example as the type` as a code lens above it and in its editor title. Using
+ * it hands its text to the flow, which closes it once the type is written; closing it otherwise
+ * writes nothing, even while it is being used. A change is saved to memory a moment later, while
+ * the editor is the active one, with Save without Formatting, so no save participant (trimming,
+ * formatting, code actions on save) changes what the person types, and closing it asks nothing;
+ * `TextDocument.save()` would run them on every keystroke. A language change, which closes the
+ * document and opens it again, keeps it. The editors of a window before a reload are closed, as
+ * their files are gone.
  */
 export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposable {
   private readonly examples = new Map<string, Example>();
+  private readonly files = new ExampleFiles();
+  /** The saves waiting for their delay, by URI. */
+  private readonly saves = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly registrations: vscode.Disposable[];
 
   constructor(private readonly log: Pick<vscode.LogOutputChannel, 'warn'>) {
     this.registrations = [
+      vscode.workspace.registerFileSystemProvider(EXAMPLE_SCHEME, this.files, {
+        isCaseSensitive: true,
+      }),
       vscode.commands.registerCommand(USE_EXAMPLE_COMMAND, async (resource: unknown) => {
         await this.use(resource);
       }),
-      vscode.languages.registerCodeLensProvider({ scheme: 'untitled', language: 'yaml' }, this),
+      vscode.languages.registerCodeLensProvider({ scheme: EXAMPLE_SCHEME }, this),
+      vscode.workspace.onDidChangeTextDocument(({ document }) => {
+        this.saveLater(document);
+      }),
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        const uri = vscode.window.activeTextEditor?.document.uri.toString();
+        const example = uri === undefined ? undefined : this.examples.get(uri);
+        if (example !== undefined) {
+          this.saveLater(example.document);
+        }
+      }),
       vscode.workspace.onDidCloseTextDocument((document) => {
         const uri = document.uri.toString();
-        this.examples.get(uri)?.closed.abort();
-        this.forget(uri);
+        // A language change closes the document and opens it again at once: wait for that.
+        void Promise.resolve().then(() => {
+          if (!vscode.workspace.textDocuments.some((open) => open.uri.toString() === uri)) {
+            this.drop(uri, document.uri);
+          }
+        });
+      }),
+      vscode.workspace.onDidOpenTextDocument((document) => {
+        const example = this.examples.get(document.uri.toString());
+        if (example !== undefined) {
+          example.document = document;
+        }
       }),
     ];
-    void this.updateContext(); // Never rejects: setContext only stores the value.
+    const stale = tabsOf((uri) => uri.scheme === EXAMPLE_SCHEME);
+    if (stale.length > 0) {
+      vscode.window.tabGroups.close(stale).then(undefined, (error: unknown) => {
+        this.log.warn(`Could not close the examples of the window before: ${String(error)}`);
+      });
+    }
   }
 
   /**
@@ -66,17 +172,15 @@ export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposabl
    * `inside` for a value below the root of its object.
    */
   async open(value: string, inside: boolean, use: PasteUse): Promise<void> {
-    const document = await vscode.workspace.openTextDocument({
-      language: 'yaml',
-      content: exampleComment(value, inside),
-    });
-    this.examples.set(document.uri.toString(), {
+    const uri = this.newUri(value);
+    this.files.writeFile(uri, new TextEncoder().encode(exampleComment(value, inside)));
+    const document = await vscode.workspace.openTextDocument(uri);
+    this.examples.set(uri.toString(), {
       document,
       use,
       closed: new AbortController(),
       running: false,
     });
-    await this.updateContext();
     await vscode.window.showTextDocument(document, {
       viewColumn: vscode.ViewColumn.Beside,
       selection: new vscode.Range(EXAMPLE_CURSOR_LINE, 0, EXAMPLE_CURSOR_LINE, 0),
@@ -102,8 +206,58 @@ export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposabl
     for (const registration of this.registrations) {
       registration.dispose();
     }
+    for (const timer of this.saves.values()) {
+      clearTimeout(timer);
+    }
+    this.saves.clear();
     this.examples.clear();
-    void this.updateContext(); // Never rejects: setContext only stores the value.
+  }
+
+  /**
+   * Saves a changed example to memory `SAVE_DELAY_MS` later, with Save without Formatting, which
+   * saves the active editor: one that is not active then waits until it is again.
+   */
+  private saveLater(document: vscode.TextDocument): void {
+    const uri = document.uri.toString();
+    if (document.uri.scheme !== EXAMPLE_SCHEME || !document.isDirty) {
+      return;
+    }
+    clearTimeout(this.saves.get(uri));
+    this.saves.set(
+      uri,
+      setTimeout(() => {
+        this.saves.delete(uri);
+        if (vscode.window.activeTextEditor?.document.uri.toString() === uri && document.isDirty) {
+          vscode.commands
+            .executeCommand(SAVE_WITHOUT_FORMATTING)
+            .then(undefined, (error: unknown) => {
+              this.log.warn(`Could not keep ${uri}: ${String(error)}`);
+            });
+        }
+      }, SAVE_DELAY_MS),
+    );
+  }
+
+  /** An example whose document closed for good: a use still running writes nothing, and its file goes. */
+  private drop(uri: string, resource: vscode.Uri): void {
+    this.examples.get(uri)?.closed.abort();
+    this.examples.delete(uri);
+    clearTimeout(this.saves.get(uri));
+    this.saves.delete(uri);
+    if (resource.scheme === EXAMPLE_SCHEME) {
+      this.files.delete(resource);
+    }
+  }
+
+  /** The URI of a new example of `value`, named for its tab: `Example of params.yaml`, then `(2)`. */
+  private newUri(value: string): vscode.Uri {
+    for (let count = 1; ; count += 1) {
+      const name = `Example of ${value}${count === 1 ? '' : ` (${String(count)})`}.yaml`;
+      const uri = vscode.Uri.parse(`${EXAMPLE_SCHEME}:/${encodeURIComponent(name)}`);
+      if (!this.examples.has(uri.toString())) {
+        return uri;
+      }
+    }
   }
 
   /**
@@ -137,32 +291,34 @@ export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposabl
   }
 
   /**
-   * Reverts the example's editor and closes it, in the group that shows it, so it asks nothing;
-   * an editor the person closed meanwhile is not opened again.
+   * Closes the example's editor, so nothing asks: its tabs, or, with a change not yet saved, its
+   * editor reverted and closed, as its text was used; an editor the person closed meanwhile is not
+   * opened again. A failure is logged: the type is written, and the flow goes on.
    */
   private async close({ document, closed }: Example): Promise<void> {
     if (closed.signal.aborted) {
       return;
     }
-    this.forget(document.uri.toString());
-    const shown = vscode.window.visibleTextEditors.find((editor) => editor.document === document);
-    await vscode.window.showTextDocument(document, {
-      ...(shown?.viewColumn !== undefined && { viewColumn: shown.viewColumn }),
-      preserveFocus: false,
-    });
-    await vscode.commands.executeCommand(REVERT_AND_CLOSE);
-  }
-
-  private forget(uri: string): void {
-    if (this.examples.delete(uri)) {
-      void this.updateContext(); // Never rejects: setContext only stores the value.
+    const uri = document.uri.toString();
+    this.examples.delete(uri);
+    clearTimeout(this.saves.get(uri));
+    this.saves.delete(uri);
+    try {
+      if (document.isDirty) {
+        const shown = vscode.window.visibleTextEditors.find(
+          (editor) => editor.document === document,
+        );
+        await vscode.window.showTextDocument(document, {
+          ...(shown?.viewColumn !== undefined && { viewColumn: shown.viewColumn }),
+          preserveFocus: false,
+        });
+        await vscode.commands.executeCommand(REVERT_AND_CLOSE);
+      } else {
+        await vscode.window.tabGroups.close(tabsOf((each) => each.toString() === uri));
+      }
+    } catch (error) {
+      this.log.warn(`Could not close ${uri}: ${String(error)}`);
     }
-  }
-
-  private async updateContext(): Promise<void> {
-    await vscode.commands.executeCommand('setContext', EXAMPLE_DOCUMENTS_CONTEXT, [
-      ...this.examples.keys(),
-    ]);
   }
 }
 

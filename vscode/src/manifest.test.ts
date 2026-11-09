@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { EXAMPLE_DOCUMENTS_CONTEXT, USE_EXAMPLE_COMMAND } from './example_editor';
+import { EXAMPLE_SCHEME, USE_EXAMPLE_COMMAND } from './example_editor';
 
 interface Command {
   command: string;
@@ -35,6 +35,8 @@ const INTERNAL_COMMANDS = [
   'cel-lens.removeType',
 ];
 const SHOWN_WITHOUT_YAML = ['cel-lens.showLogs'];
+/** Shown only on the editor of a pasted example, whatever its language. */
+const SHOWN_ON_EXAMPLES = ['cel-lens.useExample'];
 const SETTINGS = Object.entries(configuration.properties);
 const TITLE_VERBS = [
   'Choose',
@@ -83,6 +85,8 @@ describe('commands in package.json', () => {
         expect(entry?.when).toBe('false');
       } else if (SHOWN_WITHOUT_YAML.includes(name)) {
         expect(entry?.when).toBe('true');
+      } else if (SHOWN_ON_EXAMPLES.includes(name)) {
+        expect(entry?.when).toBe('resourceScheme == cel-lens-example');
       } else {
         expect(entry?.when).toContain('editorLangId == yaml');
       }
@@ -91,21 +95,15 @@ describe('commands in package.json', () => {
 });
 
 describe('Use This Example as the Type', () => {
-  const where = `resource in ${EXAMPLE_DOCUMENTS_CONTEXT}`;
+  const where = `resourceScheme == ${EXAMPLE_SCHEME}`;
 
-  it('shows in the Command Palette only on the editor of a pasted example', () => {
-    expect(menus.commandPalette.find((e) => e.command === USE_EXAMPLE_COMMAND)?.when).toBe(
-      `editorLangId == yaml && ${where}`,
-    );
+  it('shows in the Command Palette only on the editor of a pasted example, by its scheme (#14)', () => {
+    expect(menus.commandPalette.find((e) => e.command === USE_EXAMPLE_COMMAND)?.when).toBe(where);
   });
 
-  it("is the one icon of the editor title, shown only on the editor of a pasted example, which is YAML (#9's review)", () => {
+  it('is the one icon of the editor title, shown only on the editor of a pasted example, by its scheme (#14)', () => {
     expect(menus['editor/title']).toEqual([
-      {
-        command: USE_EXAMPLE_COMMAND,
-        when: `editorLangId == yaml && ${where}`,
-        group: 'navigation',
-      },
+      { command: USE_EXAMPLE_COMMAND, when: where, group: 'navigation' },
     ]);
     expect(commands.find((c) => c.command === USE_EXAMPLE_COMMAND)).toEqual({
       command: USE_EXAMPLE_COMMAND,

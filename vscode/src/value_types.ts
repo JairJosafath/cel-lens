@@ -683,6 +683,24 @@ export function snippetRefusal(error: unknown): string | undefined {
     : undefined;
 }
 
+/** Whether an engine command was refused with `InvalidParams` and a message that starts with `start`. */
+function refusedWith(error: unknown, start: string): boolean {
+  return (
+    isRecord(error) &&
+    error['code'] === INVALID_PARAMS &&
+    typeof error['message'] === 'string' &&
+    error['message'].startsWith(start)
+  );
+}
+
+/**
+ * Whether the engine does not know `cel-lens.inferType`, as one older than this extension's
+ * examples answers: `unknown command "cel-lens.inferType": cel-lens runs …`.
+ */
+export function unknownInferType(error: unknown): boolean {
+  return refusedWith(error, `unknown command "${ENGINE_INFER_TYPE}"`);
+}
+
 /** The line of the Go types picker when the engine lists none. */
 export const NO_GO_TYPES_LINE: PickEntry<TypeChoice> = {
   label: '$(info) No Go types in the workspace',

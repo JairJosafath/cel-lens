@@ -1,4 +1,7 @@
+import { parseAllDocuments } from 'yaml';
+
 import { isRecord } from './is_record';
+import type { PickEntry } from './value_types';
 
 /** The answer of `cel-lens.inferType`: the schema worked out from examples, and what they leave open. */
 export interface InferredSchema {
@@ -44,30 +47,90 @@ export function exampleComment(value: string, inside: boolean): string {
   ].join('\n');
 }
 
+/** What the code lens above a pasted example says, and the title of the question about it. */
+export const USE_EXAMPLE_TITLE = 'Use this example as the type';
+
 /** The line of the editor of a pasted example the cursor starts on: the one below the comment. */
 export const EXAMPLE_CURSOR_LINE = 3;
 
-/** Whether a parsed JSON value is an object with an `apiVersion` and a `kind`. */
-function isResource(value: unknown): boolean {
-  return isRecord(value) && 'apiVersion' in value && 'kind' in value;
+/**
+ * The kind of a parsed value that is a resource, with an `apiVersion` and a `kind`; the kinds of
+ * its items for a `List`, whose items the engine takes as the examples.
+ */
+function resourceKind(value: unknown): string[] {
+  if (
+    !isRecord(value) ||
+    typeof value['apiVersion'] !== 'string' ||
+    typeof value['kind'] !== 'string'
+  ) {
+    return [];
+  }
+  const items = value['items'];
+  return value['kind'] === 'List' && Array.isArray(items)
+    ? items.flatMap(resourceKind)
+    : [value['kind']];
 }
 
 /**
- * Whether a pasted example is a whole resource, with `apiVersion` and `kind` at its root, rather
- * than the value itself: JSON, an object or a list of them, or YAML whose documents have both
- * keys at their root, at the start of a line. Comment lines are left out.
+ * The kinds of the resources a pasted example is, at its root: each YAML or JSON document a
+ * resource, or a list of them, in any style YAML writes them (block or flow, any indentation);
+ * `[]` for an example of a value alone, whose root has no `apiVersion` and `kind`, and for a
+ * document YAML cannot read, which the engine then says what is wrong with.
  */
-export function isWholeResource(text: string): boolean {
-  const lines = text.split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#'));
-  try {
-    const parsed: unknown = JSON.parse(lines.join('\n'));
-    return Array.isArray(parsed) ? parsed.some(isResource) : isResource(parsed);
-  } catch {
-    return (
-      lines.some((line) => /^apiVersion\s*:/.test(line)) &&
-      lines.some((line) => /^kind\s*:/.test(line))
-    );
+export function pastedKinds(text: string): string[] {
+  return parseAllDocuments(text).flatMap((document) => {
+    if (document.errors.length > 0) {
+      return [];
+    }
+    let root: unknown;
+    try {
+      root = document.toJS();
+    } catch {
+      return []; // Such as too many aliases: the engine says what is wrong with it.
+    }
+    return Array.isArray(root) ? root.flatMap(resourceKind) : resourceKind(root);
+  });
+}
+
+/**
+ * How `cel-lens.inferType` takes a pasted example for a value: `none`, as the value itself, for a
+ * value at the root of its object or an example with no resource at its root; `send`, with the
+ * value's path, for resources of a kind the value is in (`kinds`, from the examples of the
+ * workspace); `none` for resources of another kind, such as an object reference the value is;
+ * and `ask` when the value's kinds are not known, as the resource may be either.
+ */
+export function pastedPath(
+  text: string,
+  path: string | undefined,
+  kinds: readonly string[],
+): 'none' | 'send' | 'ask' {
+  const pasted = pastedKinds(text);
+  if (path === undefined || pasted.length === 0) {
+    return 'none';
   }
+  if (kinds.length === 0) {
+    return 'ask';
+  }
+  return pasted.some((kind) => kinds.includes(kind)) ? 'send' : 'none';
+}
+
+/** The answer of the question `pastedPath` asks: the value at its path in the resource, or the resource itself. */
+export type PastedAs = 'whole' | 'value';
+
+/** The lines of the question whether a pasted resource holds the value or is it, the first likelier. */
+export function pastedAsLines(kind: string, path: string): PickEntry<PastedAs>[] {
+  return [
+    {
+      label: `$(symbol-class) Use the whole ${kind}'s ${path}`,
+      detail: `The value is the ${path} of each pasted ${kind}`,
+      value: 'whole',
+    },
+    {
+      label: '$(symbol-field) Use it as the value itself',
+      detail: `The pasted ${kind} is an example of the value, such as an object reference`,
+      value: 'value',
+    },
+  ];
 }
 
 /** A note of `cel-lens.inferType` at the line of `.cellens` it is about. */
