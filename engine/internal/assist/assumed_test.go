@@ -308,3 +308,55 @@ func TestInferredVariableTypes(t *testing.T) {
 		t.Errorf("Summaries(#22 policy) values of the validation = %+v,\nwant %+v", last.Values, want)
 	}
 }
+
+// TestVariableFailingWithAssumedHover is #27: hover on a policy variable
+// whose expression compiles without the types of .cellens but not with them,
+// as params.maxReplicaz with params typed, says so and names the entry, in a
+// MutatingAdmissionPolicy too, which no check types with them; it no longer
+// says the variable reads a value of unknown type.
+func TestVariableFailingWithAssumedHover(t *testing.T) {
+	t.Parallel()
+	a, err := assist.New(kubeversion.Default(), allOn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	validating := strings.Replace(replicaLimitPolicy, "{name: limit, expression: params.maxReplicas}", "{name: limit, expression: params.maxReplicaz}", 1)
+	mutating := `apiVersion: admissionregistration.k8s.io/v1beta1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: replica-limit
+spec:
+  paramKind: {apiVersion: rules.example.com/v1, kind: ReplicaLimit}
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments], operations: [CREATE]}
+  variables:
+    - {name: limit, expression: params.maxReplicaz}
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: "Object{spec: Object.spec{replicas: variables.limit}}"
+`
+	for _, tc := range []struct{ kind, text, needle string }{
+		{"ValidatingAdmissionPolicy", validating, "variables.limit &&"},
+		{"MutatingAdmissionPolicy", mutating, "variables.limit}}"},
+	} {
+		kind, text := tc.kind, tc.text
+		params := replicaLimitParams()
+		params.Kind = kind
+		h, ok := a.Hover(assumedDoc(text, params), posIn(t, text, tc.needle, len("variables.l")))
+		want := []string{
+			"(field) limit: dyn",
+			"Its expression does not compile with params, typed from the schema at .cellens, line 6, so it is dyn.",
+			"dyn: the expression of this policy variable does not compile with the types .cellens gives the values it reads",
+		}
+		for _, w := range want {
+			if !ok || !strings.Contains(h.Markdown, w) {
+				t.Errorf("Hover(%s variables.limit) = %q, want it to contain %q", kind, h.Markdown, w)
+			}
+		}
+		if strings.Contains(h.Markdown, "not known") {
+			t.Errorf("Hover(%s variables.limit) = %q, still says it reads a value of unknown type", kind, h.Markdown)
+		}
+	}
+}

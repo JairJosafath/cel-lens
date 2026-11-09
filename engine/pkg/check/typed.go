@@ -53,14 +53,69 @@ func (r *reporter) typeCheck(ctx context.Context, p *admissionregistrationv1.Val
 
 // compileValidations stores the variables of p in composite, compiles each
 // expression of the validations that is in clean, and calls fail with the
-// issues of each one that does not compile.
-func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, fail func(e extract.Expression, issues []string)) error {
-	for _, v := range p.Spec.Variables {
-		composite.CompileAndStoreVariable(accessor{name: v.Name, expression: v.Expression, returns: anyTypes}, decls, environment.NewExpressions)
-	}
+// issues of each one that does not compile. A variable in clean that does
+// not compile is reported by storeChecked.
+func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, kind matchkind.Kind, fail func(e extract.Expression, issues []string)) error {
+	r.storeChecked(composite, decls, p.Spec.Variables, exprs, clean, kind)
 	return eachValidation(ctx, p, exprs, clean, func(text string) *apiservercel.Error {
 		return composite.CompileCELExpression(accessor{expression: text}, decls, environment.NewExpressions).Error
 	}, fail)
+}
+
+// ownCheckNote is what a problem of a variable that only cel-lens's own
+// check of it finds adds to its message.
+const ownCheckNote = " (cel-lens checks a variable with the type of the kind matched, which the API server's type check skips: the API server would not report this)"
+
+// storeChecked stores variables, in order, in composite, the compiler of the
+// type checker for kind, and reports, as a warning that names kind, each
+// issue of a variable in clean that does not compile there: the API
+// server's type checker skips variables, but the variable is dyn then, and
+// nothing else would say why.
+func (r *reporter) storeChecked(composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, variables []admissionregistrationv1.Variable, exprs map[string]extract.Expression, clean map[string]bool, kind matchkind.Kind) {
+	for i, v := range variables {
+		res := composite.CompileAndStoreVariable(accessor{name: v.Name, expression: v.Expression, returns: anyTypes}, decls, environment.NewExpressions)
+		field := fmt.Sprintf("spec.variables[%d].expression", i)
+		e, ok := exprs[field]
+		if res.Error == nil || res.Error.Type != apiservercel.ErrorTypeInvalid || !ok || !clean[field] {
+			continue
+		}
+		from := len(r.diags)
+		r.reportAs(e, SeverityWarning, kind.String()+": ", strings.Join(issuesOf(res.Error.Detail), "\n"))
+		for j := from; j < len(r.diags); j++ {
+			r.diags[j].Message += ownCheckNote
+		}
+	}
+}
+
+// checkVariables does storeChecked for each kind the policy p matches, as
+// typeCheck does with its validations, for a policy whose validations are
+// not type checked, a MutatingAdmissionPolicy: its variables are typed with
+// the kinds all the same (see VariableTypes).
+func (r *reporter) checkVariables(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool) error {
+	if p.Spec.MatchConstraints == nil || len(p.Spec.Variables) == 0 {
+		return nil
+	}
+	rules := make([]matchkind.Rule, len(p.Spec.MatchConstraints.ResourceRules))
+	for i, rule := range p.Spec.MatchConstraints.ResourceRules {
+		rules[i] = matchkind.Rule{Groups: rule.APIGroups, Versions: rule.APIVersions, Resources: rule.Resources}
+	}
+	kinds, ok := r.crds.Resolve(rules)
+	if !ok {
+		return nil
+	}
+	for _, kind := range kinds {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		composite, decls, err := r.typedComposite(p, kind)
+		if err != nil {
+			return err
+		}
+		if composite != nil {
+			r.storeChecked(composite, decls, p.Spec.Variables, exprs, clean, kind)
+		}
+	}
+	return nil
 }
 
 // eachValidation compiles each expression of the validations of p that is in
@@ -102,7 +157,7 @@ func (r *reporter) typeCheckKind(ctx context.Context, p *admissionregistrationv1
 	if err != nil || composite == nil {
 		return err
 	}
-	return r.compileValidations(ctx, composite, decls, p, exprs, clean, func(e extract.Expression, issues []string) {
+	return r.compileValidations(ctx, composite, decls, p, exprs, clean, kind, func(e extract.Expression, issues []string) {
 		r.reportAs(e, SeverityWarning, kind.String()+": ", strings.Join(issues, "\n"))
 	})
 }

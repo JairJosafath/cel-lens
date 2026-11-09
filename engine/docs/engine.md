@@ -490,6 +490,18 @@ mutation must return `Object` (`applyConfiguration`) or a list of `JSONPatch`
 (`jsonPatch`), and `object` and `oldObject` are typed for completion and hover
 but not checked against the matched kinds, as the API server does not.
 
+A variable whose expression compiles, but not with the type of a kind the
+policy matches, is `dyn`, and hover says it does not compile. The API
+server's type checker skips variables, so it reports nothing; the engine
+checks each variable with each matched kind's type, in a
+ValidatingAdmissionPolicy and in a MutatingAdmissionPolicy, whose variables
+it types with the kinds too, and the problem is a warning at the expression
+that names the kind and says it is the engine's own check:
+`apps/v1 Deployment: undefined field 'replicaz' (cel-lens checks a variable
+with the type of the kind matched, which the API server's type check skips:
+the API server would not report this)`. A matched kind whose schema gives no
+CEL type types nothing, and the variable is typed without it.
+
 ## Typed `params`
 
 Typing `params` from a CustomResourceDefinition is the experimental feature

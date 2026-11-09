@@ -245,6 +245,9 @@ func (p *policyTypes) variables(e extract.Expression) schema {
 			s[dynKey] = string(reasonVarUncompiled)
 		case check.DynKindsDiffer:
 			s[dynKey] = string(reasonVarKinds)
+		case check.DynAssumedUncompiled:
+			s[dynKey] = string(reasonVarAssumed)
+			failsWith(s, tv)
 		}
 		s["description"] = fmt.Sprintf("Policy variable %s, defined in spec.variables by %#q.", tv.Name, tv.Expression)
 		if len(tv.Assumed) > 0 && tv.Dyn == "" {

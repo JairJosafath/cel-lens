@@ -145,7 +145,8 @@ func (r *reporter) policy(ctx context.Context, node *yaml.Node, exprs map[string
 // ValidatingAdmissionPolicy, with object and oldObject as dyn, and the types of
 // patches: Object for an applyConfiguration, JSONPatch for a jsonPatch. The API
 // server does not type check the expressions of a mutating policy against the
-// kinds it matches, and nor does this.
+// kinds it matches, and nor does this, but for its variables, which the
+// engine types with those kinds (see checkVariables).
 func (r *reporter) mutatingPolicy(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression) error {
 	var p admissionregistrationv1.MutatingAdmissionPolicy
 	if _, err := r.read(ctx, node, &p); err != nil {
@@ -157,6 +158,14 @@ func (r *reporter) mutatingPolicy(ctx context.Context, node *yaml.Node, exprs ma
 		return fmt.Errorf("build CEL environment: %w", err)
 	}
 	if err := pc.common(ctx, composite, p.Spec.Variables, p.Spec.MatchConditions); err != nil {
+		return err
+	}
+	// Its variables are typed with the kinds matched (see VariableTypes), so
+	// one that does not compile with them is reported, as for a
+	// ValidatingAdmissionPolicy.
+	var typed admissionregistrationv1.ValidatingAdmissionPolicy
+	typed.Spec.ParamKind, typed.Spec.MatchConstraints, typed.Spec.Variables = p.Spec.ParamKind, p.Spec.MatchConstraints, p.Spec.Variables
+	if err := r.checkVariables(ctx, &typed, exprs, pc.clean); err != nil {
 		return err
 	}
 	pc.decls.HasPatchTypes = true

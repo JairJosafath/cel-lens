@@ -36,6 +36,9 @@ const (
 	reasonVarUncompiled dynReason = "variable-uncompiled"
 	// reasonVarKinds: the matched kinds give the variable different types.
 	reasonVarKinds dynReason = "variable-kinds-differ"
+	// reasonVarAssumed: the variable's expression does not compile with the
+	// types .cellens gives the values it reads.
+	reasonVarAssumed dynReason = "variable-assumed-uncompiled"
 )
 
 // dynKey is the extension of a schema that records why the value is dyn.
@@ -68,6 +71,8 @@ func (r dynReason) text() string {
 		return "the expression of this policy variable does not compile, so it has no type"
 	case reasonVarKinds:
 		return "the kinds this policy matches give this policy variable different types"
+	case reasonVarAssumed:
+		return "the expression of this policy variable does not compile with the types .cellens gives the values it reads"
 	}
 	return ""
 }

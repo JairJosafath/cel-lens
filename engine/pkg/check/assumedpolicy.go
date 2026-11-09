@@ -49,22 +49,24 @@ func (r *reporter) typeCheckAssumed(ctx context.Context, p *admissionregistratio
 		return err
 	}
 	for _, ps := range passes {
-		var own []*celgo.Type // the API server's types of the variables for ps.kind, made when needed
+		// own are the API server's types of the variables for ps.kind, made
+		// when first needed; nil when the kind has no type.
+		var own []*celgo.Type
+		ownMade := false
 		for i, detail := range ps.failures {
 			field := fmt.Sprintf("spec.variables[%d].expression", i)
 			e, ok := exprs[field]
 			if !ok || !clean[field] || detail == "" || len(pl.reads[i].types) == 0 {
 				continue
 			}
-			if ps.kind != nil {
-				if own == nil {
-					if own, err = r.typedVariables(p, *ps.kind); err != nil {
-						return err
-					}
+			if ps.kind != nil && !ownMade {
+				if own, err = r.typedVariables(p, *ps.kind); err != nil {
+					return err
 				}
-				if own[i] == nil {
-					continue // it fails with the kind's own type: the API server's to report, which it does not
-				}
+				ownMade = true
+			}
+			if i < len(own) && own[i] == nil {
+				continue // it fails with the kind's own type: storeChecked reports that
 			}
 			r.reportAs(e, SeverityWarning, ps.prefix, strings.Join(issuesOf(detail), "\n"))
 		}
@@ -157,14 +159,12 @@ func (r *reporter) assumedPasses(pk *admissionregistrationv1.ParamKind, variable
 
 // typedVariables returns the types the expressions of the variables of p
 // return as the API server's type checker composes them for kind, in order:
-// nil for one that does not compile, and for each when the kind has no type.
+// nil for one that does not compile. It returns nil when the kind has no
+// type, so nothing is known of them.
 func (r *reporter) typedVariables(p *admissionregistrationv1.ValidatingAdmissionPolicy, kind matchkind.Kind) ([]*celgo.Type, error) {
 	composite, decls, err := r.typedComposite(p, kind)
-	if err != nil {
+	if err != nil || composite == nil {
 		return nil, err
-	}
-	if composite == nil {
-		return make([]*celgo.Type, len(p.Spec.Variables)), nil
 	}
 	return storeVariables(composite, decls, p.Spec.Variables), nil
 }

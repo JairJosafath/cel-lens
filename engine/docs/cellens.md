@@ -281,9 +281,10 @@ variable whose expression returns an object, `dyn` to the API server, stays
 `dyn` and can have an entry of its own; an entry for `variables.<name>` gives
 the variable its type, whatever its expression returns, and later variables
 see that type. A variable whose expression fails only with the types, such
-as `params.maxReplicaz`, gets that problem as a warning, as a rule does; in a
-MutatingAdmissionPolicy, which nothing checks with the types, it keeps the
-type Kubernetes gives it.
+as `params.maxReplicaz`, gets that problem as a warning, as a rule does, and
+hover says its expression does not compile with the types and names the
+entries, in a MutatingAdmissionPolicy too, which nothing checks with the
+types.
 
 Completion after a typed value offers its fields, and hover shows the type as
 the entry writes it, a schema's or a Go type's as a `type:` entry would write

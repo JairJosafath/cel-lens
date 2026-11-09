@@ -212,7 +212,10 @@ func engineWarnings(ctx context.Context, name string, c truthCase) ([]string, er
 	}
 	var out []string
 	for _, d := range diags {
-		if d.Severity == check.SeverityWarning {
+		// A warning of the engine's own check, such as of a variable the
+		// API server's type check skips (#27), says the API server would
+		// not report it: it is no line of status.typeChecking.
+		if d.Severity == check.SeverityWarning && !strings.HasSuffix(d.Message, ": the API server would not report this)") {
 			out = append(out, d.Message)
 		}
 	}

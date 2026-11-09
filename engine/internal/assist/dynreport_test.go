@@ -19,7 +19,7 @@ import (
 // allDynReasons lists every dynReason; TestDynReport fails on a hover reason not in it.
 var allDynReasons = []dynReason{
 	reasonWildcard, reasonNoRule, reasonUnknownKind, reasonParamKind, reasonOpenSchema, reasonNoType,
-	reasonVariable, reasonVarResult, reasonVarInput, reasonVarUncompiled, reasonVarKinds,
+	reasonVariable, reasonVarResult, reasonVarInput, reasonVarUncompiled, reasonVarKinds, reasonVarAssumed,
 }
 
 // dynTally is what the dyn report counts for a set of policies.

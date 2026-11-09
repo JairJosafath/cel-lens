@@ -53,20 +53,33 @@ func marked(t check.AssumedType) map[string]any {
 // which, and where they are written.
 func inferred(s map[string]any, v check.Variable) map[string]any {
 	out := assume.Copy(s)
-	from := make([]string, len(v.Assumed))
-	for i, t := range v.Assumed {
+	mark(out, "Its type follows from "+typedFrom(v.Assumed)+": Kubernetes leaves this value dyn.")
+	out[inferredKey] = v.Type
+	if len(v.Assumed) > 0 {
+		out[inferredFromKey] = map[string]any{"source": v.Assumed[0].Source, "line": v.Assumed[0].Line}
+	}
+	return out
+}
+
+// typedFrom names the values of types and where their types are written:
+// "params, typed from .cellens, line 5", and the next after ", and ".
+func typedFrom(types []check.AssumedType) string {
+	from := make([]string, len(types))
+	for i, t := range types {
 		where := t.From
 		if where == "" {
 			where = fmt.Sprintf("%s, line %d", t.Source, t.Line)
 		}
 		from[i] = assume.Name(t.Variable, t.Path) + ", typed from " + where
 	}
-	mark(out, "Its type follows from "+strings.Join(from, ", and ")+": Kubernetes leaves this value dyn.")
-	out[inferredKey] = v.Type
-	if len(v.Assumed) > 0 {
-		out[inferredFromKey] = map[string]any{"source": v.Assumed[0].Source, "line": v.Assumed[0].Line}
-	}
-	return out
+	return strings.Join(from, ", and ")
+}
+
+// failsWith marks s, the schema of the policy variable v, whose expression
+// compiles without the types v.Assumed but not with them: hover says so,
+// and names them.
+func failsWith(s map[string]any, v check.Variable) {
+	s[assumedKey] = "Its expression does not compile with " + typedFrom(v.Assumed) + ", so it is dyn."
 }
 
 func mark(s map[string]any, note string) {

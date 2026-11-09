@@ -43,6 +43,9 @@ const (
 	DynKindsDiffer = "kinds-differ"
 	// DynInput: the expression is already dyn, because it reads a value of unknown type.
 	DynInput = "input-dyn"
+	// DynAssumedUncompiled: the expression compiles without the types of
+	// WithAssumedTypes, but not with them; Assumed lists those it reads.
+	DynAssumedUncompiled = "assumed-uncompiled"
 )
 
 // VariableTypes returns the variables of the ValidatingAdmissionPolicy or
@@ -172,17 +175,13 @@ func (r *reporter) assumedVariables(ctx context.Context, root map[string]any, in
 	for k, ps := range passes {
 		perPass[k] = ps.outputs
 	}
-	// Check reports the expression of a variable that fails only with the
-	// types where it type checks with them, in a ValidatingAdmissionPolicy;
-	// elsewhere nothing would show why such a variable does not compile.
-	checked := kind == "ValidatingAdmissionPolicy"
 	for i, v := range vars {
 		if _, named := pl.variables[v.Name]; named || len(pl.reads[i].types) == 0 {
 			continue // a type that names it gives its type, or it reads none
 		}
 		t, why := variableType(perPass, i)
-		if why == DynUncompiled && v.Dyn != DynUncompiled && !checked {
-			continue
+		if why == DynUncompiled && v.Dyn != DynUncompiled {
+			why = DynAssumedUncompiled // which Assumed then names
 		}
 		if t.String() != v.Type || why != v.Dyn {
 			vars[i].Type, vars[i].Schema, vars[i].Dyn, vars[i].Assumed = t.String(), typeSchema(t), why, pl.reads[i].types

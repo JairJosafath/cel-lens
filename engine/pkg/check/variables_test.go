@@ -233,8 +233,8 @@ func TestCheckWithVariableTypedFromAssumed(t *testing.T) {
 // whose expression fails only with the types .cellens assumes, as
 // params.maxReplicaz with params typed, gets the warning only that type
 // shows, as a validation does, so its dyn is explained where it is written;
-// without the types it has none. In a MutatingAdmissionPolicy, which no check
-// types with them, such a variable keeps the API server's type and reason.
+// without the types it has none. Its reason names those types, in a
+// MutatingAdmissionPolicy too, which no check types with them (#27).
 func TestCheckVariableWrongOnlyWithAssumed(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(strings.Replace(replicaLimitPolicy, "VALIDATION", strconv.Quote("object.spec.replicas <= variables.limit"), 1),
@@ -263,9 +263,10 @@ func TestCheckVariableWrongOnlyWithAssumed(t *testing.T) {
 			t.Errorf("Check(%s) = %q, want %q", tc.name, got, tc.wants)
 		}
 	}
+	// #27: in both, the reason names the types the failure comes from.
 	for _, tc := range []struct{ kind, dyn string }{
-		{"ValidatingAdmissionPolicy", check.DynUncompiled},
-		{"MutatingAdmissionPolicy", check.DynInput},
+		{"ValidatingAdmissionPolicy", check.DynAssumedUncompiled},
+		{"MutatingAdmissionPolicy", check.DynAssumedUncompiled},
 	} {
 		var root map[string]any
 		if err := yaml.Unmarshal([]byte(strings.Replace(doc, "kind: ValidatingAdmissionPolicy", "kind: "+tc.kind, 1)), &root); err != nil {
@@ -279,8 +280,85 @@ func TestCheckVariableWrongOnlyWithAssumed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got[0].Type != "dyn" || got[0].Dyn != tc.dyn {
-			t.Errorf("VariableTypes(%s)[0] = %s, dyn %q, want dyn %q", tc.kind, got[0].Type, got[0].Dyn, tc.dyn)
+		if got[0].Type != "dyn" || got[0].Dyn != tc.dyn || len(got[0].Assumed) != 1 || got[0].Assumed[0].Variable != "params" {
+			t.Errorf("VariableTypes(%s)[0] = %s, dyn %q, assumed %v, want dyn %q from params", tc.kind, got[0].Type, got[0].Dyn, got[0].Assumed, tc.dyn)
 		}
+	}
+}
+
+// variablePolicy is a policy of KIND, with params of a kind no CRD defines,
+// that matches deployments and RESOURCES, with the variable VARIABLE.
+const variablePolicy = `apiVersion: admissionregistration.k8s.io/v1
+kind: KIND
+metadata:
+  name: replicas
+spec:
+  paramKind: {apiVersion: rules.example.com/v1, kind: ReplicaLimit}
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], operations: [CREATE], resources: [deployments]}
+      RESOURCES
+  variables:
+    - name: replicas
+      expression: VARIABLE
+`
+
+// untypedCRD is a CustomResourceDefinition whose schema gives its kind no
+// CEL type.
+const untypedCRD = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata: {name: loose.example.com}
+spec:
+  group: example.com
+  names: {plural: loose, singular: loose, kind: Loose}
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: {x-kubernetes-preserve-unknown-fields: true}
+`
+
+// TestVariableProblemsShown is #27: every policy variable the engine types
+// as one that does not compile gets a warning at its expression that says
+// why, labelled as the engine's own check, which the API server would not
+// report: one that fails with the type of the kind matched, which the API
+// server's type checker skips, in a ValidatingAdmissionPolicy and in a
+// MutatingAdmissionPolicy, whose variables the engine types with the kinds
+// too; also beside a matched kind without a type. One that does not compile
+// at all keeps the API server's error alone.
+func TestVariableProblemsShown(t *testing.T) {
+	t.Parallel()
+	const own = "apps/v1 Deployment: undefined field 'replicaz' (cel-lens checks a variable with the type of the kind matched, which the API server's type check skips: the API server would not report this)"
+	crds := check.WithCRDs(loadCRDs(t, map[string]string{"loose.yaml": untypedCRD}))
+	for _, tc := range []struct {
+		name, kind, resources, variable string
+		want                            []string
+	}{
+		{"validating", "ValidatingAdmissionPolicy", "", "object.spec.replicaz", []string{"warning " + own}},
+		{"mutating", "MutatingAdmissionPolicy", "", "object.spec.replicaz", []string{"warning " + own}},
+		{"beside a kind without a type", "ValidatingAdmissionPolicy", "- {apiGroups: [example.com], apiVersions: [v1], operations: [CREATE], resources: [loose]}", "object.spec.replicaz", []string{"warning " + own}},
+		{"compiles", "ValidatingAdmissionPolicy", "", "object.spec.replicas", nil},
+		{"no compile at all", "ValidatingAdmissionPolicy", "", "object.spec.replicas +", []string{"error "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			doc := strings.NewReplacer("KIND", tc.kind, "RESOURCES", tc.resources, "VARIABLE", strconv.Quote(tc.variable)).Replace(variablePolicy)
+			diags, err := check.Check(t.Context(), "policy.yaml", []byte(doc), allOn(), crds)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, d := range diags {
+				if d.Start.Line != 13 {
+					t.Errorf("Check(%s) diagnostic %+v, want it on line 13, the variable's", tc.name, d)
+				}
+				got = append(got, string(d.Severity)+" "+d.Message)
+			}
+			if len(got) != len(tc.want) || len(got) > 0 && !strings.HasPrefix(got[0], tc.want[0]) {
+				t.Errorf("Check(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
 	}
 }

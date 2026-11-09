@@ -305,6 +305,8 @@ func TestAssumedPolicyTypeWithMatchedKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
+		// #27: cfg reads object.spec.config, which Deployment has not.
+		"warning apps/v1 Deployment: undefined field 'config' (cel-lens checks a variable with the type of the kind matched, which the API server's type check skips: the API server would not report this)",
 		"warning apps/v1 Deployment: undefined field 'nosuch' (the type comes from policies/.cellens:2: the API server would not report this)",
 		"warning apps/v1 Deployment: undefined field 'nosuch'",
 	}
