@@ -51,8 +51,9 @@ func scope(doc *Document, e extract.Expression, v kubeversion.Version, on featur
 	case "CustomResourceDefinition":
 		return crdScope(root, e, on.Has(feature.FittingCompletion))
 	case "ValidatingAdmissionPolicy", "MutatingAdmissionPolicy":
-		vars := policyScope(root, e, v, doc.crds, on.Has(feature.CRDTypedPolicies))
-		assumeInPolicy(vars, doc.assumedFor(root))
+		assumed := doc.assumedFor(root)
+		vars := newPolicyTypes(root, v, doc.crds, on.Has(feature.CRDTypedPolicies), nil, assumed).scope(e, true)
+		assumeInPolicy(vars, assumed)
 		return vars
 	}
 	return nil
@@ -111,13 +112,6 @@ func hasSegment(path, name string) bool {
 	return ok && (rest == "" || rest[0] == '.' || rest[0] == '[')
 }
 
-// policyScope declares the variables of the admission CEL environment:
-// params only when the policy has a paramKind, variables only for the
-// expressions that may use them.
-func policyScope(root map[string]any, e extract.Expression, v kubeversion.Version, crds *check.CRDs, typeFromCRDs bool) []variable {
-	return newPolicyTypes(root, v, crds, typeFromCRDs, nil).scope(e, true)
-}
-
 // policyTypes are what the variables of a policy's expressions are made of
 // that is the same for every expression: the kinds it matches, its params and
 // the types of all its variables. Working them out is most of the cost of a
@@ -129,6 +123,9 @@ type policyTypes struct {
 	params     *variable // nil without spec.paramKind
 	version    kubeversion.Version
 	crds       *check.CRDs // nil unless crd-typed-policies is on
+	// assumed are the types .cellens assumes for the policy, which type its
+	// variables too (see variables).
+	assumed []check.AssumedType
 	// typed are the variables of spec.variables as check.VariableTypes types
 	// them, worked out when first needed (see variables); typedErr is set
 	// when it cannot type them, and they are then dyn.
@@ -138,11 +135,14 @@ type policyTypes struct {
 
 // newPolicyTypes works out the policyTypes of root, a policy, for Kubernetes
 // version v, typing from the CustomResourceDefinitions in crds when
-// typeFromCRDs. kinds, when not nil, keeps the matched kinds by the match
-// rules that give them, for the other policies of the same call.
-func newPolicyTypes(root map[string]any, v kubeversion.Version, crds *check.CRDs, typeFromCRDs bool, kinds map[string]kindsSchema) *policyTypes {
+// typeFromCRDs, and its variables with the types assumed for it. kinds, when
+// not nil, keeps the matched kinds by the match rules that give them, for the
+// other policies of the same call. scope declares the variables of the
+// admission CEL environment: params only when the policy has a paramKind,
+// variables only for the expressions that may use them.
+func newPolicyTypes(root map[string]any, v kubeversion.Version, crds *check.CRDs, typeFromCRDs bool, kinds map[string]kindsSchema, assumed []check.AssumedType) *policyTypes {
 	policySpec, _ := root["spec"].(map[string]any)
-	p := &policyTypes{root: root, spec: policySpec, kinds: cachedKinds(kinds, policySpec, crds, typeFromCRDs), version: v}
+	p := &policyTypes{root: root, spec: policySpec, kinds: cachedKinds(kinds, policySpec, crds, typeFromCRDs), version: v, assumed: assumed}
 	if typeFromCRDs {
 		p.crds = crds
 	}
@@ -217,11 +217,14 @@ func variableSources(policySpec map[string]any, e extract.Expression) map[string
 
 // variables returns the schema of variables for e: a property for each
 // variable of spec.variables that e may use, each typed by its expression as
-// the API server types it (see check.VariableTypes). When the policy cannot be
+// the API server types it with the types assumed for the policy (see
+// check.VariableTypes). A variable whose type follows from those types is
+// marked as inferred from them (see inferred). When the policy cannot be
 // compiled to types, the properties are dyn.
 func (p *policyTypes) variables(e extract.Expression) schema {
 	if p.typed == nil {
-		typed, err := check.VariableTypes(context.Background(), p.root, check.WithVersion(p.version), check.WithCRDs(p.crds), check.WithFeatures(feature.Of(feature.CRDTypedPolicies)))
+		typed, err := check.VariableTypes(context.Background(), p.root, check.WithVersion(p.version), check.WithCRDs(p.crds),
+			check.WithFeatures(feature.Of(feature.CRDTypedPolicies)), check.WithAssumedTypes(p.assumed))
 		p.typed, p.typedErr = &typed, err
 	}
 	if p.typedErr != nil {
@@ -244,6 +247,9 @@ func (p *policyTypes) variables(e extract.Expression) schema {
 			s[dynKey] = string(reasonVarKinds)
 		}
 		s["description"] = fmt.Sprintf("Policy variable %s, defined in spec.variables by %#q.", tv.Name, tv.Expression)
+		if len(tv.Assumed) > 0 && tv.Dyn == "" {
+			s = inferred(s, tv)
+		}
 		props[tv.Name] = s
 	}
 	return schema{"type": "object", "properties": props}

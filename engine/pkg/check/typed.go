@@ -81,14 +81,19 @@ func eachValidation(ctx context.Context, p *admissionregistrationv1.ValidatingAd
 			if cerr == nil || cerr.Type != apiservercel.ErrorTypeInvalid {
 				continue
 			}
-			issues := issuePattern.FindAllString(cerr.Detail, -1)
-			if len(issues) == 0 {
-				issues = []string{cerr.Detail}
-			}
-			fail(e, issues)
+			fail(e, issuesOf(cerr.Detail))
 		}
 	}
 	return nil
+}
+
+// issuesOf splits detail, the issues of a compile as cel-go writes them, into
+// one issue each, or gives detail whole when it has none of their form.
+func issuesOf(detail string) []string {
+	if issues := issuePattern.FindAllString(detail, -1); len(issues) > 0 {
+		return issues
+	}
+	return []string{detail}
 }
 
 // typeCheckKind is typeCheck for one kind.

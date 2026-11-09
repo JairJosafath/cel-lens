@@ -246,10 +246,11 @@ where the value is `dyn` without it:
 - In a ValidatingAdmissionPolicy or MutatingAdmissionPolicy, `params` when
   `spec.paramKind` names no built-in kind and no CustomResourceDefinition types
   it, `object` and `oldObject` when the kinds the policy matches are not all
-  known, and `variables.<name>` when the variable's type is `dyn` (hover says
-  why). With a path, a `dyn` value inside a typed variable, such as a field of
-  a custom resource that keeps unknown fields: the API server reads a policy's
-  objects whole when it runs it.
+  known, and `variables.<name>` when the API server types the variable `dyn`
+  (hover says why, or which entries its type follows from). With a path, a
+  `dyn` value inside a typed variable, such as a field of a custom resource
+  that keeps unknown fields: the API server reads a policy's objects whole
+  when it runs it.
 
 Where Kubernetes gives the value a type, that type wins, and the entry is a
 problem: `spec.name is already typed as string: remove this entry`. A path
@@ -270,6 +271,20 @@ The API server's own problems stay as they are, with their severity. The API
 server does not type check a MutatingAdmissionPolicy, so there its entries
 give completion and hover only.
 
+The types flow into a policy's variables as the API server's composition
+would carry them if Kubernetes had the types: each variable, in the order of
+`spec.variables`, has the type its expression returns with them, a later
+variable seeing the types of earlier ones. With `params` typed
+`{maxReplicas: int, team: string}`, a variable `limit: params.maxReplicas`
+is `int`, and `variables.limit * 2` in a rule is checked as an int. A
+variable whose expression returns an object, `dyn` to the API server, stays
+`dyn` and can have an entry of its own; an entry for `variables.<name>` gives
+the variable its type, whatever its expression returns, and later variables
+see that type. A variable whose expression fails only with the types, such
+as `params.maxReplicaz`, gets that problem as a warning, as a rule does; in a
+MutatingAdmissionPolicy, which nothing checks with the types, it keeps the
+type Kubernetes gives it.
+
 Completion after a typed value offers its fields, and hover shows the type as
 the entry writes it, a schema's or a Go type's as a `type:` entry would write
 it (`{maxReplicas: int, team: string}`), with where it comes from: `Typed from
@@ -282,9 +297,12 @@ Remove` (a schema or a Go type in the same short form as a `type:`, such as
 `self.spec.port: dyn · Give it a type`, and a value whose entry does not
 apply, `params: dyn · Edit | Remove`; their commands carry the entry's `file`,
 `document`, `version` or `variable` and `path`, its `type`, `kind`, `schema`
-or `go`, and the `.cellens` the entry is in or would go in. Hover on a policy
-variable whose expression reads an assumed value still shows the type it has
-without the `.cellens`.
+or `go`, and the `.cellens` the entry is in or would go in. A variable whose
+type follows from the entries of the values it reads shows that type,
+`variables.limit: int`, which opens the entry it follows from; hover and
+completion give it the same type, and hover says which entries it follows
+from: `Its type follows from params, typed from the schema at .cellens, line
+8`.
 
 The problems of a `.cellens` are diagnostics on that file, at the entry's
 line: those of the format above as errors, a schema the API server would
@@ -367,7 +385,8 @@ that leaves every entry as it was, on its line, such as in a comment or in
 an entry YAML cannot read yet, leaves the documents and their lines as they
 are. `go test -bench
 CellensKeystroke ./internal/lsp/` measures a keystroke in a `.cellens` of 200
-entries.
+entries, and one in the type of an open policy's `params`, with the lines of
+that policy asked for again as its variables are typed again.
 
 ## Writing entries from the editor
 

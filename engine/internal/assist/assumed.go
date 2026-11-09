@@ -15,12 +15,20 @@ const (
 	// assumedTypeKey is the extension of the root of a placed type: the type
 	// as the .cellens writes it, which hover shows.
 	assumedTypeKey = "x-cel-lens-type"
+	// inferredKey is the extension of the schema of a policy variable whose
+	// type follows from assumed types, which no entry names: its type, as the
+	// line above a rule shows it. inferredFromKey is where the first of
+	// those types is written: {source, line}, as check.AssumedType has them.
+	inferredKey     = "x-cel-lens-inferred"
+	inferredFromKey = "x-cel-lens-inferred-from"
 )
 
 // WithAssumedTypes makes the Document assume the types in types where the
 // values they name are dyn, as check.WithAssumedTypes does: the variables and
-// fields there get the type, and hover says where it is written. A value
-// Kubernetes types keeps its type. The types are read, not changed.
+// fields there get the type, and hover says where it is written. A policy
+// variable that reads them gets the type its expression returns with them
+// (see check.VariableTypes). A value Kubernetes types keeps its type. The
+// types are read, not changed.
 func WithAssumedTypes(types []check.AssumedType) Option {
 	return func(d *Document) { d.assumed = types }
 }
@@ -38,6 +46,27 @@ func marked(t check.AssumedType) map[string]any {
 		s[assumedTypeKey] = t.Type
 	}
 	return s
+}
+
+// inferred returns s, the schema of the policy variable v, copied, marked as
+// inferred from the types its type follows from (v.Assumed): hover says
+// which, and where they are written.
+func inferred(s map[string]any, v check.Variable) map[string]any {
+	out := assume.Copy(s)
+	from := make([]string, len(v.Assumed))
+	for i, t := range v.Assumed {
+		where := t.From
+		if where == "" {
+			where = fmt.Sprintf("%s, line %d", t.Source, t.Line)
+		}
+		from[i] = assume.Name(t.Variable, t.Path) + ", typed from " + where
+	}
+	mark(out, "Its type follows from "+strings.Join(from, ", and ")+": Kubernetes leaves this value dyn.")
+	out[inferredKey] = v.Type
+	if len(v.Assumed) > 0 {
+		out[inferredFromKey] = map[string]any{"source": v.Assumed[0].Source, "line": v.Assumed[0].Line}
+	}
+	return out
 }
 
 func mark(s map[string]any, note string) {

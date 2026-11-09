@@ -490,3 +490,136 @@ func TestCodeLensNoRefreshWithoutSupport(t *testing.T) {
 	c.openURI(fileURI(filepath.Join(dir, ".cellens")), lensText)
 	ask("a .cellens opened")
 }
+
+// replicaLimitPolicy is the policy of the workspace #22 was found in: params
+// of a kind no CRD defines, so Kubernetes leaves params dyn, and with it
+// variables.limit, which reads it.
+const replicaLimitPolicy = `# A policy whose params come from a custom kind that no CRD in this
+# workspace describes, so Kubernetes gives ` + "`params`" + ` the type dyn.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: replica-limit
+spec:
+  paramKind:
+    apiVersion: rules.example.com/v1
+    kind: ReplicaLimit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  variables:
+    - name: limit
+      expression: params.maxReplicas
+  validations:
+    - expression: object.spec.replicas <= variables.limit
+      message: Too many replicas for this namespace.
+    - expression: params.teem == '' || object.metadata.labels['team'] == params.teem
+      message: The deployment must carry the team label of its limit.
+`
+
+// replicaLimitLens types params of replicaLimitPolicy with a schema, as the
+// .cellens of #22 does; TYPE is the type of maxReplicas.
+const replicaLimitLens = `# .cellens: types cel-lens assumes where Kubernetes gives dyn. Commit it.
+types:
+  - file: policy.yaml
+    document: ValidatingAdmissionPolicy replica-limit
+    variable: params
+    schema:
+      type: object
+      properties:
+        maxReplicas: {type: TYPE, minimum: 0}
+        team: {type: string}
+`
+
+// TestCodeLensInferredVariable is #22: with params typed by .cellens, the
+// line above a rule that reads a variable reading params says the variable's
+// type, variables.limit: int, as hover does, and no longer offers Give it a
+// type, but shows the entry its type follows from; a change of the .cellens
+// types it again. A variable whose expression
+// returns dyn all the same still offers Give it a type, and one an entry
+// names shows that entry's type with Edit and Remove.
+func TestCodeLensInferredVariable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	policy := fileURI(filepath.Join(dir, "policy.yaml"))
+	lens := fileURI(filepath.Join(dir, ".cellens"))
+	c := start(t)
+	initializeIn(t, c, dir, refreshCaps)
+	c.openAll(lens, strings.Replace(replicaLimitLens, "TYPE", "integer", 1), policy, replicaLimitPolicy)
+	at := func(needle string) int {
+		line, _ := lineOf(t, replicaLimitPolicy, needle)
+		return line
+	}
+	lines := c.codeLenses(policy)
+	if len(lines) != 3 {
+		t.Fatalf("code lenses = %+v, want three lines", lines)
+	}
+	params := []string{"object: apps/v1 Deployment · compiles", "params: {maxReplicas, …} · Edit", "Remove"}
+	if l := lines[0]; l.line != at("expression: params.maxReplicas") || !reflect.DeepEqual(l.titles, params) {
+		t.Errorf("line above the variable = %+v, want %q", l, params)
+	}
+	want := lensLine{
+		line: at("object.spec.replicas <= variables.limit"), titles: []string{"object: apps/v1 Deployment · compiles", "variables.limit: int"},
+		commands: []string{show, show},
+	}
+	if !reflect.DeepEqual(lines[1], want) {
+		t.Errorf("line above the rule reading variables.limit = %+v, want %+v", lines[1], want)
+	}
+	// The review of #22: the part shows the entry the type follows from, at
+	// the first key of its schema.
+	res, rerr := c.call("textDocument/codeLens", map[string]any{"textDocument": map[string]any{"uri": policy}})
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	var raw []codeLens
+	if err := json.Unmarshal(res, &raw); err != nil {
+		t.Fatal(err)
+	}
+	from := `{"range":{"end":{"character":6,"line":6},"start":{"character":6,"line":6}},"uri":"` + lens + `"}`
+	if args, _ := json.Marshal(raw[4].Command.Arguments); raw[4].Command.Title != "variables.limit: int" || string(args) != "["+from+"]" {
+		t.Errorf("part variables.limit: int = %q %s, want %s with %s", raw[4].Command.Title, args, show, from)
+	}
+	var h struct{ Contents struct{ Value string } }
+	c.request("textDocument/hover", policy, replicaLimitPolicy, "variables.limit", len("variables.l"), &h)
+	if !strings.Contains(h.Contents.Value, "(field) limit: int") {
+		t.Errorf("hover on variables.limit = %q, want limit: int", h.Contents.Value)
+	}
+
+	c.changeURI(lens, 2, strings.Replace(replicaLimitLens, "TYPE", "number", 1))
+	res, refreshed := c.codeLensSeeingRefresh(policy)
+	if !refreshed || !strings.Contains(string(res), `"variables.limit: double"`) {
+		t.Errorf("after maxReplicas became a number: refreshed %t, code lenses %s, want a refresh and variables.limit: double", refreshed, res)
+	}
+
+	more := fileURI(filepath.Join(dir, "more.yaml"))
+	moreText := strings.Replace(replicaLimitPolicy, "      expression: params.maxReplicas\n",
+		"      expression: params.maxReplicas\n    - name: whole\n      expression: params\n    - name: named\n      expression: params.maxReplicas\n", 1)
+	moreText = strings.Replace(moreText, "object.spec.replicas <= variables.limit", "has(variables.whole.team)", 1)
+	moreText = strings.Replace(moreText, "params.teem == '' || object.metadata.labels['team'] == params.teem", "variables.named != ''", 1)
+	c.openAll(more, moreText)
+	c.changeURI(lens, 3, strings.Replace(replicaLimitLens, "TYPE", "integer", 1)+
+		"  - file: more.yaml\n    document: ValidatingAdmissionPolicy replica-limit\n    variable: variables.named\n    type: string\n")
+	lines = c.codeLenses(more)
+	if len(lines) != 5 {
+		t.Fatalf("code lenses of more.yaml = %+v, want five lines", lines)
+	}
+	target := map[string]any{"cellens": lens, "file": "more.yaml", "document": "ValidatingAdmissionPolicy replica-limit", "value": "variables.whole", "variable": "variables.whole"}
+	for i, want := range []lensLine{
+		{
+			line: at("object.spec.replicas <= variables.limit") + 4, titles: []string{"object: apps/v1 Deployment · compiles", "variables.whole: dyn · Give it a type"},
+			commands: []string{show, "cel-lens.giveType"}, target: target,
+		},
+		{
+			line: at("params.teem == ''") + 4, titles: []string{"object: apps/v1 Deployment · compiles", "variables.named: string · Edit", "Remove"},
+			commands: []string{show, "cel-lens.editType", "cel-lens.removeType"},
+			target:   map[string]any{"cellens": lens, "file": "more.yaml", "document": "ValidatingAdmissionPolicy replica-limit", "value": "variables.named", "variable": "variables.named", "type": "string"},
+		},
+	} {
+		if got := lines[3+i]; !reflect.DeepEqual(got, want) {
+			t.Errorf("line above the rule reading %s = %+v,\nwant %+v", want.target["value"], got, want)
+		}
+	}
+}

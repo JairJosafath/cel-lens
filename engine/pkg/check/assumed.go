@@ -12,6 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/cel-go/common"
+	celast "github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/common/operators"
+	"github.com/google/cel-go/parser"
 	"go.yaml.in/yaml/v3"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -58,6 +62,12 @@ type AssumedType struct {
 
 // origin is where t is written, as messages name it: .cellens:12.
 func (t AssumedType) origin() string { return t.Source + ":" + strconv.Itoa(t.Line) }
+
+// same reports whether t and u are the type of one value, written at one place.
+func (t AssumedType) same(u AssumedType) bool {
+	return t.Kind == u.Kind && t.Name == u.Name && t.Version == u.Version && t.Variable == u.Variable &&
+		slices.Equal(t.Path, u.Path) && t.Source == u.Source && t.Line == u.Line
+}
 
 // WithAssumedTypes makes Check assume the types in types where the values
 // they name are dyn: in a CustomResourceDefinition's rules only an
@@ -189,10 +199,15 @@ func (r *reporter) assumedIn(node *yaml.Node) []indexedType {
 	if !ok {
 		return nil
 	}
-	name := metadataName(node)
+	return r.assumedNamed(head.Kind, metadataName(node))
+}
+
+// assumedNamed returns the assumed types for the document of the kind and
+// metadata.name: none for a document without a name.
+func (r *reporter) assumedNamed(kind, name string) []indexedType {
 	var out []indexedType
 	for i, t := range r.assumed {
-		if t.Kind == head.Kind && t.Name == name && name != "" {
+		if t.Kind == kind && t.Name == name && name != "" {
 			out = append(out, indexedType{i, t})
 		}
 	}
@@ -297,6 +312,151 @@ type policyPlaced struct {
 	kinds             []matchkind.Kind
 	object, oldObject []map[string]any
 	variables         map[string]map[string]any
+	// reads are the variables of the policy, in the order of
+	// spec.variables, each with the placed types its type follows from (see
+	// variableReads); parser parses expressions for that (see reads).
+	reads  []variableRead
+	parser *parser.Parser
+}
+
+// variableRead is a variable of a policy and the assumed types its type
+// follows from.
+type variableRead struct {
+	name  string
+	types []AssumedType
+}
+
+// variableReads returns each of variables, in order, with those of types its
+// type follows from: the ones that name it, which give it its type, or else
+// the ones whose values its expression reads (see reads), directly or through
+// an earlier variable it reads. It returns nil when types is empty.
+func variableReads(p *parser.Parser, types []AssumedType, variables []admissionregistrationv1.Variable) []variableRead {
+	if len(types) == 0 {
+		return nil
+	}
+	out := make([]variableRead, len(variables))
+	for i, v := range variables {
+		out[i].name = v.Name
+		for _, t := range types {
+			if t.Variable == "variables."+v.Name {
+				out[i].types = append(out[i].types, t)
+			}
+		}
+		if out[i].types == nil {
+			out[i].types = readIn(reads(p, v.Expression), types, out[:i])
+		}
+	}
+	return out
+}
+
+// readIn returns those of types whose value an expression that reads the
+// names read reads, then the types of each variable of vars it reads, each
+// once.
+func readIn(read func(name string) bool, types []AssumedType, vars []variableRead) []AssumedType {
+	var out []AssumedType
+	add := func(t AssumedType) {
+		if !slices.ContainsFunc(out, t.same) {
+			out = append(out, t)
+		}
+	}
+	for _, t := range types {
+		if read(t.Variable) {
+			add(t)
+		}
+	}
+	for _, v := range vars {
+		if len(v.types) > 0 && read("variables."+v.name) {
+			for _, t := range v.types {
+				add(t)
+			}
+		}
+	}
+	return out
+}
+
+// newReadsParser returns the parser reads takes: the macros and optional
+// syntax of Kubernetes CEL; nil when cel-go cannot build one.
+func newReadsParser() *parser.Parser {
+	p, err := parser.NewParser(parser.Macros(parser.AllMacros...), parser.EnableOptionalSyntax(true))
+	if err != nil {
+		return nil
+	}
+	return p
+}
+
+// reads returns whether the expression text reads the name, a variable such
+// as params or a field of variables such as variables.limit, as its syntax
+// tree, which p parses, has it: a name in a string, or one a macro's
+// variable hides, is not read. Text p cannot parse, or a nil p, reads every
+// name the text writes as a word.
+func reads(p *parser.Parser, text string) func(name string) bool {
+	if p != nil {
+		if tree, errs := p.Parse(common.NewTextSource(text)); len(errs.GetErrors()) == 0 {
+			names := map[string]bool{}
+			readNames(tree.Expr(), nil, names)
+			return func(name string) bool { return names[name] }
+		}
+	}
+	return func(name string) bool { return namesVariable(text, name) }
+}
+
+// readNames adds to names the variables e reads, and the fields of variables
+// it reads as variables.<name>, but those hidden, the variables of the
+// macros e is in.
+func readNames(e celast.Expr, hidden []string, names map[string]bool) {
+	switch e.Kind() {
+	case celast.IdentKind:
+		if !slices.Contains(hidden, e.AsIdent()) {
+			names[e.AsIdent()] = true
+		}
+	case celast.SelectKind:
+		sel := e.AsSelect()
+		if op := sel.Operand(); op.Kind() == celast.IdentKind && op.AsIdent() == "variables" && !slices.Contains(hidden, "variables") {
+			names["variables."+sel.FieldName()] = true
+		}
+		readNames(sel.Operand(), hidden, names)
+	case celast.CallKind:
+		c := e.AsCall()
+		args := c.Args()
+		if c.FunctionName() == operators.OptSelect && len(args) == 2 && args[0].Kind() == celast.IdentKind && args[0].AsIdent() == "variables" &&
+			args[1].Kind() == celast.LiteralKind && !slices.Contains(hidden, "variables") {
+			if field, ok := args[1].AsLiteral().Value().(string); ok {
+				names["variables."+field] = true
+			}
+		}
+		if c.IsMemberFunction() {
+			readNames(c.Target(), hidden, names)
+		}
+		for _, arg := range args {
+			readNames(arg, hidden, names)
+		}
+	case celast.ListKind:
+		for _, el := range e.AsList().Elements() {
+			readNames(el, hidden, names)
+		}
+	case celast.MapKind:
+		for _, en := range e.AsMap().Entries() {
+			readNames(en.AsMapEntry().Key(), hidden, names)
+			readNames(en.AsMapEntry().Value(), hidden, names)
+		}
+	case celast.StructKind:
+		for _, f := range e.AsStruct().Fields() {
+			readNames(f.AsStructField().Value(), hidden, names)
+		}
+	case celast.ComprehensionKind:
+		c := e.AsComprehension()
+		readNames(c.IterRange(), hidden, names)
+		readNames(c.AccuInit(), hidden, names)
+		inner := append(slices.Clone(hidden), c.IterVar(), c.AccuVar())
+		if c.HasIterVar2() {
+			inner = append(inner, c.IterVar2())
+		}
+		readNames(c.LoopCondition(), inner, names)
+		readNames(c.LoopStep(), inner, names)
+		readNames(c.Result(), inner, names)
+	case celast.UnspecifiedExprKind, celast.LiteralKind:
+		// a constant reads nothing
+	}
 }
 
 // policyVars is the part of a policy that decides the types of its variables.
@@ -339,8 +499,6 @@ func (p *policyVars) rules() []matchkind.Rule {
 // the API server's type checker types them. It returns where they go and why
 // each type that is not placed is not, by index. The error is for a cancelled ctx.
 func (r *reporter) placePolicy(ctx context.Context, node *yaml.Node, types []indexedType) (policyPlaced, map[int]string, error) {
-	var pl policyPlaced
-	problems := map[int]string{}
 	var root map[string]any
 	err := node.Decode(&root)
 	var p *policyVars
@@ -348,32 +506,36 @@ func (r *reporter) placePolicy(ctx context.Context, node *yaml.Node, types []ind
 		p, err = readPolicyVars(root)
 	}
 	if err != nil {
-		return pl, allProblems(types, "the policy cannot be read: "+err.Error()), ctx.Err()
+		return policyPlaced{}, allProblems(types, "the policy cannot be read: "+err.Error()), ctx.Err()
 	}
+	return r.placeInPolicy(ctx, root, p, types, nil)
+}
+
+// placeInPolicy is placePolicy for root, a decoded policy, of which p is the
+// part that decides the types of its variables. vars are its variables as
+// variableTypes types them, worked out here when they are nil and needed.
+func (r *reporter) placeInPolicy(ctx context.Context, root map[string]any, p *policyVars, types []indexedType, vars []Variable) (policyPlaced, map[int]string, error) {
+	var pl policyPlaced
+	problems := map[int]string{}
+	var err error
 	kind, _ := root["kind"].(string)
 	meta, _ := root["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
 	params, paramsName := r.paramsSchema(p.Spec.ParamKind)
-	var kindSchemas []map[string]any
 	kindNames := ""
 	if kinds, ok := r.crds.Resolve(p.rules()); ok && p.Spec.MatchConstraints != nil {
 		names := make([]string, len(kinds))
 		for i, k := range kinds {
-			s, ok := toMap(k.Schema)
-			if !ok {
-				kindSchemas = nil
-				break
-			}
-			kindSchemas = append(kindSchemas, s)
 			names[i] = k.String()
 		}
-		if kindSchemas != nil {
-			pl.kinds, kindNames = kinds, strings.Join(names, ", ")
-		}
+		pl.kinds, kindNames = kinds, strings.Join(names, ", ")
 	}
+	// The kinds' schemas as maps, which only a type of object or oldObject
+	// needs, are made for the first one: most entries type params.
+	var kindSchemas []map[string]any
+	kindsRead := false
 	pl.object = make([]map[string]any, max(len(pl.kinds), 1))
 	pl.oldObject = make([]map[string]any, max(len(pl.kinds), 1))
-	var vars []Variable
 	for _, t := range types {
 		switch {
 		case t.Version != "":
@@ -391,6 +553,13 @@ func (r *reporter) placePolicy(ctx context.Context, node *yaml.Node, types []ind
 			at := pl.object
 			if t.Variable == "oldObject" {
 				at = pl.oldObject
+			}
+			if !kindsRead {
+				kindSchemas, kindsRead = kindMaps(pl.kinds), true
+			}
+			if pl.kinds != nil && kindSchemas == nil {
+				problems[t.index] = "the schemas of " + kindNames + " cannot be read"
+				continue
 			}
 			if msg := placeInKinds(at, kindSchemas, kindNames, t); msg != "" {
 				problems[t.index] = msg
@@ -425,7 +594,23 @@ func (r *reporter) placePolicy(ctx context.Context, node *yaml.Node, types []ind
 			pl.types = append(pl.types, t.AssumedType)
 		}
 	}
+	pl.parser = newReadsParser()
+	pl.reads = variableReads(pl.parser, pl.types, p.Spec.Variables)
 	return pl, problems, ctx.Err()
+}
+
+// kindMaps returns the schemas of kinds as schema maps, or nil when there
+// are no kinds or one cannot be converted.
+func kindMaps(kinds []matchkind.Kind) []map[string]any {
+	var out []map[string]any
+	for _, k := range kinds {
+		s, ok := toMap(k.Schema)
+		if !ok {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // orSchema is placed when it is not nil, and base otherwise.
@@ -582,22 +767,18 @@ func assumedNote(types []AssumedType) string {
 	return " (the types come from " + strings.Join(origins, ", ") + ": the API server would not report this)"
 }
 
-// usedIn returns the types of pl whose variable the expression text names,
-// or all of them when it names none.
+// usedIn returns the types of pl whose value the expression text reads,
+// directly or through the variables it reads, or all of them when it reads
+// none.
 func (pl policyPlaced) usedIn(text string) []AssumedType {
-	var out []AssumedType
-	for _, t := range pl.types {
-		if namesVariable(text, t.Variable) {
-			out = append(out, t)
-		}
+	if out := readIn(reads(pl.parser, text), pl.types, pl.reads); len(out) > 0 {
+		return out
 	}
-	if len(out) == 0 {
-		return pl.types
-	}
-	return out
+	return pl.types
 }
 
-// namesVariable reports whether text names the variable name as a whole word.
+// namesVariable reports whether text names the variable name as a whole word,
+// for text reads cannot parse.
 func namesVariable(text, name string) bool {
 	return regexp.MustCompile(`(^|[^\w.])` + regexp.QuoteMeta(name) + `\b`).MatchString(text)
 }

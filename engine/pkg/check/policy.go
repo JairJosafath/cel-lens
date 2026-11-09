@@ -60,7 +60,8 @@ type policyCompile struct {
 	r     *reporter
 	exprs map[string]extract.Expression
 	decls plugincel.OptionalVariableDeclarations
-	// clean holds the fields of the expressions that compiled without error.
+	// clean holds the fields of the expressions that compiled without error,
+	// variables included.
 	clean map[string]bool
 }
 
@@ -90,6 +91,8 @@ func (pc policyCompile) common(ctx context.Context, composite *plugincel.Composi
 			a := accessor{name: v.Name, expression: e.Text, returns: anyTypes}
 			if res := composite.CompileAndStoreVariable(a, pc.decls, environment.NewExpressions); res.Error != nil {
 				pc.r.report(e, res.Error.Detail)
+			} else {
+				pc.clean[field] = true
 			}
 		}
 	}

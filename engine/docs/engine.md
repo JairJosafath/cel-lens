@@ -113,7 +113,15 @@ number also brings the total under its budget). No fix is offered when there is 
     `cel-lens.editType` and `cel-lens.removeType`. A value an entry names that
     is `dyn` all the same, as the entry does not apply (its kind is not found,
     say), reads `params: dyn · Edit` and `Remove` for that entry, never `Give
-    it a type`, which would write a second one. A struct shows its field
+    it a type`, which would write a second one. A policy variable Kubernetes
+    leaves `dyn` whose expression returns a type with the types `.cellens`
+    entries give the values it reads, such as `limit: params.maxReplicas`
+    with `params` typed, reads `variables.limit: int`, a part that runs
+    `cel-lens.showRule` with the place of the entry its type follows from
+    (`{"uri": "<the .cellens>", "range": <empty, where its type starts>}`),
+    as no entry names the value itself. A
+    variable whose expression returns `dyn` all the same, such as an object,
+    still reads `Give it a type`. A struct shows its field
     names, cut with `…` past 40 characters; a kind shows as written
     (`params: v1 ConfigMap · Edit`). The values are named as the expression
     reads them, written as a `.cellens` path writes them
@@ -168,7 +176,8 @@ measures the 300 ms diagnostics budget on a 1,000-line CRD, and
 `go test -bench CodeLens ./internal/lsp/` a code lens request on a CRD of 500
 rules and on policies, the first one after a change and one asked again, and
 `go test -bench CellensKeystroke ./internal/lsp/` a change of an open
-`.cellens` of 200 entries.
+`.cellens` of 200 entries, and one that types an open policy's variables
+again, with that policy's code lenses.
 
 The command accepts the flags language clients pass: `--stdio` (the default and
 only transport) and `--clientProcessId=<pid>`, which makes the server exit when
@@ -432,7 +441,10 @@ gets the API server's `undefined field 'usrInfo'`, and `self`, which only
 the type of the expression of `spec.variables[]` that defines it, as the API
 server types it: a scalar, list or map keeps its type (`object.spec.replicas`
 is `int`, `request.userInfo.groups` is `list(string)`) and anything else,
-such as an object, or an expression that does not compile, is `dyn`. Completion
+such as an object, or an expression that does not compile, is `dyn`. With
+`params`, `object` or `oldObject` typed by a `.cellens` entry, each variable is
+typed in order with the type its expression returns with that type, in
+checks, completion, hover and inline info ([cellens.md](cellens.md#how-the-types-are-used)). Completion
 after `variables.` offers the variables defined before that point, each with its
 type, and hover gives the type and the defining expression. A name the policy
 has no variable for, or defines later, gets `undefined field '<name>'`. A type-check warning that depends on no

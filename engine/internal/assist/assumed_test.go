@@ -194,3 +194,117 @@ func TestAssumedTypeOnTypedValue(t *testing.T) {
 		t.Errorf("Hover(self.spec.name) = %q, %t, want the string field, not the .cellens type", h.Markdown, ok)
 	}
 }
+
+// replicaLimitPolicy is the policy of #22: params of a kind no CRD defines,
+// so Kubernetes leaves params dyn, and with it limit and again, which read it.
+// whole returns an object, which the API server makes dyn whatever params is;
+// named has an entry of its own.
+const replicaLimitPolicy = `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: replica-limit
+spec:
+  paramKind: {apiVersion: rules.example.com/v1, kind: ReplicaLimit}
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], resources: [deployments]}
+  variables:
+    - {name: limit, expression: params.maxReplicas}
+    - {name: again, expression: variables.limit}
+    - {name: whole, expression: params}
+    - {name: named, expression: params.maxReplicas}
+  validations:
+    - expression: "object.spec.replicas <= variables.limit && variables.again > 0 && has(variables.whole.team) && variables.named != ''"
+`
+
+// replicaLimitParams is the .cellens entry of #22: params typed by a schema.
+func replicaLimitParams() check.AssumedType {
+	return check.AssumedType{
+		Kind: "ValidatingAdmissionPolicy", Name: "replica-limit", Variable: "params",
+		Type: "{maxReplicas: int, team: string}", Source: ".cellens", Line: 2, From: "the schema at .cellens, line 6",
+		Schema: map[string]any{"type": "object", "properties": map[string]any{
+			"maxReplicas": map[string]any{"type": "integer", "minimum": 0},
+			"team":        map[string]any{"type": "string"},
+		}},
+	}
+}
+
+// replicaLimitNamed is a .cellens entry for variables.named.
+func replicaLimitNamed() check.AssumedType {
+	return check.AssumedType{
+		Kind: "ValidatingAdmissionPolicy", Name: "replica-limit", Variable: "variables.named",
+		Type: "string", Source: ".cellens", Line: 12, Schema: map[string]any{"type": "string"},
+	}
+}
+
+// TestInferredVariableTypes is #22: with params typed by .cellens, a policy
+// variable that reads it has the type its expression returns with that
+// type, in hover, completion and the values of the line above the rule, a
+// later variable seeing an earlier one; one whose expression still returns
+// dyn stays dyn, and an entry for the variable wins.
+func TestInferredVariableTypes(t *testing.T) {
+	t.Parallel()
+	a, err := assist.New(kubeversion.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := replicaLimitPolicy
+	doc := assumedDoc(text, replicaLimitParams(), replicaLimitNamed())
+	const follows = "Its type follows from params, typed from the schema at .cellens, line 6: Kubernetes leaves this value dyn."
+	for _, tc := range []struct {
+		name, needle string
+		doc          *assist.Document
+		want         []string
+	}{
+		{"limit", "variables.limit &&", doc, []string{"(field) limit: int", follows}},
+		{"a later variable", "variables.again", doc, []string{"(field) again: int", follows}},
+		{"an object", "variables.whole", doc, []string{"(field) whole: dyn"}},
+		{"named by an entry", "variables.named", doc, []string{"(field) named: string", "Typed from .cellens, line 12"}},
+		{"without .cellens", "variables.limit &&", assumedDoc(text), []string{"(field) limit: dyn"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h, ok := a.Hover(tc.doc, posIn(t, text, tc.needle, len("variables.")+1))
+			if !ok {
+				t.Fatalf("Hover(%q) = none", tc.needle)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(h.Markdown, w) {
+					t.Errorf("Hover(%q) = %q, want it to contain %q", tc.needle, h.Markdown, w)
+				}
+			}
+		})
+	}
+	items, ok := a.Complete(doc, posIn(t, text, "variables.limit &&", len("variables.")))
+	if !ok {
+		t.Fatal("Complete after variables. = none")
+	}
+	details := map[string]string{}
+	for _, it := range items {
+		details[it.Label] = it.Detail
+	}
+	if details["limit"] != "int" || details["again"] != "int" || details["whole"] != "dyn" || details["named"] != "string" {
+		t.Errorf("Complete after variables. = %v, want limit and again int, whole dyn, named string", details)
+	}
+	summaries, err := a.Summaries(t.Context(), doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := func(name, typ, variable string) assist.Value {
+		return assist.Value{Name: name, Type: typ, DocumentKind: "ValidatingAdmissionPolicy", DocumentName: "replica-limit", Variable: variable}
+	}
+	// An inferred variable says where the entry its type follows from is.
+	inferred := func(v assist.Value) assist.Value {
+		v.Inferred, v.FromSource, v.FromLine = true, ".cellens", 2
+		return v
+	}
+	want := []assist.Value{
+		inferred(value("variables.limit", "int", "variables.limit")),
+		inferred(value("variables.again", "int", "variables.again")),
+		value("variables.whole", "", "variables.whole"),
+		value("variables.named", "string", "variables.named"),
+	}
+	if last := summaries[len(summaries)-1]; !slices.Equal(last.Values, want) {
+		t.Errorf("Summaries(#22 policy) values of the validation = %+v,\nwant %+v", last.Values, want)
+	}
+}

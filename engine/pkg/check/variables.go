@@ -24,6 +24,13 @@ type Variable struct {
 	Schema map[string]any
 	// Dyn is why Type is dyn, one of the Dyn constants, and "" when it is not.
 	Dyn string
+	// Assumed are the types of WithAssumedTypes that Type and Dyn follow
+	// from, when with them the expression returns another type than the API
+	// server gives the variable: the types of the values the expression reads,
+	// params, object, oldObject or variables.<name>, and those an earlier
+	// variable it reads follows from. It is empty when Type is the API
+	// server's own.
+	Assumed []AssumedType
 }
 
 // The reasons a Variable is dyn.
@@ -48,6 +55,17 @@ const (
 // the type of a variable, it is dyn. It returns nil when root has no
 // variables, and an error when spec cannot be read. Options WithVersion and
 // WithCRDs apply. A cancelled ctx returns its error.
+//
+// With WithAssumedTypes, the variables are typed as the API server would type
+// them if Kubernetes had the types those of the policy give params, object,
+// oldObject and variables.<name> where it leaves them dyn (see
+// AssumedTypeProblems): in order, each with the type its expression returns,
+// so a later variable sees the types of earlier ones. A variable whose type
+// they change lists in Assumed those it follows from. A variable a type names
+// keeps the type the API server gives it, which that type replaces where it
+// applies, and later variables see it with that type. When no CEL environment
+// can be built with the types, the variables keep the API server's types, as
+// Check then reports only the API server's problems.
 func VariableTypes(ctx context.Context, root map[string]any, opts ...Option) ([]Variable, error) {
 	var set settings
 	for _, o := range opts {
@@ -59,8 +77,12 @@ func VariableTypes(ctx context.Context, root map[string]any, opts ...Option) ([]
 	if err != nil {
 		return nil, fmt.Errorf("read spec.variables: %w", err)
 	}
-	r := reporter{version: set.version, crds: set.typingCRDs()}
-	return r.variableTypes(ctx, in)
+	r := reporter{version: set.version, crds: set.typingCRDs(), assumed: set.assumed}
+	vars, err := r.variableTypes(ctx, in)
+	if err != nil || len(vars) == 0 {
+		return vars, err
+	}
+	return r.assumedVariables(ctx, root, in, vars)
 }
 
 // variableTypes is VariableTypes for the policy in.
@@ -99,24 +121,74 @@ func (r *reporter) variableTypes(ctx context.Context, in *policyVars) ([]Variabl
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		t := varType(perKind[0][i])
-		why := ""
-		switch {
-		case perKind[0][i] == nil:
-			why = DynUncompiled
-		case perKind[0][i].Kind() == celgo.DynKind:
-			why = DynInput
-		case t.IsExactType(celgo.DynType):
-			why = DynResult
-		}
-		for _, other := range perKind[1:] {
-			if !t.IsExactType(varType(other[i])) {
-				t, why = celgo.DynType, DynKindsDiffer
-			}
-		}
+		t, why := variableType(perKind, i)
 		out[i] = Variable{Name: v.Name, Expression: v.Expression, Type: t.String(), Schema: typeSchema(t), Dyn: why}
 	}
 	return out, nil
+}
+
+// variableType is the type of the i-th variable, whose expression returns
+// perKind[k][i] for the k-th kind the policy matches (nil when it does not
+// compile), and why it is dyn, one of the Dyn constants, or "".
+func variableType(perKind [][]*celgo.Type, i int) (*celgo.Type, string) {
+	t := varType(perKind[0][i])
+	why := ""
+	switch {
+	case perKind[0][i] == nil:
+		why = DynUncompiled
+	case perKind[0][i].Kind() == celgo.DynKind:
+		why = DynInput
+	case t.IsExactType(celgo.DynType):
+		why = DynResult
+	}
+	for _, other := range perKind[1:] {
+		if !t.IsExactType(varType(other[i])) {
+			t, why = celgo.DynType, DynKindsDiffer
+		}
+	}
+	return t, why
+}
+
+// assumedVariables types vars, the variables of the policy in root, whose
+// part in reads, as the API server types them, again with the types assumed
+// for the policy (see VariableTypes). The error is for a cancelled ctx.
+func (r *reporter) assumedVariables(ctx context.Context, root map[string]any, in *policyVars, vars []Variable) ([]Variable, error) {
+	kind, _ := root["kind"].(string)
+	meta, _ := root["metadata"].(map[string]any)
+	name, _ := meta["name"].(string)
+	types := r.assumedNamed(kind, name)
+	if len(types) == 0 {
+		return vars, nil
+	}
+	pl, _, err := r.placeInPolicy(ctx, root, in, types, vars)
+	if err != nil || len(pl.types) == 0 {
+		return vars, err
+	}
+	passes, err := r.assumedPasses(in.Spec.ParamKind, in.Spec.Variables, pl)
+	if err != nil || len(passes) == 0 {
+		return vars, ctx.Err() // the API server's types stand without the assumed ones
+	}
+	perPass := make([][]*celgo.Type, len(passes))
+	for k, ps := range passes {
+		perPass[k] = ps.outputs
+	}
+	// Check reports the expression of a variable that fails only with the
+	// types where it type checks with them, in a ValidatingAdmissionPolicy;
+	// elsewhere nothing would show why such a variable does not compile.
+	checked := kind == "ValidatingAdmissionPolicy"
+	for i, v := range vars {
+		if _, named := pl.variables[v.Name]; named || len(pl.reads[i].types) == 0 {
+			continue // a type that names it gives its type, or it reads none
+		}
+		t, why := variableType(perPass, i)
+		if why == DynUncompiled && v.Dyn != DynUncompiled && !checked {
+			continue
+		}
+		if t.String() != v.Type || why != v.Dyn {
+			vars[i].Type, vars[i].Schema, vars[i].Dyn, vars[i].Assumed = t.String(), typeSchema(t), why, pl.reads[i].types
+		}
+	}
+	return vars, ctx.Err()
 }
 
 // storeVariables compiles variables in order into composite, as the API server

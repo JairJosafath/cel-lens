@@ -15,6 +15,7 @@ import (
 	"k8s.io/apiserver/pkg/cel/environment"
 	"k8s.io/apiserver/pkg/cel/openapi"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -38,30 +39,93 @@ func (r *reporter) assumedTypeCheck(ctx context.Context, node *yaml.Node, p *adm
 }
 
 // typeCheckAssumed compiles the validations of p in clean as typeCheck does,
-// with the types of pl, and reports what fails as typeCheck does.
+// with the types of pl, and reports what fails as typeCheck does. A variable
+// in clean that reads a value pl types, and whose expression fails with the
+// types where it compiles with the API server's own, is reported the same
+// way: it is dyn then, and nothing else would say why.
 func (r *reporter) typeCheckAssumed(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, pl policyPlaced, exprs map[string]extract.Expression, clean map[string]bool) error {
-	hasParams := p.Spec.ParamKind != nil
-	paramsType := r.paramsType(p.Spec.ParamKind)
+	passes, err := r.assumedPasses(p.Spec.ParamKind, p.Spec.Variables, pl)
+	if err != nil {
+		return err
+	}
+	for _, ps := range passes {
+		var own []*celgo.Type // the API server's types of the variables for ps.kind, made when needed
+		for i, detail := range ps.failures {
+			field := fmt.Sprintf("spec.variables[%d].expression", i)
+			e, ok := exprs[field]
+			if !ok || !clean[field] || detail == "" || len(pl.reads[i].types) == 0 {
+				continue
+			}
+			if ps.kind != nil {
+				if own == nil {
+					if own, err = r.typedVariables(p, *ps.kind); err != nil {
+						return err
+					}
+				}
+				if own[i] == nil {
+					continue // it fails with the kind's own type: the API server's to report, which it does not
+				}
+			}
+			r.reportAs(e, SeverityWarning, ps.prefix, strings.Join(issuesOf(detail), "\n"))
+		}
+		err = eachValidation(ctx, p, exprs, clean, func(text string) *apiservercel.Error {
+			if _, issues := ps.env.Compile(text); issues.Err() != nil {
+				return &apiservercel.Error{Type: apiservercel.ErrorTypeInvalid, Detail: issues.String()}
+			}
+			return nil
+		}, func(e extract.Expression, issues []string) {
+			r.reportAs(e, SeverityWarning, ps.prefix, strings.Join(issues, "\n"))
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// assumedPass is one compile of the expressions of a policy with the types
+// assumed for it: one for each kind the policy matches, or one when the kinds
+// are not known.
+type assumedPass struct {
+	// prefix names the kind in a message, as typeCheck does:
+	// "apps/v1 Deployment: "; empty when the kinds are not known. kind is
+	// that kind, nil then.
+	prefix string
+	kind   *matchkind.Kind
+	// object and oldObject are their types, nil for dyn.
+	object, oldObject *apiservercel.DeclType
+	// env compiles an expression that may read the variables.
+	env *celgo.Env
+	// outputs are the types the expressions of the variables return, in the
+	// order of spec.variables: nil for one that does not compile, or whose
+	// type an assumed type gives; failures are the issues of each that does
+	// not compile, as cel-go writes them, "" for the others.
+	outputs  []*celgo.Type
+	failures []string
+}
+
+// assumedPasses returns the passes that compile the expressions of a policy
+// whose paramKind is pk and whose variables are variables with the types of
+// pl, as typeCheck compiles them with the kinds' types.
+func (r *reporter) assumedPasses(pk *admissionregistrationv1.ParamKind, variables []admissionregistrationv1.Variable, pl policyPlaced) ([]assumedPass, error) {
+	hasParams := pk != nil
+	paramsType := r.paramsType(pk)
 	if pl.params != nil {
 		name := "cellens.params"
 		if hasParams {
-			name = p.Spec.ParamKind.Kind + "Params"
+			name = pk.Kind + "Params"
 		}
 		paramsType = declOf(pl.params, true, name)
 	}
-	variables := map[string]*apiservercel.DeclType{}
+	assumed := map[string]*apiservercel.DeclType{}
 	for name, s := range pl.variables {
 		if t := declOf(s, false, "cellens.variables."+name); t != nil {
-			variables[name] = t
+			assumed[name] = t
 		}
 	}
-	type pass struct {
-		prefix            string
-		object, oldObject *apiservercel.DeclType
-	}
-	var passes []pass
+	var passes []assumedPass
 	if pl.kinds == nil {
-		passes = append(passes, pass{
+		passes = append(passes, assumedPass{
 			object:    declOf(pl.object[0], true, "cellens.object"),
 			oldObject: declOf(pl.oldObject[0], true, "cellens.oldObject"),
 		})
@@ -79,26 +143,30 @@ func (r *reporter) typeCheckAssumed(ctx context.Context, p *admissionregistratio
 		if pl.oldObject[i] != nil {
 			oldObject = declOf(pl.oldObject[i], true, kind.GVK.Kind+".oldObject")
 		}
-		passes = append(passes, pass{prefix: kind.String() + ": ", object: object, oldObject: oldObject})
+		passes = append(passes, assumedPass{prefix: kind.String() + ": ", kind: &pl.kinds[i], object: object, oldObject: oldObject})
 	}
-	for _, ps := range passes {
-		env, err := r.assumedEnv(ps.object, ps.oldObject, paramsType, hasParams, p.Spec.Variables, variables)
+	for i, ps := range passes {
+		env, outputs, failures, err := r.assumedEnv(ps.object, ps.oldObject, paramsType, hasParams, variables, assumed)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		err = eachValidation(ctx, p, exprs, clean, func(text string) *apiservercel.Error {
-			if _, issues := env.Compile(text); issues.Err() != nil {
-				return &apiservercel.Error{Type: apiservercel.ErrorTypeInvalid, Detail: issues.String()}
-			}
-			return nil
-		}, func(e extract.Expression, issues []string) {
-			r.reportAs(e, SeverityWarning, ps.prefix, strings.Join(issues, "\n"))
-		})
-		if err != nil {
-			return err
-		}
+		passes[i].env, passes[i].outputs, passes[i].failures = env, outputs, failures
 	}
-	return nil
+	return passes, nil
+}
+
+// typedVariables returns the types the expressions of the variables of p
+// return as the API server's type checker composes them for kind, in order:
+// nil for one that does not compile, and for each when the kind has no type.
+func (r *reporter) typedVariables(p *admissionregistrationv1.ValidatingAdmissionPolicy, kind matchkind.Kind) ([]*celgo.Type, error) {
+	composite, decls, err := r.typedComposite(p, kind)
+	if err != nil {
+		return nil, err
+	}
+	if composite == nil {
+		return make([]*celgo.Type, len(p.Spec.Variables)), nil
+	}
+	return storeVariables(composite, decls, p.Spec.Variables), nil
 }
 
 // declOf returns the CEL type of the schema map s, named name, as the API
@@ -124,11 +192,13 @@ func declOf(s map[string]any, root bool, name string) *apiservercel.DeclType {
 // types given (see typedEnvSet), and variables composed from variables in
 // order, as the API server composes them: each variables.<name> has the type
 // its expression returns, made dyn where the API server makes it so, unless
-// assumed gives it a type.
-func (r *reporter) assumedEnv(object, oldObject, params *apiservercel.DeclType, hasParams bool, variables []admissionregistrationv1.Variable, assumed map[string]*apiservercel.DeclType) (*celgo.Env, error) {
+// assumed gives it a type. It also returns the type each expression of
+// variables returns, nil for one that does not compile or that assumed types,
+// and the issues of each that does not compile, "" for the others.
+func (r *reporter) assumedEnv(object, oldObject, params *apiservercel.DeclType, hasParams bool, variables []admissionregistrationv1.Variable, assumed map[string]*apiservercel.DeclType) (*celgo.Env, []*celgo.Type, []string, error) {
 	base, err := typedEnvSet(r.version.EnvSet(), object, oldObject, params, hasParams)
 	if err != nil {
-		return nil, fmt.Errorf("build CEL environment: %w", err)
+		return nil, nil, nil, fmt.Errorf("build CEL environment: %w", err)
 	}
 	vars := apiservercel.NewObjectType(variablesTypeName, map[string]*apiservercel.DeclField{})
 	declTypes := []*apiservercel.DeclType{vars}
@@ -141,26 +211,28 @@ func (r *reporter) assumedEnv(object, oldObject, params *apiservercel.DeclType, 
 		DeclTypes:         declTypes,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("build CEL environment: %w", err)
+		return nil, nil, nil, fmt.Errorf("build CEL environment: %w", err)
 	}
 	env, err := set.Env(environment.NewExpressions)
 	if err != nil {
-		return nil, fmt.Errorf("build CEL environment: %w", err)
+		return nil, nil, nil, fmt.Errorf("build CEL environment: %w", err)
 	}
 	// The environment finds the fields of variables when it compiles, so each
 	// variable sees those before it, as in the API server's composition.
-	for _, v := range variables {
+	outputs, failures := make([]*celgo.Type, len(variables)), make([]string, len(variables))
+	for i, v := range variables {
 		t, ok := assumed[v.Name]
 		if !ok {
-			var out *celgo.Type
 			if ast, issues := env.Compile(v.Expression); issues.Err() == nil {
-				out = ast.OutputType()
+				outputs[i] = ast.OutputType()
+			} else {
+				failures[i] = issues.String()
 			}
-			t = declTypeOf(out)
+			t = declTypeOf(outputs[i])
 		}
 		vars.Fields[v.Name] = apiservercel.NewDeclField(v.Name, t, true, nil, nil)
 	}
-	return env, nil
+	return env, outputs, failures, nil
 }
 
 // variablesTypeName is the name the API server gives the type of variables.

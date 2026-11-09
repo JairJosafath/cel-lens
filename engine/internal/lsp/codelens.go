@@ -123,7 +123,9 @@ func lineRange(lines [][]rune, line int) lspRange {
 // that name it, or for a dyn value no entry names the .cellens file an entry
 // would go in. A value an entry names that is dyn all the same, as the entry
 // does not apply, gets Edit and Remove for that entry, not a second entry. A
-// document that is no file has none, as no .cellens entry can name it.
+// policy variable whose type follows from the entries of the values it reads
+// shows that type. A document that is no file has none, as no .cellens entry
+// can name it.
 func (ss *session) inlineValues(uri string, values []assist.Value) []inline.Value {
 	if _, ok := diskPath(uri); !ok {
 		return nil
@@ -131,7 +133,7 @@ func (ss *session) inlineValues(uri string, values []assist.Value) []inline.Valu
 	key := crdKey(uri)
 	var out []inline.Value
 	for _, v := range values {
-		iv := inline.Value{Name: v.Name, Type: v.Type, Target: inline.Target{
+		iv := inline.Value{Name: v.Name, Type: v.Type, Inferred: v.Inferred, Target: inline.Target{
 			Document: v.DocumentKind + " " + v.DocumentName, Version: v.Version, Variable: v.Variable, Path: v.Path, Value: v.Name,
 		}}
 		l, e, ok := ss.entryOf(key, v)
@@ -150,9 +152,17 @@ func (ss *session) inlineValues(uri string, values []assist.Value) []inline.Valu
 				iv.Target.Go = e.Go.String()
 			}
 			// A schema or Go type shows as the type a type: entry would
-			// write, which v.Type has; the others as the entry writes them.
-			if t := iv.Target.Kind + iv.Target.Type; t != "" && v.Type != "" {
+			// write, which v.Type has; the others as the entry writes them,
+			// but for the type of a variable that follows from other
+			// entries, as this one does not apply.
+			if t := iv.Target.Kind + iv.Target.Type; t != "" && v.Type != "" && !v.Inferred {
 				iv.Type = t
+			}
+		case v.Inferred:
+			lensKey, lensURI := ss.lensFor(key)
+			iv.Target.Cellens, iv.Target.File = lensURI, relativeTo(lensKey, key)
+			if loc, ok := ss.entryLocation(v.FromSource, v.FromLine); ok {
+				iv.From = loc
 			}
 		case v.Type != "":
 			continue // typed by no entry the session knows
@@ -163,6 +173,30 @@ func (ss *session) inlineValues(uri string, values []assist.Value) []inline.Valu
 		out = append(out, iv)
 	}
 	return out
+}
+
+// entryLocation returns where the type of the entry at line, from 1, of the
+// .cellens file messages name source (see lensSource) starts, as
+// cel-lens.showRule takes a place: {uri, range}, the range empty. It is
+// false when the session knows no such entry.
+func (ss *session) entryLocation(source string, line int) (map[string]any, bool) {
+	for _, l := range ss.sortedLenses() {
+		if ss.lensSource(l) != source {
+			continue
+		}
+		for _, e := range l.entries {
+			if e.Line != line {
+				continue
+			}
+			off, ok := cellens.TypeAt(l.text, e)
+			if !ok {
+				return nil, false
+			}
+			at := offsetPosition(l.text, off)
+			return map[string]any{"uri": l.uri, "range": lspRange{at, at}}, true
+		}
+	}
+	return nil, false
 }
 
 // entryOf returns the .cellens file and the entry that name the value v of

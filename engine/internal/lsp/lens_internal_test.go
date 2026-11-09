@@ -472,11 +472,36 @@ func manyFieldsCRD(n int) string {
 	return b.String()
 }
 
+// variablesPolicy is a ValidatingAdmissionPolicy whose params are dyn, and
+// whose variables read them: each is typed by its expression with the type a
+// .cellens entry gives params (#22).
+const variablesPolicy = `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: replica-limit
+spec:
+  paramKind: {apiVersion: rules.example.com/v1, kind: ReplicaLimit}
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [deployments]}
+  variables:
+    - name: limit
+      expression: params.maxReplicas
+    - name: doubled
+      expression: variables.limit * 2
+  validations:
+    - expression: object.spec.replicas <= variables.limit
+    - expression: object.spec.replicas <= variables.doubled
+`
+
 // BenchmarkCellensKeystroke measures a didChange of an open .cellens of 200
 // entries, for 20 files of 10 values each, three of them open (#16): a
 // keystroke in the type of one entry, one that leaves that entry a line YAML
 // cannot read, and a new line above every entry, which moves them all and so
-// the lines the documents' warnings name.
+// the lines the documents' warnings name. "policy type" is a keystroke in the
+// type of the entry for params of an open policy, whose variables read
+// params, and the code lenses of the policy asked for again, as the client
+// does once the server asks it to refresh them (#22).
 func BenchmarkCellensKeystroke(b *testing.B) {
 	const files, fields = 20, 10
 	dir := b.TempDir()
@@ -493,12 +518,18 @@ func BenchmarkCellensKeystroke(b *testing.B) {
 		}
 	}
 	text := lens.String()
-	edits := map[string][2]string{
-		"type":     {text, strings.Replace(text, "type: int", "type: string", 1)},
-		"broken":   {text, strings.Replace(text, "type: int", `type: "{in`, 1)},
-		"new line": {text, strings.Replace(text, "types:\n", "types:\n\n", 1)},
+	policy := pathURI(filepath.Join(dir, "policy.yaml"))
+	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(variablesPolicy), 0o600); err != nil {
+		b.Fatal(err)
 	}
-	for _, name := range []string{"type", "broken", "new line"} {
+	withParams := text + "  - file: policy.yaml\n    document: ValidatingAdmissionPolicy replica-limit\n    variable: params\n    type: \"{maxReplicas: int, team: string}\"\n"
+	edits := map[string][2]string{
+		"type":        {text, strings.Replace(text, "type: int", "type: string", 1)},
+		"broken":      {text, strings.Replace(text, "type: int", `type: "{in`, 1)},
+		"new line":    {text, strings.Replace(text, "types:\n", "types:\n\n", 1)},
+		"policy type": {withParams, strings.Replace(withParams, "{maxReplicas: int,", "{maxReplicas: double,", 1)},
+	}
+	for _, name := range []string{"type", "broken", "new line", "policy type"} {
 		b.Run(name, func(b *testing.B) {
 			ctx := context.Background()
 			a, err := assist.New(kubeversion.Default())
@@ -513,10 +544,18 @@ func BenchmarkCellensKeystroke(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": lensURI, "version": 1, "text": text}})
+			withPolicy := name == "policy type"
+			if withPolicy {
+				open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": policy, "version": 1, "text": variablesPolicy}})
+				if err := ss.didOpen(ctx, open); err != nil {
+					b.Fatal(err)
+				}
+			}
+			open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": lensURI, "version": 1, "text": edits[name][0]}})
 			if err := ss.didOpen(ctx, open); err != nil {
 				b.Fatal(err)
 			}
+			lenses, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": policy}})
 			version := 1
 			for b.Loop() {
 				version++
@@ -525,6 +564,12 @@ func BenchmarkCellensKeystroke(b *testing.B) {
 					"contentChanges": []map[string]any{{"text": edits[name][version%2]}},
 				})
 				if err := ss.didChange(ctx, params); err != nil {
+					b.Fatal(err)
+				}
+				if !withPolicy {
+					continue
+				}
+				if _, err := ss.codeLens(ctx, lenses); err != nil {
 					b.Fatal(err)
 				}
 			}

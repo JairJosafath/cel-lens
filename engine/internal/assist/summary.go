@@ -43,8 +43,17 @@ type Value struct {
 	// object.spec.ports[].config, self.spec.my-port for self.spec.my__dash__port.
 	Name string
 	// Type is the type a .cellens entry gives the value, as the entry writes
-	// it; empty when the value is dyn.
+	// it, or, when Inferred, the type the variable has; empty when the value
+	// is dyn.
 	Type string
+	// Inferred reports that the value is a policy variable, variables.<name>,
+	// that no entry names, whose expression returns Type with the types
+	// .cellens entries give the values it reads, where Kubernetes leaves it
+	// dyn. FromSource and FromLine then say where the first of those types
+	// is written, as check.AssumedType's Source and Line do.
+	Inferred   bool
+	FromSource string
+	FromLine   int
 	// DocumentKind and DocumentName are the kind and metadata.name of the
 	// document the value is in.
 	DocumentKind, DocumentName string
@@ -68,9 +77,10 @@ type Value struct {
 // only where a .cellens entry types it or could: in a
 // CustomResourceDefinition a value with x-kubernetes-int-or-string, the only
 // dyn value the API server lets a rule read, and in a policy params, object,
-// oldObject, variables.<name> or a dyn value inside them. A Kyverno policy
-// gets no values, as .cellens types none of its own. A cancelled ctx gives
-// ctx.Err() and no summaries.
+// oldObject, variables.<name> or a dyn value inside them; a variable whose
+// type follows from the types of entries is listed with that type
+// (Inferred). A Kyverno policy gets no values, as .cellens types none of its
+// own. A cancelled ctx gives ctx.Err() and no summaries.
 func (a *Assistant) Summaries(ctx context.Context, doc *Document) ([]Summary, error) {
 	var out []Summary
 	scopes := map[scopeKey]scoped{}
@@ -109,11 +119,11 @@ func (a *Assistant) Summaries(ctx context.Context, doc *Document) ([]Summary, er
 			if !cached {
 				p, made := policies[e.Document]
 				if !made {
-					p = newPolicyTypes(root, a.version, doc.crds, typeFromCRDs, kinds)
+					p = newPolicyTypes(root, a.version, doc.crds, typeFromCRDs, kinds, doc.assumedFor(root))
 					policies[e.Document] = p
 				}
 				sc.vars = p.scope(e, withVariables)
-				assumeInPolicy(sc.vars, doc.assumedFor(root))
+				assumeInPolicy(sc.vars, p.assumed)
 				for _, v := range sc.vars {
 					if !readable(v.name) || sc.reaches {
 						continue
@@ -513,9 +523,12 @@ func follow(root readRoot, steps []chainStep, m assume.Mode) (schema, []string, 
 	return s, path, true
 }
 
-// stops reports whether a value of schema s is typed from .cellens or dyn in
-// mode m: nothing below it is known as Kubernetes types it.
-func stops(s schema, m assume.Mode) bool { return s.str(assumedTypeKey) != "" || m.IsDyn(s) }
+// stops reports whether a value of schema s is typed from .cellens, a
+// variable whose type follows from types of .cellens, or dyn in mode m:
+// nothing below it is known as Kubernetes types it.
+func stops(s schema, m assume.Mode) bool {
+	return s.str(assumedTypeKey) != "" || s.str(inferredKey) != "" || m.IsDyn(s)
+}
 
 // chain records the value that e reads when e is a chain from a name in
 // names: the first value along it that a .cellens entry types, or that is dyn
@@ -529,7 +542,7 @@ func (r *reader) chain(e ast.Expr, names []readRoot) bool {
 	r.indexes(e, names)
 	s, path, ok := follow(root, steps, r.mode)
 	if ok && stops(s, r.mode) {
-		r.record(root, path, s.str(assumedTypeKey))
+		r.record(root, path, s)
 	}
 	return true
 }
@@ -582,9 +595,9 @@ func child(s schema, st chainStep) (schema, string, bool) {
 	return nil, "", false
 }
 
-// record adds the value at path below root, typed t or dyn when t is "",
-// unless it is already recorded.
-func (r *reader) record(root readRoot, path []string, t string) {
+// record adds the value at path below root, of schema s, unless it is
+// already recorded: typed from .cellens, inferred from it, or dyn.
+func (r *reader) record(root readRoot, path []string, s schema) {
 	name := documentName(r.doc)
 	if name == "" {
 		return // a .cellens entry names a document by its metadata.name
@@ -592,7 +605,13 @@ func (r *reader) record(root readRoot, path []string, t string) {
 	kind, _ := r.doc["kind"].(string)
 	v := Value{
 		Name: assume.Name(root.written, path[len(root.path):]),
-		Type: t, DocumentKind: kind, DocumentName: name, Version: r.version, Variable: root.variable,
+		Type: s.str(assumedTypeKey), DocumentKind: kind, DocumentName: name, Version: r.version, Variable: root.variable,
+	}
+	if t := s.str(inferredKey); v.Type == "" && t != "" {
+		v.Type, v.Inferred = t, true
+		from, _ := s[inferredFromKey].(map[string]any)
+		v.FromSource, _ = from["source"].(string)
+		v.FromLine, _ = from["line"].(int)
 	}
 	for _, step := range path {
 		if step != assume.Items && step != assume.Values && strings.ContainsAny(step, ".[]") {

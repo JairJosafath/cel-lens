@@ -19,7 +19,8 @@ import (
 )
 
 // The commands the parts run in the client. ShowRule takes one argument, the
-// Rule's Location, and shows the expression's problems or its hover.
+// Rule's Location, and shows the expression's problems or its hover; for an
+// inferred value, Value.From, and shows the .cellens entry there.
 // GiveType, EditType and RemoveType take one argument, the Target of the
 // value. ListValues takes, as its arguments, the parts of the values the line
 // leaves out, each a Part whose JSON form is a protocol Command; the client
@@ -69,7 +70,8 @@ type Rule struct {
 	Values []Value
 }
 
-// Value is a dyn value an expression reads.
+// Value is a dyn value an expression reads, or a policy variable that
+// Kubernetes leaves dyn whose type follows from the types of a .cellens.
 type Value struct {
 	// Name is the value as the expression reads it, such as self.spec.config.
 	// A long one is cut in the middle, after its root: the variable it is in
@@ -78,12 +80,21 @@ type Value struct {
 	// Type is the type a .cellens entry gives it, as the entry writes it,
 	// such as "{name: string}" or "apps/v1 Deployment", or for a schema or a
 	// Go type as a type: entry would write it, dyn included where the schema
-	// leaves one; empty for a value that is dyn.
+	// leaves one; or when Inferred the type it follows from; empty for a
+	// value that is dyn.
 	Type string
 	// Entry reports whether a .cellens entry names the value, so Edit and
-	// Remove act on it: always when Type is set, and for a value still dyn
-	// because the entry does not apply, such as one whose kind is not found.
+	// Remove act on it: always when Type is set but for Inferred, and for a
+	// value still dyn because the entry does not apply, such as one whose
+	// kind is not found.
 	Entry bool
+	// Inferred reports that Type is the type a policy variable's expression
+	// returns with the types .cellens gives the values it reads. Without an
+	// entry, its part says so, "variables.limit: int", and runs ShowRule with
+	// From, where the entry its type follows from is written, as the client
+	// names a place, such as {uri, range}; with no From it runs nothing.
+	Inferred bool
+	From     any
 	// Target is the argument of the value's commands.
 	Target Target
 }
@@ -129,7 +140,7 @@ type Part struct {
 // Line returns the parts of the line above the expression r: first the
 // subject, its type and whether it compiles, such as
 // "self: Widget.spec · compiles", which runs ShowRule; then a part for each
-// of the first two dyn values, as long as the line stays within MaxWidth,
+// of the first two values, as long as the line stays within MaxWidth,
 // cutting a long name in the middle ("object.…valueFrom") and a long type to
 // fewer fields when that makes it fit; then "+N more" for the values left
 // out, whose command lists them.
@@ -196,7 +207,7 @@ func fit(parts []Part, v Value, left int) ([]Part, bool) {
 			return p, true
 		}
 	}
-	if !v.Entry || v.Type == "" {
+	if v.Type == "" {
 		return nil, false
 	}
 	shortest := names[len(names)-1]
@@ -208,12 +219,16 @@ func fit(parts []Part, v Value, left int) ([]Part, bool) {
 }
 
 // valueParts are the parts of v, its name written as name and its type as
-// typ: "name: dyn · Give it a type" for a dyn value no entry names, and
-// "name: typ · Edit" then "Remove" for one an entry names, typ being dyn when
-// the entry does not apply.
+// typ: "name: dyn · Give it a type" for a dyn value no entry names, "name:
+// typ", which shows the entry its type follows from, for an inferred one no
+// entry names, and "name: typ · Edit" then "Remove" for one an entry names,
+// typ being dyn when the entry does not apply.
 func valueParts(v Value, name, typ string) []Part {
 	arg := []any{v.Target}
-	if !v.Entry {
+	switch {
+	case !v.Entry && v.Inferred:
+		return []Part{inferredPart(v, name+": "+typ)}
+	case !v.Entry:
 		return []Part{{Title: name + ": " + dyn + dot + give, Command: GiveType, Arguments: arg}}
 	}
 	if v.Type == "" {
@@ -231,7 +246,11 @@ func more(rest []Value) Part {
 	var items []any
 	for _, v := range rest {
 		arg := []any{v.Target}
-		if !v.Entry {
+		switch {
+		case !v.Entry && v.Inferred:
+			items = append(items, inferredPart(v, v.Name+": "+shortType(v.Type, maxType)))
+			continue
+		case !v.Entry:
 			items = append(items, Part{Title: v.Name + ": " + dyn + dot + give, Command: GiveType, Arguments: arg})
 			continue
 		}
@@ -247,6 +266,16 @@ func more(rest []Value) Part {
 }
 
 func moreTitle(n int) string { return "+" + strconv.Itoa(n) + " more" }
+
+// inferredPart is the part titled title of v, an inferred value no entry
+// names: it shows the entry v's type follows from, or does nothing when v
+// does not say where that is.
+func inferredPart(v Value, title string) Part {
+	if v.From == nil {
+		return Part{Title: title}
+	}
+	return Part{Title: title, Command: ShowRule, Arguments: []any{v.From}}
+}
 
 // root is the part of the name of v that a cut keeps: the policy variable
 // it is in, such as params or variables.max, or else its first name, such as

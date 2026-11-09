@@ -135,6 +135,31 @@ func TestLine(t *testing.T) {
 			want: []part{{"self: W · compiles", show}, {"self.port: int · Edit", inline.EditType}, {"Remove", inline.RemoveType}},
 		},
 		{
+			// #22: a variable whose type follows from .cellens says its type
+			// and shows the entry it follows from; one still dyn offers Give
+			// it a type.
+			name: "variable inferred from .cellens",
+			rule: inline.Rule{Subject: "object", SubjectType: "dyn", Values: []inline.Value{
+				{Name: "variables.n", Type: "int", Inferred: true, From: "here", Target: inline.Target{Variable: "variables.n"}},
+				{Name: "variables.a", Target: inline.Target{Variable: "variables.a"}},
+			}},
+			want: []part{{"object: dyn · compiles", show}, {"variables.n: int", show}, {"variables.a: dyn · Give it a type", inline.GiveType}},
+		},
+		{
+			name: "variable inferred from an entry not found",
+			rule: inline.Rule{Subject: "object", SubjectType: "dyn", Values: []inline.Value{
+				{Name: "variables.n", Type: "int", Inferred: true, Target: inline.Target{Variable: "variables.n"}},
+			}},
+			want: []part{{"object: dyn · compiles", show}, {"variables.n: int", ""}},
+		},
+		{
+			name: "inferred type cut to fit",
+			rule: inline.Rule{Subject: "object", SubjectType: "apps/v1 Deployment", Values: []inline.Value{
+				{Name: "variables.limits", Type: "map(string, list({min: int, max: int, team: string, owner: string, zone: string}))", Inferred: true, Target: inline.Target{Variable: "variables.limits"}},
+			}},
+			want: []part{{"object: apps/v1 Deployment · compiles", show}, {"variables.limits: map(string, list({min…", ""}},
+		},
+		{
 			name: "long subject type",
 			rule: inline.Rule{Subject: "object", SubjectType: "apps/v1 Deployment, apps/v1 StatefulSet, apps/v1 DaemonSet", Problems: 2},
 			want: []part{{"object: apps/v1 Deployment, apps/v1 StatefulSet… · 2 problems", show}},
@@ -162,10 +187,12 @@ func TestLineArguments(t *testing.T) {
 	a := dynValue("self.spec.a")
 	b := typedValue("self.spec.b", "{x: int}")
 	c := dynValue("self.spec.c")
+	from := map[string]any{"uri": "file:///.cellens"}
+	d := inline.Value{Name: "variables.limit", Type: "int", Inferred: true, From: from, Target: inline.Target{Variable: "variables.limit"}}
 	where := map[string]any{"uri": "file:///crd.yaml"}
-	got := inline.Line(inline.Rule{Subject: "self", SubjectType: "Widget", Location: where, Values: []inline.Value{a, b, c}})
+	got := inline.Line(inline.Rule{Subject: "self", SubjectType: "Widget", Location: where, Values: []inline.Value{a, b, c, d}})
 	if len(got) != 3 {
-		t.Fatalf("Line() = %+v, want the summary, one value and +2 more", titles(got))
+		t.Fatalf("Line() = %+v, want the summary, one value and +3 more", titles(got))
 	}
 	if got[0].Command != inline.ShowRule || !reflect.DeepEqual(got[0].Arguments, []any{where}) {
 		t.Errorf("Line()[0] = %+v, want %s with the rule's location", got[0], inline.ShowRule)
@@ -177,6 +204,7 @@ func TestLineArguments(t *testing.T) {
 		{Title: "self.spec.b: {x} · Edit", Command: inline.EditType, Arguments: []any{b.Target}},
 		{Title: "self.spec.b: {x} · Remove", Command: inline.RemoveType, Arguments: []any{b.Target}},
 		{Title: "self.spec.c: dyn · Give it a type", Command: inline.GiveType, Arguments: []any{c.Target}},
+		{Title: "variables.limit: int", Command: inline.ShowRule, Arguments: []any{from}}, // #22: it shows the entry
 	}
 	var items []inline.Part
 	for _, arg := range got[2].Arguments {
@@ -186,8 +214,8 @@ func TestLineArguments(t *testing.T) {
 		}
 		items = append(items, p)
 	}
-	if got[2].Title != "+2 more" || got[2].Command != inline.ListValues || !reflect.DeepEqual(items, want) {
-		t.Errorf("Line()[2] = %q %q %+v, want +2 more listing %+v", got[2].Title, got[2].Command, items, want)
+	if got[2].Title != "+3 more" || got[2].Command != inline.ListValues || !reflect.DeepEqual(items, want) {
+		t.Errorf("Line()[2] = %q %q %+v, want +3 more listing %+v", got[2].Title, got[2].Command, items, want)
 	}
 }
 
