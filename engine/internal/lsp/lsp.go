@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"reflect"
 	"slices"
+	"time"
 	"unicode/utf16"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
@@ -138,8 +139,14 @@ type session struct {
 	// lensChanges counts the changes to lenses; the code lenses a document
 	// keeps were made at one count, and are made again at another.
 	lensChanges int
-	init        bool
-	shutdown    bool
+	// retry fires once to send the last refresh again while the code lenses
+	// are owed, and stopRetry stops it; both nil while none is set (see
+	// armRetry). retryTimer makes them; nil means newTimer.
+	retry      <-chan time.Time
+	stopRetry  func() bool
+	retryTimer func(d time.Duration) (<-chan time.Time, func() bool)
+	init       bool
+	shutdown   bool
 	// edits are what the client can do with a workspace/applyEdit; pending
 	// are the ones sent for a command and not answered yet, by the id of
 	// the request, the editSeq-th one.
@@ -177,6 +184,10 @@ type document struct {
 	// codeLens request makes them.
 	codeLenses   []any
 	codeLensesAt int
+	// shown is true once the client asked for the code lenses of the
+	// document, at any version: an editor shows them, and asks again on a
+	// refresh (see lensesOwed).
+	shown bool
 }
 
 // diagnostics returns the problems of the document as it is, checking it only
@@ -247,6 +258,7 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	defer ss.stopScan()
 	defer ss.stopLensSearch()
 	defer ss.stopJobs()
+	defer ss.cancelRetry()
 	for {
 		var r readResult
 		var scanned <-chan *check.CRDs
@@ -266,6 +278,11 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 			return ctx.Err()
 		case r := <-jobDone:
 			if err := ss.finishJob(r); err != nil {
+				return err
+			}
+			continue
+		case <-ss.retry:
+			if err := ss.retryRefresh(); err != nil {
 				return err
 			}
 			continue
@@ -370,6 +387,7 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		return reply(nil, &rpcError{jsonrpc.CodeNotInitialized, "the server is not initialized"})
 	case msg.Method == "shutdown":
 		ss.shutdown = true
+		ss.cancelRetry()
 		ss.stopScan()
 		ss.stopLensSearch()
 		if err := ss.dropPending(); err != nil {
@@ -630,7 +648,7 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 	if isLens(d.URI) {
 		ss.putLens(ctx, d.URI, []byte(d.Text), true)
 		ss.lenses[crdKey(d.URI)].version = d.Version
-		return ss.publishTyped(ctx)
+		return ss.publishTyped(ctx, true)
 	}
 	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text), crds: &ss.crds}
 	return ss.publishWithCRDs(ctx, d.URI, ss.crds.Set(ctx, crdKey(d.URI), []byte(d.Text)))
@@ -657,9 +675,10 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 		if !changed {
 			return nil
 		}
-		return ss.publishTyped(ctx)
+		return ss.publishTyped(ctx, false)
 	}
-	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds}
+	shown := ss.docs[uri] != nil && ss.docs[uri].shown
+	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds, shown: shown}
 	return ss.publishWithCRDs(ctx, uri, ss.crds.Set(ctx, crdKey(uri), text))
 }
 
@@ -680,9 +699,9 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 			l.open = false
 		}
 		if !ss.readLens(ctx, uri) {
-			return nil
+			return ss.refreshOwed()
 		}
-		return ss.publishTyped(ctx)
+		return ss.publishTyped(ctx, true)
 	}
 	delete(ss.docs, uri)
 	// The editor's text is gone: the file on disk is what the workspace has.

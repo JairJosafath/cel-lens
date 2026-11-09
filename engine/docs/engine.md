@@ -169,7 +169,17 @@ number also brings the total under its budget). No fix is offered when there is 
   the open documents are checked again (a `.cellens`, a CRD or a setting
   changed), the server sends `workspace/codeLens/refresh` to a client whose
   capabilities have `workspace.codeLens.refreshSupport`; a client without it
-  shows new lines when it next asks, such as after an edit. The lenses of a
+  shows new lines when it next asks, such as after an edit. Until the client
+  has asked again for the lines of each open document it asked lines for,
+  which changed since, the editor opening, closing or saving a `.cellens`
+  (`didOpen`, `didClose`, a watched change) sends the refresh again, even
+  with the text the server has, and so does, once, a second after the last
+  refresh, the server itself: VS Code drops a refresh when the editor that
+  would ask loses the focus first, as when the extension shows a `.cellens`
+  it has just written beside the rule, and the save, the reopening and the
+  watched change that follow come after that. A keystroke in a `.cellens`
+  that changes no entry sends none, as a document in a hidden tab stays owed
+  its lines; the refresh sent a second later sets no other. The lenses of a
   version of a document are kept until it is checked again or a `.cellens`
   changes, so asking again only sends them.
 

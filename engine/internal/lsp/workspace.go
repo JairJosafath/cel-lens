@@ -562,11 +562,13 @@ func (ss *session) registerWatchers() error {
 // .cellens files are followed whatever the features: a changed or created one
 // is read, a deleted one, and those below a deleted folder, forgotten, and a
 // created folder is searched for them in the background; the open documents
-// are checked again when one changed. The diagnostics of the .cellens files
-// are sent again when they changed, as a YAML file an entry names may have
-// come or gone. A .go file, or a folder created or deleted, makes the listing
-// of the Go types out of date, so the next completion of a go: lists them
-// again.
+// are checked again when one changed. A change of a .cellens that changes
+// nothing, as of an open one or to the text the session has, asks for the
+// code lenses again while they are owed (see refreshOwed). The diagnostics
+// of the .cellens files are sent again when they changed, as a YAML file an
+// entry names may have come or gone. A .go file, or a folder created or
+// deleted, makes the listing of the Go types out of date, so the next
+// completion of a go: lists them again.
 func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMessage) error {
 	on := ss.features.Has(feature.CRDTypedPolicies)
 	var p struct {
@@ -578,9 +580,10 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 	if !decode(params, &p) {
 		return nil
 	}
-	lensChanged := false
+	lensChanged, aboutLens := false, false
 	var lensFolders []string
 	for _, c := range p.Changes {
+		aboutLens = aboutLens || isLens(c.URI)
 		// A .go file, or a folder that may hold some, makes the listing of
 		// the Go types out of date (see goFresh).
 		if strings.HasSuffix(crdKey(c.URI), ".go") || c.Type != fileChanged && !isYAML(crdKey(c.URI)) && !isLens(c.URI) {
@@ -631,7 +634,10 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		}
 		// A YAML file an entry of a .cellens names may have come or gone.
 		ss.lensGen++
-		return ss.publishLenses(ctx, "")
+		if err := ss.publishLenses(ctx, ""); err != nil || !aboutLens {
+			return err
+		}
+		return ss.refreshOwed()
 	}
 	// The batch starts or queues a scan of the created folders, a search of
 	// them for .cellens files, or both; the end of its last one checks the
@@ -736,10 +742,11 @@ func (ss *session) publishAll(ctx context.Context, skip string) error {
 // checks again and sends the diagnostics of the open documents whose assumed
 // types changed, in the order of their URIs, then those of the .cellens
 // files that changed, and asks the client to request the code lenses again
-// when a document was checked again or the entries changed (see putLens).
-// The other documents keep their checks, as nothing else they depend on
-// changed.
-func (ss *session) publishTyped(ctx context.Context) error {
+// when a document was checked again, the entries changed (see putLens) or,
+// with again, for the editor opening or closing the .cellens, the client
+// has not asked for lenses that changed (see refreshOwed). The other
+// documents keep their checks, as nothing else they depend on changed.
+func (ss *session) publishTyped(ctx context.Context, again bool) error {
 	refresh := ss.lensChanges != ss.refreshedAt
 	for _, uri := range slices.Sorted(maps.Keys(ss.docs)) {
 		if assumed := ss.assumedFor(ctx, uri); !reflect.DeepEqual(assumed, ss.docs[uri].assumed) {
@@ -752,8 +759,11 @@ func (ss *session) publishTyped(ctx context.Context) error {
 	if err := ss.publishLenses(ctx, ""); err != nil {
 		return err
 	}
-	if !refresh {
-		return nil
+	switch {
+	case refresh:
+		return ss.refreshCodeLenses()
+	case again:
+		return ss.refreshOwed()
 	}
-	return ss.refreshCodeLenses()
+	return nil
 }

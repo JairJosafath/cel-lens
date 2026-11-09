@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
@@ -25,7 +26,9 @@ import (
 // not open. The problems counted are those of the last check of the document
 // as it is now; it is checked only if no check of this version completed. The
 // lenses are kept until the document is checked again or a .cellens file
-// changes, so asking again costs nothing.
+// changes, so asking again costs nothing. Asking marks the document shown:
+// a refresh is owed it when its lenses change (see lensesOwed), and once
+// none is owed, the refresh set to be sent again is not (see armRetry).
 func (ss *session) codeLens(ctx context.Context, params json.RawMessage) (any, error) {
 	var p struct {
 		TextDocument struct {
@@ -40,6 +43,12 @@ func (ss *session) codeLens(ctx context.Context, params json.RawMessage) (any, e
 	if !ok || ss.inlineOff {
 		return []any{}, nil
 	}
+	doc.shown = true
+	defer func() {
+		if !ss.lensesOwed() {
+			ss.cancelRetry()
+		}
+	}()
 	if doc.codeLenses != nil && doc.codeLensesAt == ss.lensChanges {
 		return doc.codeLenses, nil
 	}
@@ -252,12 +261,98 @@ func relativeTo(lensKey, key string) string {
 // refreshCodeLenses asks the client to ask again for the code lenses of the
 // documents it shows, when it can (workspace/codeLens/refresh): the lines
 // change with the settings, the .cellens files and the CRDs, not only with
-// the document.
+// the document. While lenses are owed (see lensesOwed), it sets the refresh
+// to be sent again once, refreshRetry later (see armRetry).
 func (ss *session) refreshCodeLenses() error {
+	if err := ss.sendRefresh(); err != nil || !ss.codeLensRefresh || !ss.lensesOwed() {
+		return err
+	}
+	ss.armRetry()
+	return nil
+}
+
+// sendRefresh sends workspace/codeLens/refresh to a client that takes it.
+func (ss *session) sendRefresh() error {
 	ss.refreshedAt = ss.lensChanges
 	if !ss.codeLensRefresh {
 		return nil
 	}
 	ss.refreshes++
 	return ss.conn.Request("cel-lens-refresh-lenses-"+strconv.Itoa(ss.refreshes), "workspace/codeLens/refresh", nil)
+}
+
+// refreshRetry is how long after the last refresh the server sends it again
+// while the code lenses are still owed: longer than VS Code takes to ask
+// (250 ms at least) and to move the focus to the .cellens the extension
+// shows, so the refresh sent again comes after the focus moved.
+const refreshRetry = time.Second
+
+// armRetry sets retry to fire refreshRetry from now, in place of the one
+// set, if any: a client that dropped the last refresh, and sends nothing
+// about a .cellens after (an extension that does not save it, or a client
+// that does not watch files), is asked again (see retryRefresh).
+func (ss *session) armRetry() {
+	ss.cancelRetry()
+	after := ss.retryTimer
+	if after == nil {
+		after = newTimer
+	}
+	ss.retry, ss.stopRetry = after(refreshRetry)
+}
+
+// newTimer is a time.Timer of d, as its channel and its Stop.
+func newTimer(d time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(d)
+	return t.C, t.Stop
+}
+
+// cancelRetry stops the retry set, if any.
+func (ss *session) cancelRetry() {
+	if ss.stopRetry != nil {
+		ss.stopRetry()
+	}
+	ss.retry, ss.stopRetry = nil, nil
+}
+
+// retryRefresh follows retry: it sends the refresh again when the code
+// lenses are still owed. It sets no retry of its own, so a client that never
+// asks, as for a hidden tab, is asked once more per refresh, never in a
+// loop.
+func (ss *session) retryRefresh() error {
+	ss.retry, ss.stopRetry = nil, nil
+	if !ss.lensesOwed() {
+		return nil
+	}
+	return ss.sendRefresh()
+}
+
+// lensesOwed reports whether an open document the client asked code lenses
+// for has lenses it has not asked for since they changed, so the client may
+// have dropped the refresh sent for them: VS Code drops one when the editor
+// that would ask loses the focus first, as the editor of a policy does when
+// the extension shows beside it the .cellens it has just written. Nothing is
+// owed while inlineInfo is off.
+func (ss *session) lensesOwed() bool {
+	if ss.inlineOff {
+		return false
+	}
+	for _, d := range ss.docs {
+		if d.shown && (d.codeLenses == nil || d.codeLensesAt != ss.lensChanges) {
+			return true
+		}
+	}
+	return false
+}
+
+// refreshOwed asks the client again for the code lenses while they are owed
+// (see lensesOwed). The editor opening, closing or saving a .cellens calls
+// it even when that brings nothing new, as when it saves, closes or opens
+// again the file it has just edited: such a message comes after the refresh
+// the client may have dropped. A keystroke that changes no entry does not,
+// as a document whose tab is hidden stays owed: each would ask again.
+func (ss *session) refreshOwed() error {
+	if !ss.lensesOwed() {
+		return nil
+	}
+	return ss.refreshCodeLenses()
 }
