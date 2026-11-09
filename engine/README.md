@@ -119,6 +119,9 @@ Experimental:
 How the types of `object`, `params` and the policy variables are found is in
 [docs/type-sources.md](docs/type-sources.md), which also reports how many
 expressions of real policies still get `dyn`, and why.
+Where a value stays `dyn`, a `.cellens` file can say what it looks like
+([docs/cellens.md](docs/cellens.md)); the format is settled and the engine has
+a reader for it, and a later release reads `.cellens` files and uses the types.
 
 ## Other editors
 

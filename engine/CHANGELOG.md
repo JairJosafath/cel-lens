@@ -9,6 +9,10 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+### Added
+
+- The `.cellens` format, for types cel-lens assumes where Kubernetes gives `dyn`: `docs/cellens.md` describes it, and the engine has a reader that reports each problem with its line and column. Nothing reads `.cellens` files yet.
+
 ## [0.27.0] - 2026-11-04
 
 ### Added
