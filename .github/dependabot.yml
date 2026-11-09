@@ -1,0 +1,40 @@
+# Dependabot proposes updates every week: the minor and patch updates of an
+# ecosystem in one pull request, each major update in its own. Its pull
+# requests are not merged here; see "Dependency updates" in CONTRIBUTING.md.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /engine
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: build(engine)
+    groups:
+      engine-minor-and-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /vscode
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: build(vscode)
+    groups:
+      vscode-minor-and-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+    groups:
+      actions-minor-and-patch:
+        patterns: ['*']
+        update-types: [minor, patch]

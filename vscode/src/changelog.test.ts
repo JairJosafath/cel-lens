@@ -187,6 +187,13 @@ describe('CHANGELOG.md', () => {
     "a denial of service through a glob pattern an attacker chooses, and the client matches only the extension's own patterns and the ones the engine registers",
     '`osv-scanner.toml` ignores it for that copy until 2027-03-01',
     '`npm audit` still reports it, as 2 moderate vulnerabilities',
+    'The front page of JairJosafath/cel-lens (`public-repo/`) gains a CodeQL workflow',
+    "analyses the engine's Go, the extension's JavaScript and TypeScript, and the workflows on every push to `main`, on every pull request and every week",
+    "a Dependabot configuration, which proposes updates every week for the engine's Go modules, the extension's npm packages and the GitHub Actions",
+    'the minor and patch updates of each in one pull request and each major update in its own',
+    'a `govulncheck` job in CI, which fails on a known vulnerability the engine reaches, with the Go version of `engine/go.mod`',
+    "the bump is made in the maintainers' source, the next published release carries it, and the pull request is not merged on GitHub",
+    'Its `SECURITY.md` says how the code and its dependencies are watched',
   ])('names %s under Security in the Unreleased section', (text) => {
     expect(unreleasedPart('Security')).toContain(text);
   });

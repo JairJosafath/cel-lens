@@ -21,9 +21,22 @@ const FOLDER = 'public-repo';
 const HAS_FOLDER = existsSync(FOLDER);
 // A copy made by another test is a repository without a commit.
 const HAS_HEAD = spawnSync('git', ['rev-parse', '--verify', 'HEAD']).status === 0;
-const CI_PATH = `${FOLDER}/.github/workflows/ci.yml`;
-const SCORECARD_PATH = `${FOLDER}/.github/workflows/scorecard.yml`;
+const WORKFLOWS = `${FOLDER}/.github/workflows`;
+const CI_PATH = `${WORKFLOWS}/ci.yml`;
+const CODEQL_PATH = `${WORKFLOWS}/codeql.yml`;
+const SCORECARD_PATH = `${WORKFLOWS}/scorecard.yml`;
+const DEPENDABOT_PATH = `${FOLDER}/.github/dependabot.yml`;
+// Every workflow the folder holds, so one added later is checked without being named here.
+const WORKFLOW_PATHS = HAS_FOLDER
+  ? readdirSync(WORKFLOWS)
+      .sort()
+      .map((name) => `${WORKFLOWS}/${name}`)
+  : [];
 const SHA_PINNED = /^[^@\s]+@[0-9a-f]{40}$/;
+const NEWER_RUNS_CANCEL_OLDER = {
+  group: '${{ github.workflow }}-${{ github.ref }}',
+  'cancel-in-progress': true,
+};
 const BADGE_SOURCES = [
   /^https:\/\/github\.com\/JairJosafath\/cel-lens\/actions\/workflows\/ci\.yml\/badge\.svg$/,
   /^https:\/\/img\.shields\.io\/github\/v\/release\/JairJosafath\/cel-lens$/,
@@ -49,12 +62,15 @@ const ABSENT = new Set([
 const ENGINE_FILES = ['README.md', 'CONTRIBUTING.md', 'SECURITY.md', 'go.mod'];
 
 interface Step {
+  if?: string;
   uses?: string;
+  with?: Record<string, unknown>;
   run?: string;
   'working-directory'?: string;
 }
 interface Job {
   permissions?: unknown;
+  strategy?: { matrix?: unknown };
   steps?: Step[];
 }
 interface Workflow {
@@ -78,6 +94,20 @@ function usesOf(workflow: Workflow): string[] {
   return Object.values(workflow.jobs ?? {})
     .flatMap((job) => job.steps ?? [])
     .flatMap((step) => (step.uses === undefined ? [] : [step.uses]));
+}
+
+// Each permission a job of the workflow asks to write, as "job: permission".
+function writesOf(workflow: Workflow): string[] {
+  return Object.entries(workflow.jobs ?? {}).flatMap(([name, job]) =>
+    Object.entries(job.permissions ?? {})
+      .filter(([, access]) => access === 'write')
+      .map(([permission]) => `${name}: ${permission}`),
+  );
+}
+
+// The part of a Markdown text under the `## heading`, up to the next heading of that level.
+function sectionOf(text: string, heading: string): string {
+  return text.split(/^(?=## )/m).find((part) => part.startsWith(`## ${heading}\n`)) ?? '';
 }
 
 // Every link, picture and reference definition a CommonMark renderer sees: text in code blocks and
@@ -199,7 +229,9 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     '.github/ISSUE_TEMPLATE/feature.yml',
     '.github/ISSUE_TEMPLATE/config.yml',
     '.github/workflows/ci.yml',
+    '.github/workflows/codeql.yml',
     '.github/workflows/scorecard.yml',
+    '.github/dependabot.yml',
   ])('holds %s', (file) => {
     expect(existsSync(`${FOLDER}/${file}`)).toBe(true);
   });
@@ -221,17 +253,18 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(names.split('\n').filter((name) => name.startsWith(`${FOLDER}/`))).toEqual([]);
   });
 
-  it.each([CI_PATH, SCORECARD_PATH])(
-    'parses %s as YAML with every action pinned by SHA',
-    (path) => {
-      const uses = usesOf(readWorkflow(path));
+  it('holds three workflows: CI, CodeQL and Scorecard', () => {
+    expect(WORKFLOW_PATHS).toEqual([CI_PATH, CODEQL_PATH, SCORECARD_PATH]);
+  });
 
-      expect(uses.length).toBeGreaterThan(0);
-      expect(uses.filter((use) => !SHA_PINNED.test(use))).toEqual([]);
-    },
-  );
+  it.each(WORKFLOW_PATHS)('parses %s as YAML with every action pinned by SHA', (path) => {
+    const uses = usesOf(readWorkflow(path));
 
-  it.each([CI_PATH, SCORECARD_PATH])('has a version comment after every pin in %s', (path) => {
+    expect(uses.length).toBeGreaterThan(0);
+    expect(uses.filter((use) => !SHA_PINNED.test(use))).toEqual([]);
+  });
+
+  it.each(WORKFLOW_PATHS)('has a version comment after every pin in %s', (path) => {
     const lines = readFileSync(path, 'utf8')
       .split('\n')
       .filter((line) => line.includes('uses:'));
@@ -239,19 +272,100 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(lines.filter((line) => !/@[0-9a-f]{40} # v\d/.test(line))).toEqual([]);
   });
 
-  it('asks for read-all at the top of both workflows, and writes only in the Scorecard job', () => {
+  it('asks for read-all at the top of every workflow, and writes only in the Scorecard and CodeQL jobs', () => {
     const ci = readWorkflow(CI_PATH);
+    const codeql = readWorkflow(CODEQL_PATH);
     const scorecard = readWorkflow(SCORECARD_PATH);
 
-    expect(ci.permissions).toBe('read-all');
-    expect(scorecard.permissions).toBe('read-all');
+    expect(WORKFLOW_PATHS.map((path) => readWorkflow(path).permissions)).toEqual(
+      WORKFLOW_PATHS.map(() => 'read-all'),
+    );
     expect(Object.values(ci.jobs ?? {}).map((job) => job.permissions)).toEqual([
+      undefined,
       undefined,
       undefined,
     ]);
     expect(Object.values(scorecard.jobs ?? {}).map((job) => job.permissions)).toEqual([
       { 'security-events': 'write', 'id-token': 'write' },
     ]);
+    expect(Object.values(codeql.jobs ?? {}).map((job) => job.permissions)).toEqual([
+      { 'security-events': 'write', actions: 'read', contents: 'read' },
+    ]);
+    expect(
+      WORKFLOW_PATHS.flatMap((path) =>
+        writesOf(readWorkflow(path)).map((write) => `${basename(path)} ${write}`),
+      ),
+    ).toEqual([
+      'codeql.yml analyze: security-events',
+      'scorecard.yml scorecard: security-events',
+      'scorecard.yml scorecard: id-token',
+    ]);
+  });
+
+  it('analyses Go, JavaScript and TypeScript, and the workflows with CodeQL, one language per job', () => {
+    const job = readWorkflow(CODEQL_PATH).jobs?.['analyze'];
+    const init = job?.steps?.find((step) => step.uses?.startsWith('github/codeql-action/init@'));
+
+    expect(job?.strategy?.matrix).toEqual({
+      include: [
+        { language: 'go', 'build-mode': 'manual' },
+        { language: 'javascript-typescript', 'build-mode': 'none' },
+        { language: 'actions', 'build-mode': 'none' },
+      ],
+    });
+    expect(init?.with).toEqual({
+      languages: '${{ matrix.language }}',
+      'build-mode': '${{ matrix.build-mode }}',
+    });
+  });
+
+  it('builds the engine for CodeQL with the Go version of engine/go.mod, between init and analyze', () => {
+    const steps = readWorkflow(CODEQL_PATH).jobs?.['analyze']?.steps ?? [];
+    const names = steps.map((step) => step.uses?.replace(/@.*$/, '') ?? step.run);
+
+    expect(names).toEqual([
+      'actions/checkout',
+      'actions/setup-go',
+      'github/codeql-action/init',
+      'go build ./...',
+      'github/codeql-action/analyze',
+    ]);
+    expect(steps[1]).toMatchObject({
+      if: "matrix.language == 'go'",
+      with: { 'go-version-file': 'engine/go.mod' },
+    });
+    expect(steps[3]).toMatchObject({
+      if: "matrix.build-mode == 'manual'",
+      'working-directory': 'engine',
+    });
+  });
+
+  it('pins checkout, setup-go and the two CodeQL actions at the commits of their releases', () => {
+    expect(usesOf(readWorkflow(CODEQL_PATH))).toEqual([
+      'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803',
+      'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16',
+      'github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370',
+      'github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370',
+    ]);
+    expect(readFileSync(CODEQL_PATH, 'utf8').match(/# v[\d.]+$/gm)).toEqual([
+      '# v6.1.0',
+      '# v6.5.0',
+      '# v4.39.1',
+      '# v4.39.1',
+    ]);
+  });
+
+  it('runs CodeQL on push to main, on pull requests and weekly off the hour, newer runs cancel older', () => {
+    const codeql = readWorkflow(CODEQL_PATH);
+
+    expect(Object.keys(codeql.on ?? {})).toEqual(['push', 'pull_request', 'schedule']);
+    expect(codeql.on).toHaveProperty('push.branches', ['main']);
+    expect(codeql.on?.['schedule']).toHaveLength(1);
+    expect(codeql.on).toHaveProperty(
+      'schedule.0.cron',
+      expect.stringMatching(/^[1-5]?[1-9] \d\d? \* \* [0-6]$/),
+    );
+    expect(codeql.concurrency).toEqual(NEWER_RUNS_CANCEL_OLDER);
   });
 
   it('runs the Scorecard action weekly and on demand, not on push', () => {
@@ -280,10 +394,96 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(ci.on).toHaveProperty('pull_request');
     expect(ci.on).toHaveProperty('push.branches', ['main']);
     expect(ci.on).not.toHaveProperty('push.tags');
-    expect(ci.concurrency).toEqual({
-      group: '${{ github.workflow }}-${{ github.ref }}',
-      'cancel-in-progress': true,
-    });
+    expect(ci.concurrency).toEqual(NEWER_RUNS_CANCEL_OLDER);
+  });
+
+  it('fails CI on a vulnerability the engine reaches: govulncheck over engine/, on the Go version of engine/go.mod', () => {
+    const ci = readWorkflow(CI_PATH);
+
+    expect(Object.keys(ci.jobs ?? {})).toEqual(['engine', 'vscode', 'govulncheck']);
+    // The action's go-version-input is 'stable' unless set, and setup-go then ignores the file.
+    expect(ci.jobs?.['govulncheck']?.steps).toEqual([
+      {
+        uses: 'golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f',
+        with: {
+          'go-version-input': '',
+          'go-version-file': 'engine/go.mod',
+          'work-dir': 'engine',
+          'go-package': './...',
+        },
+      },
+    ]);
+    expect(readFileSync(CI_PATH, 'utf8')).toContain(
+      'golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0',
+    );
+  });
+
+  it('has Dependabot propose updates weekly for the engine, the extension and the workflows', () => {
+    const config = parse(readFileSync(DEPENDABOT_PATH, 'utf8')) as {
+      version: number;
+      updates: {
+        'package-ecosystem': string;
+        directory: string;
+        schedule: unknown;
+        'open-pull-requests-limit': number;
+        'commit-message': { prefix: string };
+        groups: Record<string, unknown>;
+      }[];
+    };
+
+    expect(config.version).toBe(2);
+    expect(config.updates.map((update) => [update['package-ecosystem'], update.directory])).toEqual(
+      [
+        ['gomod', '/engine'],
+        ['npm', '/vscode'],
+        ['github-actions', '/'],
+      ],
+    );
+    expect(config.updates.map((update) => update.schedule)).toEqual(
+      config.updates.map(() => ({ interval: 'weekly' })),
+    );
+    expect(config.updates.map((update) => update['open-pull-requests-limit'])).toEqual([3, 3, 3]);
+    expect(config.updates.map((update) => update['commit-message'].prefix)).toEqual([
+      'build(engine)',
+      'build(vscode)',
+      'ci',
+    ]);
+  });
+
+  it('groups the minor and patch updates of each ecosystem in one pull request, and leaves majors on their own', () => {
+    const config = parse(readFileSync(DEPENDABOT_PATH, 'utf8')) as {
+      updates: { groups: Record<string, unknown> }[];
+    };
+
+    expect(config.updates.map((update) => update.groups)).toEqual([
+      { 'engine-minor-and-patch': { patterns: ['*'], 'update-types': ['minor', 'patch'] } },
+      { 'vscode-minor-and-patch': { patterns: ['*'], 'update-types': ['minor', 'patch'] } },
+      { 'actions-minor-and-patch': { patterns: ['*'], 'update-types': ['minor', 'patch'] } },
+    ]);
+  });
+
+  it.each([
+    'Dependabot opens a pull request here',
+    'is not merged on GitHub',
+    'where every change is reviewed',
+    'A maintainer makes the same bump there',
+    'the next published release carries it',
+    'Dependabot then closes its pull request by itself',
+    'A security update is released as soon as its checks pass',
+  ])('says in CONTRIBUTING.md how a Dependabot pull request is applied: %s', (text) => {
+    const contributing = readFileSync(`${FOLDER}/CONTRIBUTING.md`, 'utf8');
+
+    expect(sectionOf(contributing, 'Dependency updates')).toContain(text);
+  });
+
+  it('says in SECURITY.md how the code and its dependencies are watched, in one sentence', () => {
+    const sentence = readFileSync(`${FOLDER}/SECURITY.md`, 'utf8')
+      .split('\n')
+      .find((line) => line.includes('Dependabot'));
+
+    expect(sentence).toBe(
+      'The code and its dependencies are watched: Dependabot proposes dependency updates every week, CodeQL analyses every change, govulncheck checks the engine against the Go vulnerability database on every change, and the OpenSSF Scorecard runs every week.',
+    );
   });
 
   it('uses the Go version of engine/go.mod and Node 24', () => {
