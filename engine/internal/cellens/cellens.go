@@ -151,6 +151,9 @@ func parse(data []byte) ([]Entry, []Problem) {
 		if errors.Is(err, io.EOF) {
 			return nil, nil
 		}
+		if entries, problems, ok := parseItems(data, err); ok {
+			return entries, problems
+		}
 		return nil, []Problem{notYAML(err)}
 	}
 	var problems []Problem
@@ -188,10 +191,16 @@ func parse(data []byte) ([]Entry, []Problem) {
 	if list.Kind != yaml.SequenceNode {
 		return nil, append(problems, at(list, "types is a list of entries"))
 	}
-	src := sourceLines(data)
+	entries, ps := parseList(list.Content, sourceLines(data))
+	return entries, append(problems, ps...)
+}
+
+// parseList reads items, the entries of the list types, whose lines are src.
+func parseList(items []*yaml.Node, src [][]rune) ([]Entry, []Problem) {
 	var entries []Entry
+	var problems []Problem
 	firstLine := map[string]int{}
-	for _, item := range list.Content {
+	for _, item := range items {
 		e, ps := parseEntry(item, src)
 		if len(ps) > 0 {
 			problems = append(problems, ps...)
@@ -206,6 +215,107 @@ func parse(data []byte) ([]Entry, []Problem) {
 		entries = append(entries, e)
 	}
 	return entries, problems
+}
+
+// parseItems reads a text YAML cannot read whole, as one being typed often
+// is, entry by entry: each entry of the block list types, from its dash to
+// the next one, on its own, so the entries YAML can read still count, and
+// one it cannot is a problem at its own line. err is why YAML cannot read the
+// whole text: it is the problem when every entry reads. It is false for a
+// text without types on a line of its own and a list of dashes below it.
+func parseItems(data []byte, err error) ([]Entry, []Problem, bool) {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	indent := func(l string) int { return len(l) - len(strings.TrimLeft(l, " ")) }
+	isDash := func(l string) bool { s := strings.TrimLeft(l, " "); return s == "-" || strings.HasPrefix(s, "- ") }
+	empty := func(l string) bool { s := strings.TrimSpace(l); return s == "" || strings.HasPrefix(s, "#") }
+	key := slices.IndexFunc(lines, func(l string) bool { return isTypesKey(strings.TrimLeft(l, " ")) })
+	if key < 0 {
+		return nil, nil, false
+	}
+	first := key + 1
+	for first < len(lines) && empty(lines[first]) {
+		first++
+	}
+	if first == len(lines) || !isDash(lines[first]) || indent(lines[first]) < indent(lines[key]) {
+		return nil, nil, false
+	}
+	dash := indent(lines[first])
+	// The entries start at the dashes; a line at their column without a dash
+	// is in no entry, and ends the one above it.
+	var starts, strays []int
+	end := first
+	for ; end < len(lines); end++ {
+		l := lines[end]
+		switch {
+		case empty(l) || indent(l) > dash:
+			continue
+		case indent(l) < dash || !isDash(l) && dash == indent(lines[key]):
+			// The line after the list: a key beside types.
+		case isDash(l):
+			starts = append(starts, end)
+			continue
+		default:
+			strays = append(strays, end)
+			continue
+		}
+		break
+	}
+	src := sourceLines(data)
+	var items []*yaml.Node
+	var problems []Problem
+	covered := false // whether a problem is at the line YAML stopped at
+	errAt := errorLine(err)
+	for _, i := range strays {
+		problems = append(problems, Problem{Line: i + 1, Column: dash + 1, Message: `this line is in no entry: start an entry with "- ", or indent the line as a key of the entry above`})
+		covered = covered || errAt == i+1
+	}
+	for _, start := range starts {
+		stop := end
+		for _, b := range append(slices.Clone(starts), strays...) {
+			if b > start && b < stop {
+				stop = b
+			}
+		}
+		for stop > start+1 && empty(lines[stop-1]) {
+			stop--
+		}
+		var doc yaml.Node
+		if perr := yaml.Unmarshal([]byte(strings.Join(lines[start:stop], "\n")), &doc); perr != nil {
+			// An error at the end of the entry, such as an open quote, is on
+			// its last line.
+			p := notYAML(perr)
+			p.Line = min(p.Line, stop-start) + start
+			p.Message = errorLineRE.ReplaceAllString(p.Message, "line "+strconv.Itoa(p.Line))
+			problems = append(problems, p)
+			covered = covered || errAt > start && errAt <= stop+1
+			continue
+		}
+		if len(doc.Content) == 1 && doc.Content[0].Kind == yaml.SequenceNode {
+			shiftLines(doc.Content[0], start)
+			items = append(items, doc.Content[0].Content...)
+		}
+	}
+	if !covered {
+		problems = append(problems, notYAML(err))
+	}
+	entries, ps := parseList(items, src)
+	return entries, append(problems, ps...), true
+}
+
+// isTypesKey reports whether s, a line without its indent, is the key types
+// with no value on its line.
+func isTypesKey(s string) bool {
+	rest, ok := strings.CutPrefix(s, "types:")
+	rest = strings.TrimSpace(rest)
+	return ok && (rest == "" || strings.HasPrefix(rest, "#"))
+}
+
+// shiftLines adds n to the line of every node in the tree of node.
+func shiftLines(node *yaml.Node, n int) {
+	node.Line += n
+	for _, c := range node.Content {
+		shiftLines(c, n)
+	}
 }
 
 func notYAML(err error) Problem {

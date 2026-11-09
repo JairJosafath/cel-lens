@@ -363,17 +363,18 @@ func TestCodeLensMoreValues(t *testing.T) {
 // workspace/codeLens/refresh.
 var refreshCaps = map[string]any{"workspace": map[string]any{"codeLens": map[string]any{"refreshSupport": true}}}
 
-// callSeeing sends a request and returns its result, and whether the server
-// sent a request with the method watch before the response.
-func (c *client) callSeeing(method string, params any, watch string) (json.RawMessage, bool) {
+// codeLensSeeingRefresh asks for the code lenses of the document at u and
+// returns them, and whether the server sent workspace/codeLens/refresh
+// before its answer.
+func (c *client) codeLensSeeingRefresh(u string) (json.RawMessage, bool) {
 	c.t.Helper()
 	c.nextID++
 	id := `"` + "seeing" + strings.Repeat("x", c.nextID) + `"`
-	c.send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "method": method, "params": params})
+	c.send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "method": "textDocument/codeLens", "params": map[string]any{"textDocument": map[string]any{"uri": u}}})
 	saw := false
 	for {
-		m := c.read("the response to " + method)
-		if m.Method == watch {
+		m := c.read("the code lenses")
+		if m.Method == "workspace/codeLens/refresh" {
 			saw = true
 		}
 		if string(m.ID) == id && m.Method == "" {
@@ -396,7 +397,7 @@ func TestCodeLensInlineInfo(t *testing.T) {
 	c.notify("initialized", map[string]any{})
 	c.openURI(crd, inlineCRD)
 	lenses := func() (int, bool) {
-		res, refreshed := c.callSeeing("textDocument/codeLens", map[string]any{"textDocument": map[string]any{"uri": crd}}, "workspace/codeLens/refresh")
+		res, refreshed := c.codeLensSeeingRefresh(crd)
 		var got []json.RawMessage
 		if err := json.Unmarshal(res, &got); err != nil {
 			t.Fatalf("codeLens result %s: %v", res, err)
@@ -436,7 +437,7 @@ func TestCodeLensRefreshOnCellens(t *testing.T) {
 		t.Fatalf("code lenses before the .cellens = %+v, want Give it a type", got)
 	}
 	c.openURI(fileURI(filepath.Join(dir, ".cellens")), lensText)
-	res, refreshed := c.callSeeing("textDocument/codeLens", map[string]any{"textDocument": map[string]any{"uri": crd}}, "workspace/codeLens/refresh")
+	res, refreshed := c.codeLensSeeingRefresh(crd)
 	if !refreshed || !strings.Contains(string(res), "cel-lens.editType") {
 		t.Errorf("after the .cellens opened: refreshed %t, code lenses %s, want a refresh and Edit", refreshed, res)
 	}
@@ -477,7 +478,7 @@ func TestCodeLensNoRefreshWithoutSupport(t *testing.T) {
 	c.openURI(crd, inlineCRD)
 	ask := func(what string) {
 		t.Helper()
-		if _, refreshed := c.callSeeing("textDocument/codeLens", map[string]any{"textDocument": map[string]any{"uri": crd}}, "workspace/codeLens/refresh"); refreshed {
+		if _, refreshed := c.codeLensSeeingRefresh(crd); refreshed {
 			t.Errorf("after %s the server asked for a refresh, which the client does not support", what)
 		}
 	}

@@ -231,3 +231,35 @@ func (ss *session) pruneGoReads() {
 	}
 	maps.DeleteFunc(ss.goReads, func(k string, _ goRead) bool { return !named[k] })
 }
+
+// goListing names the background job of listGo.
+const goListing = "the listing of Go types"
+
+// goFresh reports whether goFiles has the Go types of the workspace as they
+// are, as far as the client told of changes: a listing ran, and no .go file
+// or folder changed since it started.
+func (ss *session) goFresh() bool { return ss.goFiles != nil && ss.goListedAt == ss.goGen }
+
+// listGo lists the Go types of the workspace in the background, as
+// typeChoices does, into goFiles, unless a listing runs; a file whose size
+// and time stay as they were is not read again. Completion answers from
+// goFiles, so the message loop never waits for a listing.
+func (ss *session) listGo(ctx context.Context) {
+	list := ss.goLister
+	if list == nil {
+		list = goChoices
+	}
+	dirFS, folders, known, gen := ss.dirFS(), slices.Clone(ss.folders), ss.goFiles, ss.goGen
+	ss.startBackground(ctx, jobSpec{
+		command: goListing,
+		work: func(ctx context.Context) (any, error) {
+			listed := list(ctx, dirFS, folders, known)
+			return listed, ctx.Err()
+		},
+		settle: func(v any) (any, error) {
+			listed, _ := v.(goListed) // what work returns
+			ss.goFiles, ss.goListedAt = listed.files, gen
+			return nil, nil
+		},
+	})
+}

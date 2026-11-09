@@ -436,11 +436,13 @@ func TestLensEntryOnlyForItsFile(t *testing.T) {
 	c.diagnosticsOf(b, none)
 	c.openURI(a, lensCRD)
 	c.diagnosticsOf(a, none)
+	c.diagnosticsOf(b, none) // checked again, as the CRDs changed
 	c.openURI(fileURI(filepath.Join(dir, ".cellens")), lensText)
-	// The documents are checked again in the order of their URIs: copy.yaml,
-	// with no type from the .cellens, then crd.yaml.
+	// Only crd.yaml, whose types changed, is checked again (#16); checked
+	// again, copy.yaml still has no type from the .cellens.
+	c.diagnosticsOf(a, hasMessage(configWarning))
+	c.changeURI(b, 2, lensCRD)
 	if diags := c.diagnosticsOf(b, func([]diagnostic) bool { return true }); len(diags) != 0 {
 		t.Errorf("diagnostics of copy.yaml = %+v, want none: the entry names crd.yaml", diags)
 	}
-	c.diagnosticsOf(a, hasMessage(configWarning))
 }

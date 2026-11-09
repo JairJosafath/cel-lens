@@ -106,18 +106,35 @@ type session struct {
 	// typeChoices read of each .go file, which the next reuses while the
 	// file stays as it was.
 	goFiles map[string]goFile
+	// goGen counts the changes to .go files and folders the client told of;
+	// goListedAt is goGen when the listing in goFiles started, so goFiles is
+	// as the workspace is while the two are equal (see goFresh).
+	goGen, goListedAt int
 	// goLister lists the Go types for the job of typeChoices (see
-	// answerTypeChoices); nil means goChoices.
+	// answerTypeChoices) and for completion (see listGo); nil means
+	// goChoices.
 	goLister func(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, known map[string]goFile) goListed
 	// lensShown are the diagnostics last sent for each .cellens file, by URI.
 	lensShown map[string][]map[string]any
+	// lensGen counts the changes, other than to the .cellens files, that may
+	// change the problems of their entries: the settings, the CRDs and the
+	// files on disk. The problems found at one count are kept until another
+	// (see lensDiagnostics).
+	lensGen int
 	// inlineOff is true while the client's setting inlineInfo is false: the
 	// server then answers no code lenses.
 	inlineOff bool
+	// snippets is true when the client takes snippets in completion items,
+	// asIs when it takes their text with the indentation it has
+	// (insertTextMode asIs).
+	snippets, asIs bool
 	// codeLensRefresh is true when the client lets the server ask it to request
 	// the code lenses again; refreshes counts the times it did, for the ids.
 	codeLensRefresh bool
 	refreshes       int
+	// refreshedAt is lensChanges when the client was last asked to refresh
+	// the code lenses, or would have been.
+	refreshedAt int
 	// lensChanges counts the changes to lenses; the code lenses a document
 	// keeps were made at one count, and are made again at another.
 	lensChanges int
@@ -423,6 +440,8 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	}
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
 	ss.codeLensRefresh = p.Capabilities.Workspace.CodeLens.RefreshSupport
+	item := p.Capabilities.TextDocument.Completion.CompletionItem
+	ss.snippets, ss.asIs = item.SnippetSupport, slices.Contains(item.InsertTextModeSupport.ValueSet, insertAsIs)
 	ss.edits = p.editCaps()
 	ss.folders = p.folders()
 	ss.batch++ // the workspace scan and search work for one batch
@@ -563,7 +582,7 @@ func (ss *session) initializeResult() any {
 			"codeLensProvider":       map[string]any{},
 			"executeCommandProvider": map[string]any{"commands": commandNames()},
 			"completionProvider": map[string]any{
-				"triggerCharacters": []string{"."},
+				"triggerCharacters": triggerCharacters,
 			},
 			"experimental": map[string]any{"celLens": map[string]any{
 				"kubernetesVersion":           kubeversion.Default().String(),
@@ -611,7 +630,7 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 	if isLens(d.URI) {
 		ss.putLens(ctx, d.URI, []byte(d.Text), true)
 		ss.lenses[crdKey(d.URI)].version = d.Version
-		return ss.publishAll(ctx, "")
+		return ss.publishTyped(ctx)
 	}
 	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text), crds: &ss.crds}
 	return ss.publishWithCRDs(ctx, d.URI, ss.crds.Set(ctx, crdKey(d.URI), []byte(d.Text)))
@@ -638,7 +657,7 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 		if !changed {
 			return nil
 		}
-		return ss.publishAll(ctx, "")
+		return ss.publishTyped(ctx)
 	}
 	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds}
 	return ss.publishWithCRDs(ctx, uri, ss.crds.Set(ctx, crdKey(uri), text))
@@ -663,7 +682,7 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 		if !ss.readLens(ctx, uri) {
 			return nil
 		}
-		return ss.publishAll(ctx, "")
+		return ss.publishTyped(ctx)
 	}
 	delete(ss.docs, uri)
 	// The editor's text is gone: the file on disk is what the workspace has.
@@ -694,10 +713,16 @@ func (ss *session) publishWithCRDs(ctx context.Context, uri string, crdsChanged 
 // publish checks the document at uri, with the types the .cellens files
 // assume in it, and sends its diagnostics.
 func (ss *session) publish(ctx context.Context, uri string) error {
+	return ss.publishAssumed(ctx, uri, ss.assumedFor(ctx, uri))
+}
+
+// publishAssumed is publish with assumed, the types the .cellens files
+// assume in the document at uri.
+func (ss *session) publishAssumed(ctx context.Context, uri string, assumed []check.AssumedType) error {
 	doc := ss.docs[uri]
 	doc.checked = false // the Kubernetes version may have changed
 	doc.codeLenses = nil
-	if assumed := ss.assumedFor(ctx, uri); !reflect.DeepEqual(assumed, doc.assumed) {
+	if !reflect.DeepEqual(assumed, doc.assumed) {
 		doc.assumed, doc.parsed = assumed, nil
 	}
 	diags, err := ss.diagnostics(ctx, uri, doc)
@@ -746,6 +771,9 @@ func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, erro
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, badParams("textDocument/hover", err)
 	}
+	if isLens(p.TextDocument.URI) {
+		return ss.lensHover(ctx, p.TextDocument.URI, p.Position)
+	}
 	doc, ok := ss.docs[p.TextDocument.URI]
 	if !ok {
 		return nil, nil
@@ -761,10 +789,31 @@ func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, erro
 	}, nil
 }
 
+// triggerCharacters are the characters after which the client asks for
+// completion: a dot in CEL and in a .cellens path, and in a .cellens the /
+// of a file or folder, the # of a Go type, the ( of a list or map type and
+// the colon after a key.
+var triggerCharacters = []string{".", "/", "#", "(", ":"}
+
+// triggerCharacter is the protocol's CompletionTriggerKind for a character.
+const triggerCharacter = 2
+
 func (ss *session) completion(ctx context.Context, params json.RawMessage) (any, error) {
-	var p positionParams
+	var p struct {
+		positionParams
+		Context *struct {
+			TriggerKind      int    `json:"triggerKind"`
+			TriggerCharacter string `json:"triggerCharacter"`
+		} `json:"context"`
+	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, badParams("textDocument/completion", err)
+	}
+	if isLens(p.TextDocument.URI) {
+		return ss.lensCompletion(ctx, p.TextDocument.URI, p.Position)
+	}
+	if c := p.Context; c != nil && c.TriggerKind == triggerCharacter && c.TriggerCharacter != "." {
+		return nil, nil // the other characters are for .cellens files
 	}
 	doc, ok := ss.docs[p.TextDocument.URI]
 	if !ok {

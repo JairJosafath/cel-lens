@@ -194,3 +194,53 @@ func TestTypeText(t *testing.T) {
 		})
 	}
 }
+
+// TestDynPaths checks the dyn values a .cellens entry can type below a
+// schema: in a policy every value without a type, in a CRD's rules only the
+// x-kubernetes-int-or-string ones, never below a dyn value (#16).
+func TestDynPaths(t *testing.T) {
+	t.Parallel()
+	s := schemaOf(t, root)
+	for _, tc := range []struct {
+		mode  assume.Mode
+		limit int
+		want  [][]string
+	}{
+		{assume.Policies, 10, [][]string{
+			{"spec", "config"}, {"spec", "labels", assume.Values}, {"spec", "open"}, {"spec", "ports", assume.Items, "extra"}, {"spec", "size"},
+		}},
+		{assume.Rules, 10, [][]string{{"spec", "size"}}},
+		{assume.Policies, 2, [][]string{{"spec", "config"}, {"spec", "labels", assume.Values}}},
+	} {
+		if got := assume.DynPaths(s, tc.mode, tc.limit); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("DynPaths(root, %v, %d) = %q, want %q", tc.mode, tc.limit, got, tc.want)
+		}
+	}
+	if got := assume.DynPaths(map[string]any{}, assume.Policies, 10); len(got) != 1 || len(got[0]) != 0 {
+		t.Errorf("DynPaths of a dyn root = %q, want the root", got)
+	}
+}
+
+func TestChildrenAndBelow(t *testing.T) {
+	t.Parallel()
+	s := schemaOf(t, root)
+	spec, ok := assume.Below(s, []string{"spec"})
+	if !ok {
+		t.Fatal("Below(root, spec) = false")
+	}
+	var steps []string
+	for _, c := range assume.Children(spec) {
+		steps = append(steps, c.Step)
+	}
+	if want := []string{"bare", "config", "labels", "name", "open", "ports", "size"}; !reflect.DeepEqual(steps, want) {
+		t.Errorf("Children(spec) = %q, want %q", steps, want)
+	}
+	if items, ok := assume.Below(s, []string{"spec", "ports", assume.Items, "extra"}); !ok || !assume.IsDyn(items) {
+		t.Errorf("Below(root, spec.ports[].extra) = %v, %t, want the dyn value", items, ok)
+	}
+	for _, path := range [][]string{{"spec", "nosuch"}, {"spec", "config", "x"}, {"spec", "name", assume.Items}} {
+		if _, ok := assume.Below(s, path); ok {
+			t.Errorf("Below(root, %q) = true, want false", path)
+		}
+	}
+}

@@ -220,6 +220,7 @@ func relativeTo(lensKey, key string) string {
 // change with the settings, the .cellens files and the CRDs, not only with
 // the document.
 func (ss *session) refreshCodeLenses() error {
+	ss.refreshedAt = ss.lensChanges
 	if !ss.codeLensRefresh {
 		return nil
 	}

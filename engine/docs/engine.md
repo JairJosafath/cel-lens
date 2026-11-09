@@ -43,7 +43,10 @@ Server Protocol on stdin and stdout, for any editor:
 - **Hover** on a variable, field or function inside an expression: its type and
   a short description.
 - **Completion** inside an expression: `self`/`oldSelf` or `object`/`request`/...,
-  the fields of the type before a dot, and the Kubernetes CEL functions.
+  the fields of the type before a dot, and the Kubernetes CEL functions. The
+  server's `triggerCharacters` are `.`, `/`, `#`, `(` and `:`: in a YAML file
+  only `.` gives items, and a request for another of them
+  (`context.triggerKind` 2) gets `null`.
 
 - **Quick fixes** (the light bulb): "Change to `maxReplicas`" for a misspelled
   field, function or macro when exactly one name valid there is within two edits
@@ -54,16 +57,41 @@ number also brings the total under its budget). No fix is offered when there is 
 
 - **Types from `.cellens`**: the server finds the `.cellens` files of the
   workspace folders, and follows them as they are opened, edited, saved,
-  created or deleted (it registers a watcher for `**/.cellens`). A `dyn` value
+  created or deleted (it registers a watcher for `**/.cellens`, and one for
+  `**/*.go`, for the Go types a `go:` can name). A `dyn` value
   an entry names gets the entry's type, a CEL type, a kind, an OpenAPI schema
   or a Go type of the workspace, in diagnostics, hover and completion;
   a problem only that type shows is a warning that names the `.cellens` file and
   line, and the problems of a `.cellens` are published on it. See
   [cellens.md](cellens.md).
+- **Editing a `.cellens`**: in an open `.cellens`, completion of an entry's
+  keys and of what each can name, hover on what an entry names and the type
+  it gives, and its problems as it is typed. The client sends the `.cellens`
+  files (`didOpen`, `didChange`, `didClose`) as it sends YAML files; the server
+  knows them by their name. In a `.cellens` the trigger characters start a
+  path (`.`), a file or folder (`/`), a Go type (`#`), a type's argument
+  (`(`) and a value (`:`). A completion item replaces the word at the cursor
+  (`textEdit`); `list($1)`, `map(string, $1)` and `{$1}` are snippets
+  (`insertTextFormat` 2) for a client with
+  `textDocument.completion.completionItem.snippetSupport`, and plain text
+  otherwise; a key that starts a block, such as `schema:`, comes with the line
+  below it, indented, in the line ending of the text, as is
+  (`insertTextMode` 1), for a client whose
+  `textDocument.completion.completionItem.insertTextModeSupport` has it, and
+  alone otherwise. The folders after `go:` come from the last listing of the
+  workspace's Go types, which runs in the background, never on the message
+  loop: while there is none, or a `.go` file or a folder changed since (the
+  server watches `**/*.go`), the server answers with what it has,
+  `isIncomplete: true`, and lists them again, so the client asks again as the
+  person types. A folder's item ends with `#` and runs the client command
+  `editor.action.triggerSuggest`, for its struct types to show at once.
+  `go test -bench GoCompletion ./internal/lsp/` measures the completion and
+  the listing on 2,000 Go files. See [cellens.md](cellens.md#editing-a-cellens).
 - **Commands** (`workspace/executeCommand`): the type choices for a `dyn`
   value, with the workspace's examples of its kind, the check of a type as it
   is typed, a schema worked out from examples, and setting or removing a
-  `.cellens` entry through `workspace/applyEdit`. See [Commands](#commands).
+  `.cellens` entry through `workspace/applyEdit`, or adding one to fill in.
+  See [Commands](#commands).
 
 - **Inline info**: `textDocument/codeLens` (the server declares
   `codeLensProvider`, without `resolveProvider`: each lens comes with its
@@ -132,12 +160,15 @@ number also brings the total under its budget). No fix is offered when there is 
   version of a document are kept until it is checked again or a `.cellens`
   changes, so asking again only sends them.
 
-Positions outside CEL expressions get no hover and no completion. Documents are
+In a YAML file, positions outside CEL expressions get no hover and no
+completion. Documents are
 synchronised in full; the server exits 0 after `shutdown` and `exit`, and 1 when
 the client leaves without `shutdown`. `go test -bench Diagnostics ./internal/lsp/`
 measures the 300 ms diagnostics budget on a 1,000-line CRD, and
 `go test -bench CodeLens ./internal/lsp/` a code lens request on a CRD of 500
-rules and on policies, the first one after a change and one asked again.
+rules and on policies, the first one after a change and one asked again, and
+`go test -bench CellensKeystroke ./internal/lsp/` a change of an open
+`.cellens` of 200 entries.
 
 The command accepts the flags language clients pass: `--stdio` (the default and
 only transport) and `--clientProcessId=<pid>`, which makes the server exit when
@@ -160,6 +191,7 @@ object with these keys:
 | `file`, `document`, `version` or `variable`, `path` | The value, as an entry of that `.cellens` names it ([cellens.md](cellens.md)); a `path` left out, or `""`, is the root |
 | `value` | The value's CEL, such as `self.spec.config`, for messages and the edit's label |
 | `type`, `kind`, `schema` or `go` | The type to check or set: a type as `type:` writes it, a kind, an OpenAPI schema as a JSON object, or a Go type as `go:` writes it, relative to the folder of `cellens`; `null` counts as left out |
+| `snippet` | For `setType`, in place of a type: `type` or `schema`, the form of a new entry to fill in |
 
 - `cel-lens.typeChoices` takes no argument, or a line's (below), and returns
   the kinds a `kind:` entry can name, each with a one-line description: the
@@ -263,6 +295,25 @@ object with these keys:
   the `.cellens` it changed and how, `added`, `replaced` or `created`. Which
   `.cellens` the entry goes in, and how its text changes, is in
   [cellens.md](cellens.md#writing-entries-from-the-editor).
+- `cel-lens.setType` with a value and `snippet`, `"type"` or `"schema"`, in
+  place of a type, writes a new entry for the value with a type to fill in,
+  where `setType` would write one, and answers where the editor puts the
+  cursor in the `.cellens` once the edit is applied:
+  `{"cellens": "file:///repo/.cellens", "change": "added", "selection":
+  {"start": {"line": 9, "character": 11}, "end": {"line": 9, "character": 11}}}`.
+  For a value of a policy, `type` writes `type: "{}"` and `schema` writes
+  `schema:` with `type: object` and `properties: {}`, the cursor between the
+  braces; for a CustomResourceDefinition's value, which takes an int or a
+  string, `type: int` and `schema:` with `type: integer`, with `int` or
+  `integer` selected, so typing replaces it. The entry is checked as any
+  `setType` checks one, with that type. A value an entry already types keeps
+  it: nothing is written, and the answer, with `"change": "unchanged"` and no
+  `workspace/applyEdit`, puts the cursor where that entry's type starts, also
+  for a client that cannot apply an edit. The
+  VS Code extension opens `cellens` with `selection` selected
+  (`window.showTextDocument`), so the person types the type there, with
+  completion. A `snippet` beside a type, or other than `type` or `schema`, is
+  `InvalidParams`.
 - `cel-lens.removeType` with a value removes its entry, and returns
   `{"cellens": "file:///repo/.cellens", "change": "removed"}`, or `deleted`
   when the `.cellens` went with it. A value no `.cellens` types is an error.

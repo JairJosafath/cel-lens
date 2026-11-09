@@ -66,6 +66,10 @@ type pendingEdit struct {
 type commandResult struct {
 	Cellens string `json:"cellens"`
 	Change  string `json:"change"`
+	// Selection is, for setType with a snippet, where the editor puts the
+	// cursor in the .cellens once the edit is made: an empty range, or the
+	// placeholder to type over.
+	Selection *lspRange `json:"selection,omitempty"`
 }
 
 // valueArgs are the arguments of checkType, setType and removeType: the keys
@@ -89,6 +93,8 @@ type valueArgs struct {
 	Schema json.RawMessage `json:"schema"`
 	// Go names a Go type as go: does, relative to the folder of Cellens.
 	Go *string `json:"go"`
+	// Snippet asks setType for a new entry to fill in, of type or schema.
+	Snippet *string `json:"snippet"`
 }
 
 // namesValue reports whether a names a value, not only a type.
@@ -161,6 +167,9 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 	if err != nil || msg.IsNotification() {
 		return reply(nil, err)
 	}
+	if edit.edit == nil {
+		return reply(edit.result, nil) // nothing to change
+	}
 	return ss.applyEdit(msg.ID, edit)
 }
 
@@ -213,7 +222,7 @@ func (ss *session) answerTypeChoices(ctx context.Context, msg jsonrpc.Message, a
 	if list == nil {
 		list = goChoices
 	}
-	dirFS, folders, known := ss.dirFS(), slices.Clone(ss.folders), ss.goFiles
+	dirFS, folders, known, gen := ss.dirFS(), slices.Clone(ss.folders), ss.goFiles, ss.goGen
 	return ss.startJob(ctx, msg, jobSpec{
 		command: commandTypeChoices,
 		slot:    slot,
@@ -237,7 +246,7 @@ func (ss *session) answerTypeChoices(ctx context.Context, msg jsonrpc.Message, a
 		},
 		settle: func(v any) (any, error) {
 			found, _ := v.(choicesFound) // what work returns
-			ss.goFiles = found.listed.files
+			ss.goFiles, ss.goListedAt = found.listed.files, gen
 			answer.GoTypes, answer.Examples = found.listed.types, found.examples
 			if found.listed.more {
 				answer.GoTypesNote = fmt.Sprintf("cel-lens lists the first %d Go types of the workspace, by folder and name", maxGoChoices)
@@ -547,7 +556,12 @@ type workspaceEdit struct {
 // refuses what an entry would get a problem for.
 func (ss *session) setType(ctx context.Context, a valueArgs) (*workspaceEdit, error) {
 	types := a.types()
+	if a.Snippet != nil && len(types) == 0 {
+		return ss.setSnippet(ctx, a)
+	}
 	switch {
+	case a.Snippet != nil:
+		return nil, invalid(fmt.Sprintf("%s: give snippet or the type, not both", commandSetType))
 	case len(types) > 1:
 		return nil, invalid(fmt.Sprintf("%s: give one of type, kind, schema and go, not %s", commandSetType, strings.Join(types, " and ")))
 	case len(types) == 0:
@@ -610,7 +624,7 @@ func (ss *session) setType(ctx context.Context, a valueArgs) (*workspaceEdit, er
 	if err != nil {
 		return nil, err
 	}
-	return &workspaceEdit{label: "Give " + v.name + " a type", key: f.key, path: ss.lensSource(&lens{key: f.key}), edit: edit, result: commandResult{f.uri, change}}, nil
+	return &workspaceEdit{label: "Give " + v.name + " a type", key: f.key, path: ss.lensSource(&lens{key: f.key}), edit: edit, result: commandResult{Cellens: f.uri, Change: change}}, nil
 }
 
 // removeType removes the entry of the .cellens that gives the value a names
@@ -643,13 +657,13 @@ func (ss *session) removeType(a valueArgs) (*workspaceEdit, error) {
 	label := "Remove the type of " + v.name
 	if cellens.Bare(ed.Apply(f.text)) && ss.edits.documentChanges && ss.edits.delete {
 		edit := map[string]any{"documentChanges": []any{map[string]any{"kind": "delete", "uri": f.uri}}}
-		return &workspaceEdit{label: label, key: f.key, path: source, edit: edit, result: commandResult{f.uri, "deleted"}}, nil
+		return &workspaceEdit{label: label, key: f.key, path: source, edit: edit, result: commandResult{Cellens: f.uri, Change: "deleted"}}, nil
 	}
 	edit, err := ss.textEdit(f, ed)
 	if err != nil {
 		return nil, err
 	}
-	return &workspaceEdit{label: label, key: f.key, path: source, edit: edit, result: commandResult{f.uri, "removed"}}, nil
+	return &workspaceEdit{label: label, key: f.key, path: source, edit: edit, result: commandResult{Cellens: f.uri, Change: "removed"}}, nil
 }
 
 // waiting refuses a command whose edit would be made on the text of one of
@@ -875,4 +889,99 @@ func offsetPosition(text []byte, off int) position {
 		i += size
 	}
 	return p
+}
+
+// snippet is a placeholder type setType writes for a snippet: the entry's
+// type and where the cursor goes in the text of its type: after the first
+// cursor characters, selecting the next selected.
+type snippet struct {
+	entry            cellens.Entry
+	text             string // the type's text as the entry writes it
+	cursor, selected int
+}
+
+// snippetFor returns the placeholder of the snippet kind, type or schema,
+// for a value of a document of the kind: in a CustomResourceDefinition, whose
+// x-kubernetes-int-or-string values take an int or a string, int and
+// integer, selected; in a policy an empty struct, with the cursor in it.
+func snippetFor(ctx context.Context, kind, document string) (snippet, error) {
+	crd := document == cellens.CRDKind
+	switch kind {
+	case "type":
+		if crd {
+			t, _ := cellens.ParseType("int")
+			return snippet{cellens.Entry{Type: t}, "type: int", len("type: "), len("int")}, nil
+		}
+		t, _ := cellens.ParseType("{}")
+		return snippet{cellens.Entry{Type: t}, `type: "{}"`, len(`type: "{`), 0}, nil
+	case "schema":
+		js, text, cursor, selected := `{"type": "object", "properties": {}}`, "properties: {}", len("properties: {"), 0
+		if crd {
+			js, text, cursor, selected = `{"type": "integer"}`, "type: integer", len("type: "), len("integer")
+		}
+		s, problems := cellens.ReadSchema(ctx, []byte(js))
+		if len(problems) > 0 {
+			return snippet{}, fmt.Errorf("the schema of the snippet: %s", strings.Join(problems, "; "))
+		}
+		return snippet{cellens.Entry{Schema: s}, text, cursor, selected}, nil
+	}
+	return snippet{}, invalid(fmt.Sprintf("%s: snippet %q: use type or schema", commandSetType, kind))
+}
+
+// setSnippet adds an entry for the value a names with a placeholder type of
+// the kind a.Snippet names, for the person to fill in, where setType would
+// add it, and answers where the editor puts the cursor. A value that has an
+// entry keeps it: the answer is then where that entry's type starts.
+func (ss *session) setSnippet(ctx context.Context, a valueArgs) (*workspaceEdit, error) {
+	v, err := ss.readValue(commandSetType, a)
+	if err != nil {
+		return nil, err
+	}
+	sn, err := snippetFor(ctx, *a.Snippet, v.entry.Document.Kind)
+	if err != nil {
+		return nil, err
+	}
+	files, root, err := ss.lensFiles(v.file)
+	if err != nil {
+		return nil, failed(err.Error())
+	}
+	if err := ss.waiting(append(files, lensFile{key: path.Join(root, cellens.FileName)})); err != nil {
+		return nil, err
+	}
+	if f, ok := owner(files, v); ok {
+		off, _ := cellens.TypeAt(f.text, v.in(f.key))
+		at := offsetPosition(f.text, off)
+		return &workspaceEdit{result: commandResult{Cellens: f.uri, Change: "unchanged", Selection: &lspRange{at, at}}}, nil
+	}
+	if !ss.edits.apply {
+		return nil, failed("the editor cannot apply an edit for cel-lens (workspace/applyEdit), which is how cel-lens writes .cellens: write the entry by hand")
+	}
+	v.setType(sn.entry)
+	if msg, _, err := ss.valueProblem(ctx, v); err != nil || msg != "" {
+		if err != nil {
+			return nil, err
+		}
+		return nil, invalid(fmt.Sprintf("%s: an entry for %s would not apply: %s", commandSetType, v.name, msg))
+	}
+	var f lensFile
+	change := "added"
+	if len(files) > 0 {
+		f = files[0]
+	} else {
+		key := path.Join(root, cellens.FileName)
+		f, change = lensFile{key: key, uri: pathURI(filepath.FromSlash(key))}, "created"
+	}
+	ed, err := cellens.Set(f.text, v.in(f.key))
+	if err != nil {
+		return nil, failed(fmt.Sprintf("%s: %v", ss.lensSource(&lens{key: f.key}), err))
+	}
+	edit, err := ss.textEdit(f, ed)
+	if err != nil {
+		return nil, err
+	}
+	text := ed.Apply(f.text)
+	at := ed.Start + strings.LastIndex(ed.Text, sn.text) + sn.cursor
+	sel := lspRange{offsetPosition(text, at), offsetPosition(text, at+sn.selected)}
+	src := ss.lensSource(&lens{key: f.key})
+	return &workspaceEdit{label: "Give " + v.name + " a type", key: f.key, path: src, edit: edit, result: commandResult{Cellens: f.uri, Change: change, Selection: &sel}}, nil
 }

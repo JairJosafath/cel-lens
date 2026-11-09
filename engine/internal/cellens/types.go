@@ -262,6 +262,45 @@ func (p *typeParser) parseField(seen map[string]bool) (Field, error) {
 	return Field{Name: name, Type: t}, nil
 }
 
+// TypeNameAt reports whether the character at, from 0, of the type s, as
+// type: writes it, is where the name of a type goes: at its start, after
+// "(" or a comma in list(...) or map(...), or after the colon of a struct's
+// field; not where a field's name goes. It also returns the name written
+// around at, from start to end, which may be empty. s need not parse.
+func TypeNameAt(s string, at int) (start, end int, ok bool) {
+	src := []rune(s)
+	at = min(max(at, 0), len(src))
+	start, end = at, at
+	for start > 0 && isNamePart(src[start-1]) {
+		start--
+	}
+	for end < len(src) && isNamePart(src[end]) {
+		end++
+	}
+	var open []rune // the brackets open before start
+	ok = true
+	for _, r := range src[:start] {
+		switch {
+		case r == '{':
+			open, ok = append(open, r), false
+		case r == '(':
+			open, ok = append(open, r), true
+		case r == '}' || r == ')':
+			if len(open) > 0 {
+				open = open[:len(open)-1]
+			}
+			ok = false
+		case r == ',':
+			ok = len(open) > 0 && open[len(open)-1] == '('
+		case r == ':':
+			ok = len(open) > 0 && open[len(open)-1] == '{'
+		case !unicode.IsSpace(r):
+			ok = false
+		}
+	}
+	return start, end, ok
+}
+
 // name reads a name: a letter or _ or $, then letters, digits, _, $ and -,
 // as JSON field names in Kubernetes objects use them.
 func (p *typeParser) name() string {

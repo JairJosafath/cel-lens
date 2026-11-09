@@ -68,10 +68,6 @@ func (ss *session) startJob(ctx context.Context, msg jsonrpc.Message, spec jobSp
 	if msg.IsNotification() {
 		return nil
 	}
-	if ss.jobs == nil {
-		ss.jobs = map[int]*job{}
-		ss.jobDone = make(chan jobResult)
-	}
 	same := func(j *job) bool {
 		return !j.cancelled && j.spec.command == spec.command && j.spec.slot == spec.slot
 	}
@@ -91,15 +87,42 @@ func (ss *session) startJob(ctx context.Context, msg jsonrpc.Message, spec jobSp
 			}
 		}
 	}
+	ss.runJob(ctx, spec, []json.RawMessage{msg.ID})
+	return nil
+}
+
+// runJob starts the work of spec in a goroutine for the requests ids, which
+// may be none.
+func (ss *session) runJob(ctx context.Context, spec jobSpec, ids []json.RawMessage) {
+	if ss.jobs == nil {
+		ss.jobs = map[int]*job{}
+		ss.jobDone = make(chan jobResult)
+	}
 	ss.jobSeq++
 	seq, done := ss.jobSeq, ss.jobDone
 	ctx, cancel := context.WithCancel(ctx)
-	ss.jobs[seq] = &job{spec: spec, ids: []json.RawMessage{msg.ID}, cancel: cancel}
+	ss.jobs[seq] = &job{spec: spec, ids: ids, cancel: cancel}
 	go func() {
 		result, err := spec.work(ctx)
 		done <- jobResult{seq, result, err}
 	}()
-	return nil
+}
+
+// startBackground runs the work of spec in a goroutine for no request, so
+// its settle keeps what it found for the requests that come after, unless a
+// job of the same command and slot runs, or maxJobs do: it reports whether
+// it started one. stopJobs cancels and waits for it as for any job.
+func (ss *session) startBackground(ctx context.Context, spec jobSpec) bool {
+	for _, j := range ss.jobs {
+		if !j.cancelled && j.spec.command == spec.command && j.spec.slot == spec.slot {
+			return false
+		}
+	}
+	if len(ss.jobs) >= maxJobs {
+		return false
+	}
+	ss.runJob(ctx, spec, nil)
+	return true
 }
 
 // finishJob answers the requests that wait for the job that ended with r,

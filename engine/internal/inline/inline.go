@@ -278,6 +278,11 @@ func shorterNames(name, root string) []string {
 	return out
 }
 
+// ShortType writes the type t as the line writes it after a value's name: a
+// struct by its field names, as {maxReplicas, team}, and anything longer
+// than 40 characters cut with "…".
+func ShortType(t string) string { return shortType(t, maxType) }
+
 // shortType writes the type t, as a .cellens entry or the API server writes
 // it, in at most limit characters: a struct by its field names, as
 // {name, replicas}, with "…" for those that do not fit, and anything longer

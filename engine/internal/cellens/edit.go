@@ -105,6 +105,37 @@ func Remove(text []byte, e Entry) (Edit, error) {
 	return ed, l.check(ed, e, true)
 }
 
+// TypeAt returns the offset in text, the text of a .cellens file, where the
+// type of the entry for the value e names starts: the value of its type, kind
+// or go, inside its quotes, or the first key of its schema. It is false when
+// text is no YAML, has no entry for the value, or the entry has no type.
+func TypeAt(text []byte, e Entry) (int, bool) {
+	l, err := readLayout(text)
+	if err != nil {
+		return 0, false
+	}
+	i := l.find(e)
+	if i < 0 {
+		return 0, false
+	}
+	n := l.items[i].node
+	for j := 0; j+1 < len(n.Content); j += 2 {
+		v := n.Content[j+1]
+		if !slices.Contains(typeKeys, n.Content[j].Value) {
+			continue
+		}
+		if v.Kind == yaml.MappingNode && len(v.Content) > 0 {
+			v = v.Content[0]
+		}
+		off := l.offset(v.Line, v.Column)
+		if v.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) != 0 {
+			off++
+		}
+		return off, true
+	}
+	return 0, false
+}
+
 // Bare reports whether text holds nothing but Header, the key types without
 // entries and blank lines: nothing a person wrote.
 func Bare(text []byte) bool {
@@ -712,15 +743,15 @@ func flowEnd(s string, col int) (int, bool) {
 // column key, from 0.
 func entryText(e Entry, dash, key int, eol string) string {
 	key = max(key, dash+2)
-	lines := []string{"file: " + scalar(e.File), "document: " + scalar(e.Document.Kind+" "+e.Document.Name)}
+	lines := []string{"file: " + Scalar(e.File), "document: " + Scalar(e.Document.Kind+" "+e.Document.Name)}
 	if e.Version != "" {
-		lines = append(lines, "version: "+scalar(e.Version))
+		lines = append(lines, "version: "+Scalar(e.Version))
 	}
 	if e.Variable != "" {
-		lines = append(lines, "variable: "+scalar(e.Variable))
+		lines = append(lines, "variable: "+Scalar(e.Variable))
 	}
 	if len(e.Path) > 0 {
-		lines = append(lines, "path: "+scalar(e.Path.String()))
+		lines = append(lines, "path: "+Scalar(e.Path.String()))
 	}
 	lines = append(lines, typeText(e, key, eol))
 	var b strings.Builder
@@ -741,9 +772,9 @@ func entryText(e Entry, dash, key int, eol string) string {
 func typeText(e Entry, indent int, eol string) string {
 	switch {
 	case e.Type != nil:
-		return "type: " + scalar(e.Type.String())
+		return "type: " + Scalar(e.Type.String())
 	case e.Go != nil:
-		return "go: " + scalar(e.Go.String())
+		return "go: " + Scalar(e.Go.String())
 	case e.Schema != nil:
 		lines := schemaLines(e.Schema)
 		for i, line := range lines {
@@ -751,7 +782,7 @@ func typeText(e Entry, indent int, eol string) string {
 		}
 		return strings.Join(append([]string{"schema:"}, lines...), eol)
 	}
-	return "kind: " + scalar(e.Kind.APIVersion+" "+e.Kind.Kind)
+	return "kind: " + Scalar(e.Kind.APIVersion+" "+e.Kind.Kind)
 }
 
 // schemaLines writes the schema s as a block of YAML, one line each, without
@@ -797,9 +828,10 @@ func spaces(n int) string { return strings.Repeat(" ", max(n, 0)) }
 // person reads it as written.
 var plainWords = regexp.MustCompile(`^[A-Za-z0-9_$/.()\[\]*-][A-Za-z0-9_$/.()\[\]*#-]*( [A-Za-z0-9_$/.()\[\]*-][A-Za-z0-9_$/.()\[\]*#-]*)*$`)
 
-// scalar writes s as a YAML value: plain when it is a plainWords value YAML
-// reads back as that string, double-quoted otherwise.
-func scalar(s string) string {
+// Scalar writes s as a .cellens writes a value in block style: plain when it
+// is a word, or words, of letters, digits and _$/.()[]*#- that YAML reads
+// back as that string, double-quoted otherwise.
+func Scalar(s string) string {
 	if plainWords.MatchString(s) {
 		var m map[string]any
 		if yaml.Unmarshal([]byte("k: "+s), &m) == nil && m["k"] == s {

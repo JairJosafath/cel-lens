@@ -456,3 +456,78 @@ func TestBatchScanFindsBeforeSearchEnds(t *testing.T) {
 		t.Errorf("publishes after the search ended = %d, want still 1: the scan's publish had the batch's change", n)
 	}
 }
+
+// manyFieldsCRD is a CustomResourceDefinition whose spec has n
+// x-kubernetes-int-or-string fields f0, f1, ..., each read by a rule.
+func manyFieldsCRD(n int) string {
+	var b strings.Builder
+	b.WriteString("apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata: {name: widgets.example.com}\nspec:\n  group: example.com\n  scope: Namespaced\n  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}\n  versions:\n    - name: v1\n      served: true\n      storage: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          x-kubernetes-validations:\n")
+	for i := range n {
+		fmt.Fprintf(&b, "            - rule: \"self.spec.f%d == 1\"\n", i)
+	}
+	b.WriteString("          properties:\n            spec:\n              type: object\n              properties:\n")
+	for i := range n {
+		fmt.Fprintf(&b, "                f%d: {x-kubernetes-int-or-string: true}\n", i)
+	}
+	return b.String()
+}
+
+// BenchmarkCellensKeystroke measures a didChange of an open .cellens of 200
+// entries, for 20 files of 10 values each, three of them open (#16): a
+// keystroke in the type of one entry, one that leaves that entry a line YAML
+// cannot read, and a new line above every entry, which moves them all and so
+// the lines the documents' warnings name.
+func BenchmarkCellensKeystroke(b *testing.B) {
+	const files, fields = 20, 10
+	dir := b.TempDir()
+	crd := manyFieldsCRD(fields)
+	var lens strings.Builder
+	lens.WriteString("types:\n")
+	for i := range files {
+		name := fmt.Sprintf("crd%02d.yaml", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(crd), 0o600); err != nil {
+			b.Fatal(err)
+		}
+		for j := range fields {
+			fmt.Fprintf(&lens, "  - file: %s\n    document: CustomResourceDefinition widgets.example.com\n    version: v1\n    path: spec.f%d\n    type: int\n", name, j)
+		}
+	}
+	text := lens.String()
+	edits := map[string][2]string{
+		"type":     {text, strings.Replace(text, "type: int", "type: string", 1)},
+		"broken":   {text, strings.Replace(text, "type: int", `type: "{in`, 1)},
+		"new line": {text, strings.Replace(text, "types:\n", "types:\n\n", 1)},
+	}
+	for _, name := range []string{"type", "broken", "new line"} {
+		b.Run(name, func(b *testing.B) {
+			ctx := context.Background()
+			a, err := assist.New(kubeversion.Default())
+			if err != nil {
+				b.Fatal(err)
+			}
+			ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}, folders: []string{dir}}
+			lensURI := pathURI(filepath.Join(dir, ".cellens"))
+			for i := range 3 {
+				open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": pathURI(filepath.Join(dir, fmt.Sprintf("crd%02d.yaml", i))), "version": 1, "text": crd}})
+				if err := ss.didOpen(ctx, open); err != nil {
+					b.Fatal(err)
+				}
+			}
+			open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": lensURI, "version": 1, "text": text}})
+			if err := ss.didOpen(ctx, open); err != nil {
+				b.Fatal(err)
+			}
+			version := 1
+			for b.Loop() {
+				version++
+				params, _ := json.Marshal(map[string]any{
+					"textDocument":   map[string]any{"uri": lensURI, "version": version},
+					"contentChanges": []map[string]any{{"text": edits[name][version%2]}},
+				})
+				if err := ss.didChange(ctx, params); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

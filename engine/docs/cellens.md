@@ -202,14 +202,19 @@ says what to do: an unknown key or one written twice, a missing `file` or
 `document`, a file outside the folder, more than one or none of `type`,
 `kind`, `schema` and `go`, `version` on a policy or `variable` on a
 CustomResourceDefinition, a type that doesn't parse, a `go` that is not
-`<folder>#<TypeName>`, two entries for the same value. A schema the API server
+`<folder>#<TypeName>`, two entries for the same value, a text that is not
+YAML. A schema the API server
 would refuse as a CustomResourceDefinition's schema is a problem at the line
 of the offending key, in the API server's words, after the path in the schema:
 `schema: properties[max].type: Unsupported value: "int": supported values:
 "array", "boolean", "integer", "number", "object", "string"`. A type written over several
 lines, or with escapes, gets its problem on the value, with the character
 counted in the message. An entry with a problem is left out; the others still
-count.
+count. A text YAML cannot read whole, as one being typed often is, is read
+entry by entry, each from its dash to the next: the entries YAML can read
+count, and each one it cannot is a problem at its own line, such as
+`not YAML: line 8: could not find expected ':'`; so is a line at the column
+of the dashes that starts no entry, and the entries after it still count.
 
 ## How the types are used
 
@@ -217,9 +222,10 @@ The language server finds the `.cellens` files in the workspace folders
 (skipping hidden folders and `node_modules`, like the CRD scan) in the
 background when it starts, whatever the experimental features, and follows
 them: opening, editing, saving, creating or deleting a `.cellens`, or a folder
-holding one, checks the open documents again, without a restart. For changes
+holding one, checks the open documents again, without a restart; an edit in
+the editor checks again only those whose types it changes. For changes
 on disk it asks the editor to watch `**/.cellens`. An open `.cellens` counts
-with the editor's text.
+with the editor's text, as it is typed ([Editing a .cellens](#editing-a-cellens)).
 
 An entry applies only to the file, document and value it names, and only
 where the value is `dyn` without it:
@@ -291,11 +297,86 @@ out, or whose value another `.cellens` already types: the one first by its
 path gives the type. A symbolic link to a
 `.cellens` is not followed, and a file over 1 MiB is not read.
 
+## Editing a .cellens
+
+An open `.cellens` is edited like code: the language server reads it as it
+is typed, the editor's text at each change, and reads the line at the cursor
+by its indentation and brackets, so a `.cellens` YAML cannot read yet still
+gets completion and hover where its line can be read.
+
+Completion offers what can be written where the cursor is, each item with a
+short detail:
+
+- in an entry, the keys it does not have yet: `file`, `document`, then
+  `version` for a CustomResourceDefinition or `variable` for a policy,
+  `path`, and while it has no type `type`, `kind`, `schema` and `go`, or for
+  a CustomResourceDefinition `type` and `schema`: its `dyn` values are
+  `x-kubernetes-int-or-string`, which take an int or a string, as no kind or
+  Go type is. In such an entry `type:` offers `int` and `string`, and a
+  `schema:` `integer` and `string`, without what makes them something else,
+  such as a `format` of a string;
+- after `file:`, the YAML files at or below the `.cellens` file's folder,
+  skipping hidden folders and `node_modules`;
+- after `document:`, the documents of that file an entry can name, those
+  with `dyn` values first, each with how many it has (`1 dyn value`);
+- after `version:` or `variable:`, those of that document, `dyn` ones and
+  those that hold `dyn` values first, with their type (`params`: `dyn`,
+  `object`: `apps/v1 Deployment`);
+- after `path:`, the paths of the `dyn` values of that version or variable
+  that no other entry types, with the detail `dyn`, then the values one step
+  below the path written so far that have `dyn` values below them, the way
+  to those (`spec`: `object · 1 dyn value`); never a typed value, which no
+  entry can type;
+- in a `type:`, where the name of a type goes, the CEL type names,
+  `list(T)` and `map(string, T)`, and in quotes `{field: T}`; nothing where
+  the name of a struct's field goes, and only `string` for a map's key;
+- after `kind:`, the kinds of the workspace's CustomResourceDefinitions (with
+  `crd-typed-policies` on), then the built-in kinds, alpha and beta ones last,
+  with the first sentence of their description;
+- after `go:`, the folders of the workspace's Go packages that have struct
+  types, relative to the `.cellens`, with their types' names, from a listing
+  that runs in the background and follows the `.go` files as they change;
+  after the `#`, the struct types of that package, with the first sentence of
+  their doc comment;
+- in a `schema:`, the keywords that fit where the cursor is, with what each
+  does: `type` first while there is none, then those of its type, such as
+  `properties` and `required` for an `object`, `items` for an `array` or
+  `format` and `maxLength` for a `string`, without those written already;
+  after `type:`, `format:`, `x-kubernetes-list-type:`, `x-kubernetes-map-type:`
+  or a boolean keyword, its values. Nothing where the name of a property goes.
+
+An item replaces the word at the cursor, the whole value or the name of a
+type in it, in block and flow mappings and inside quotes, quoted or escaped
+as YAML needs.
+
+Hover on the `file`, `document`, `version`, `variable` or `path` of an entry
+names the value the entry points at as the line above a rule does, with the
+type Kubernetes gives it there and why: `self.spec.config: dyn`, as it is
+`x-kubernetes-int-or-string`, with the type the entry gives it, or
+`self.spec.name: string`, so the entry does not apply. Hover on `kind`, `go`
+or `schema` shows the type it gives in the short form of that line,
+`params: {maxReplicas, team}`, with the kind's description, the Go type's
+file and line, or the whole type; or, for an entry that does not apply,
+such as a kind for an `x-kubernetes-int-or-string` value, why.
+
+The problems of an entry show as it is typed, and so do the lines above the
+rules of the file it names: each change checks again the open documents whose
+types it changes, and asks the editor for their lines again; a new line
+above an entry moves it, and so changes the line its warnings name. A change
+that leaves every entry as it was, on its line, such as in a comment or in
+an entry YAML cannot read yet, leaves the documents and their lines as they
+are. `go test -bench
+CellensKeystroke ./internal/lsp/` measures a keystroke in a `.cellens` of 200
+entries.
+
 ## Writing entries from the editor
 
 The lines above a rule offer `Give it a type`, `Edit` and `Remove` for a `dyn`
 value; the editor asks what type is meant and the language server writes the
-entry, with the commands of [engine.md](engine.md#commands). It never writes a
+entry, with the commands of [engine.md](engine.md#commands). The editor can
+also open the `.cellens` at a new entry for the person to write the type in,
+with completion: the server writes the entry with a type to fill in and says
+where the cursor goes. It never writes a
 file itself: it sends the editor an edit (`workspace/applyEdit`), which lands
 in the editor's buffer and can be undone, on the `.cellens` as it is then, the
 editor's text when it is open. An editor that refuses the edit gets an error

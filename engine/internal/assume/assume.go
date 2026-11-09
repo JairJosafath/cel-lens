@@ -338,3 +338,79 @@ func copyValue(v any) any {
 	}
 	return v
 }
+
+// Child is a value one step below another: a field, a list's items or a
+// map's values.
+type Child struct {
+	// Step is the field's name, Items or Values.
+	Step   string
+	Schema map[string]any
+}
+
+// Children returns the values one step below a value of schema s that a
+// path can step into: the fields of an object, in name order, and the values
+// of a map, or the items of a list. A value IsDyn reports has none, as
+// nothing below it is known, or, to a CustomResourceDefinition's rule,
+// nothing below it may be read.
+func Children(s map[string]any) []Child {
+	if IsDyn(s) {
+		return nil
+	}
+	var out []Child
+	switch t, _ := s["type"].(string); t {
+	case "object":
+		props, _ := s["properties"].(map[string]any)
+		for _, name := range slices.Sorted(maps.Keys(props)) {
+			if p, ok := props[name].(map[string]any); ok {
+				out = append(out, Child{name, p})
+			}
+		}
+		if values, ok := s["additionalProperties"].(map[string]any); ok {
+			out = append(out, Child{Values, values})
+		}
+	case "array":
+		if items, ok := s["items"].(map[string]any); ok {
+			out = append(out, Child{Items, items})
+		}
+	}
+	return out
+}
+
+// Below returns the schema of the value path leads to from a value of schema
+// s, and false when it leads to none: a step names no field, list or map
+// there, or goes below a value whose type is not known.
+func Below(s map[string]any, path []string) (map[string]any, bool) {
+	for _, step := range path {
+		next := slices.IndexFunc(Children(s), func(c Child) bool { return c.Step == step })
+		if next < 0 {
+			return nil, false
+		}
+		s = Children(s)[next].Schema
+	}
+	return s, true
+}
+
+// maxDynDepth is how deep DynPaths looks below the root.
+const maxDynDepth = 32
+
+// DynPaths returns the paths from a value of schema s to the values below it,
+// and s itself, that are dyn in mode m, in name order, at most limit of them:
+// the values a .cellens entry can type. It does not look below a dyn value,
+// nor, in Rules, at a value a rule may not read, nor deeper than 32 steps.
+func DynPaths(s map[string]any, m Mode, limit int) [][]string {
+	var out [][]string
+	var walk func(s map[string]any, path []string)
+	walk = func(s map[string]any, path []string) {
+		switch {
+		case len(out) == limit:
+		case m.IsDyn(s):
+			out = append(out, slices.Clone(path))
+		case len(path) < maxDynDepth:
+			for _, c := range Children(s) {
+				walk(c.Schema, append(path, c.Step))
+			}
+		}
+	}
+	walk(s, nil)
+	return out
+}

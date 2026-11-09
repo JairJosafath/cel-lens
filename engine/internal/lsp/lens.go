@@ -41,9 +41,28 @@ type lens struct {
 	// and version the editor's version of it.
 	open    bool
 	version int
-	// checked are the diagnostics of its entries for each file they name, by
-	// key, as lensDiagnostics last made them; a new text starts without.
-	checked map[string][]map[string]any
+	// sig says what its entries are, but their lines (see lensSig).
+	sig string
+	// checked are the problems of its entries for each file they name, by
+	// key, as lensDiagnostics last found them; a new text of the file keeps
+	// them, for the entries that stay as they were.
+	checked map[string]fileCheck
+}
+
+// fileCheck is what lensDiagnostics found for the entries of a .cellens for
+// one file: their problems, by the index of the entry among them, while the
+// session's lensGen was gen and the entries were as key says (see
+// entriesKey).
+type fileCheck struct {
+	key      string
+	gen      int
+	problems []entryProblem
+}
+
+// entryProblem is a problem of the entry at index i of those for one file.
+type entryProblem struct {
+	i   int
+	msg string
 }
 
 // isLens reports whether the document at uri is a .cellens file.
@@ -51,7 +70,9 @@ func isLens(uri string) bool { return path.Base(crdKey(uri)) == cellens.FileName
 
 // putLens records the .cellens file at uri with its text, open when the
 // editor has it, and reports whether its text changed. Its schemas are
-// checked as the API server checks a CRD's, with ctx.
+// checked as the API server checks a CRD's, with ctx. The code lenses are
+// made again when its entries changed, not for a change of a comment or of
+// an entry YAML cannot read yet.
 func (ss *session) putLens(ctx context.Context, uri string, text []byte, open bool) bool {
 	key := crdKey(uri)
 	ss.touchLens(key)
@@ -62,7 +83,6 @@ func (ss *session) putLens(ctx context.Context, uri string, text []byte, open bo
 		l.open, l.uri = open, uri
 		return false
 	}
-	ss.lensChanges++
 	entries, problems := cellens.Parse(text)
 	entries, refused := cellens.CheckSchemas(ctx, entries)
 	if len(refused) > 0 {
@@ -72,7 +92,14 @@ func (ss *session) putLens(ctx context.Context, uri string, text []byte, open bo
 	if ss.lenses == nil {
 		ss.lenses = map[string]*lens{}
 	}
-	ss.lenses[key] = &lens{uri: uri, key: key, text: text, entries: entries, problems: problems, open: open}
+	l := &lens{uri: uri, key: key, text: text, entries: entries, problems: problems, open: open, sig: lensSig(uri, entries)}
+	if old := ss.lenses[key]; old != nil {
+		l.checked = old.checked
+	}
+	if old := ss.lenses[key]; old == nil || old.sig != l.sig {
+		ss.lensChanges++
+	}
+	ss.lenses[key] = l
 	ss.pruneGoReads()
 	return true
 }
@@ -489,9 +516,10 @@ func (ss *session) targetText(key string) ([]byte, error) {
 
 // lensDiagnostics returns the problems of l as the protocol has them: those
 // of its format, as errors, and the entries that apply to nothing, as
-// warnings, each on the entry's line. When about is not "", only the entries
-// for the file with that key are checked again, and those for the other files
-// keep what the last call found, as only that file changed.
+// warnings, each on the entry's line. The entries for a file are checked
+// again when they changed, the session's lensGen changed, or the file is the
+// one with the key about, which changed; else they keep what the last call
+// found, so a keystroke in one entry checks only the entries for its file.
 func (ss *session) lensDiagnostics(ctx context.Context, l *lens, about string) ([]map[string]any, error) {
 	lines := splitLines(l.text)
 	out := []map[string]any{}
@@ -507,21 +535,24 @@ func (ss *session) lensDiagnostics(ctx context.Context, l *lens, about string) (
 		}
 		byFile[f] = append(byFile[f], e)
 	}
-	checked := map[string][]map[string]any{}
+	checked := map[string]fileCheck{}
 	for _, f := range files {
-		if prev, ok := l.checked[f]; ok && about != "" && f != about {
+		key := ss.entriesKey(ctx, l, byFile[f])
+		if prev, ok := l.checked[f]; ok && prev.key == key && prev.gen == ss.lensGen && f != about {
 			checked[f] = prev
 			continue
 		}
-		diags, err := ss.entryDiagnostics(ctx, l, lines, byFile[f])
+		problems, err := ss.entryProblems(ctx, l, byFile[f])
 		if err != nil {
 			return nil, err
 		}
-		checked[f] = diags
+		checked[f] = fileCheck{key: key, gen: ss.lensGen, problems: problems}
 	}
 	l.checked = checked
 	for _, f := range files {
-		out = append(out, checked[f]...)
+		for _, p := range checked[f].problems {
+			out = append(out, lensDiagnostic(lines, byFile[f][p.i].Line, 0, messageWarning, p.msg))
+		}
 	}
 	slices.SortStableFunc(out, func(a, b map[string]any) int {
 		ra, _ := a["range"].(lspRange)
@@ -531,43 +562,88 @@ func (ss *session) lensDiagnostics(ctx context.Context, l *lens, about string) (
 	return out, nil
 }
 
-// entryDiagnostics returns the problems of entries, those of l for one file,
-// as warnings on their lines of l, whose lines are lines.
-func (ss *session) entryDiagnostics(ctx context.Context, l *lens, lines [][]rune, entries []cellens.Entry) ([]map[string]any, error) {
-	out := []map[string]any{}
-	warn := func(e cellens.Entry, msg string) {
-		out = append(out, lensDiagnostic(lines, e.Line, 0, messageWarning, msg))
+// lensSig says what the entries of the .cellens at uri are, as the code
+// lenses show them: each one's value and type as written, not its line.
+func lensSig(uri string, entries []cellens.Entry) string {
+	var b strings.Builder
+	b.WriteString(uri)
+	for _, e := range entries {
+		b.WriteString("\n" + entrySig(e))
 	}
+	return b.String()
+}
+
+// entrySig is the value and the type of e as written.
+func entrySig(e cellens.Entry) string {
+	value := strings.Join([]string{e.File, e.Document.Kind, e.Document.Name, e.Version, e.Variable, e.Path.String()}, "\x00")
+	switch {
+	case e.Type != nil:
+		return value + "\x00type " + e.Type.String()
+	case e.Kind != nil:
+		return value + "\x00kind " + e.Kind.APIVersion + " " + e.Kind.Kind
+	case e.Schema != nil:
+		js, _ := json.Marshal(e.Schema.Value)
+		return value + "\x00schema " + string(js)
+	case e.Go != nil:
+		return value + "\x00go " + e.Go.String()
+	}
+	return value
+}
+
+// entriesKey says what the problems of entries, those of l for one file,
+// depend on but the file and the session's settings: each entry's value and
+// type as written, the entry of another .cellens that types its value
+// before it, and the type it gives, which a Go type's files may change. Not
+// their lines: no problem names them.
+func (ss *session) entriesKey(ctx context.Context, l *lens, entries []cellens.Entry) string {
+	var b strings.Builder
+	for _, e := range entries {
+		b.WriteString(entrySig(e))
+		if e.Go != nil {
+			t, notes, msg := ss.assumedType(ctx, l, e)
+			b.WriteString("\x00" + t.Type + "\x00" + strings.Join(notes, "\x00") + "\x00" + msg)
+		}
+		if o, oe, dup := ss.earlier(l, e); dup {
+			fmt.Fprintf(&b, "\x00after %s:%d", o.key, oe.Line)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// entryProblems returns the problems of entries, those of l for one file.
+func (ss *session) entryProblems(ctx context.Context, l *lens, entries []cellens.Entry) ([]entryProblem, error) {
+	var out []entryProblem
 	data, err := ss.targetText(l.target(entries[0]))
 	if err != nil {
-		for _, e := range entries {
-			warn(e, fmt.Sprintf("file %s %s", e.File, unreadable(err)))
+		for i, e := range entries {
+			out = append(out, entryProblem{i, fmt.Sprintf("file %s %s", e.File, unreadable(err))})
 		}
 		return out, nil
 	}
 	var types []check.AssumedType
-	var of []cellens.Entry
-	for _, e := range entries {
+	var of []int
+	for i, e := range entries {
 		if o, oe, dup := ss.earlier(l, e); dup {
-			warn(e, fmt.Sprintf("a second type for this value: %s:%d gives it one: keep one", ss.lensSource(o), oe.Line))
+			out = append(out, entryProblem{i, fmt.Sprintf("a second type for this value: %s:%d gives it one: keep one", ss.lensSource(o), oe.Line)})
 			continue
 		}
 		t, notes, msg := ss.assumedType(ctx, l, e)
 		for _, n := range notes {
-			warn(e, n)
+			out = append(out, entryProblem{i, n})
 		}
 		if msg != "" {
-			warn(e, msg)
+			out = append(out, entryProblem{i, msg})
 			continue
 		}
-		types, of = append(types, t), append(of, e)
+		types, of = append(types, t), append(of, i)
 	}
 	problems, err := check.AssumedTypeProblems(ctx, data, check.WithAssumedTypes(types), check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds))
 	if err != nil {
 		return nil, err
 	}
 	for _, p := range problems {
-		warn(of[p.Index], p.Message)
+		out = append(out, entryProblem{of[p.Index], p.Message})
 	}
 	return out, nil
 }

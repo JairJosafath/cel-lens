@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -205,6 +206,55 @@ func TestParseKeepsValidEntries(t *testing.T) {
 	entries, problems := cellens.Parse([]byte(file))
 	if len(entries) != 1 || entries[0].File != "b.yaml" || len(problems) != 1 {
 		t.Errorf("Parse = %v, %v, want the entry of b.yaml and one problem", entries, problems)
+	}
+}
+
+// TestParseWhileTyping checks that a .cellens YAML cannot read whole, as it
+// is while a person types an entry, is read entry by entry: the entries YAML
+// reads still count, and each one it cannot is one problem at its own line,
+// whose message names that line (#16).
+func TestParseWhileTyping(t *testing.T) {
+	t.Parallel()
+	const entry = "  - file: %s\n    document: ValidatingAdmissionPolicy p\n    variable: params\n    type: string\n"
+	ok := func(f string) string { return strings.ReplaceAll(entry, "%s", f) }
+	tests := []struct {
+		name, file string
+		files      []string
+		lines      []int
+	}{
+		{"a key without its colon", "# head\ntypes:\n" + ok("a.yaml") + ok("b.yaml") + "    pa\n" + ok("c.yaml"), []string{"a.yaml", "c.yaml"}, []int{11}},
+		{"an open quote", "types:\n" + ok("a.yaml") + "  - file: b.yaml\n    type: \"{name: str\n" + ok("c.yaml"), []string{"a.yaml", "c.yaml"}, []int{7}},
+		{"two broken entries", "types:\n" + "  - file: a.yaml\n    pa\n" + ok("b.yaml") + "  - file: \"c\n", []string{"b.yaml"}, []int{3, 8}},
+		{"a compact list", "types:\n- file: a.yaml\n  document: ValidatingAdmissionPolicy p\n  variable: params\n  type: string\n- file: b.yaml\n  ty\n", []string{"a.yaml"}, []int{7}},
+		{"a broken key outside the list", "head: [\ntypes:\n" + ok("a.yaml"), []string{"a.yaml"}, []int{2}},
+		// The review of #16: a line at the dashes' column ended the list, and
+		// the entries after it lost their types without a problem; and an
+		// entry's problem hid the one YAML met elsewhere.
+		{"a line in no entry", "types:\n" + ok("a.yaml") + "  pa\n" + ok("b.yaml"), []string{"a.yaml", "b.yaml"}, []int{6}},
+		{"an entry's problem and another before the list", "head: a: b\ntypes:\n  - file: a.yaml\n    pa\n" + ok("b.yaml"), []string{"b.yaml"}, []int{1, 4}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			entries, problems := cellens.Parse([]byte(tt.file))
+			var files []string
+			for _, e := range entries {
+				files = append(files, e.File)
+			}
+			var lines []int
+			for _, p := range problems {
+				lines = append(lines, p.Line)
+				if strings.HasPrefix(p.Message, "this line is in no entry") {
+					continue
+				}
+				if !strings.HasPrefix(p.Message, "not YAML: ") || strings.Contains(p.Message, "line ") && !strings.Contains(p.Message, "line "+strconv.Itoa(p.Line)+":") {
+					t.Errorf("Parse(%q) problem %v, want not YAML naming its own line", tt.file, p)
+				}
+			}
+			if !slices.Equal(files, tt.files) || !slices.Equal(lines, tt.lines) {
+				t.Errorf("Parse(%q) = entries of %q, problems at lines %v (%v), want %q and %v", tt.file, files, lines, problems, tt.files, tt.lines)
+			}
+		})
 	}
 }
 
