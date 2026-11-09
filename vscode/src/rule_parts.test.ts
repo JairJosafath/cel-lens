@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isCellensLocation,
   listValuesArguments,
   moreValuesTitle,
   parseMoreValues,
@@ -46,6 +47,18 @@ describe('parseRuleLocation', () => {
     ['a line that is text', { uri, range: { start: { line: '1', character: 0 }, end: RULE.end } }],
   ])('gives undefined for %s', (_name, value) => {
     expect(parseRuleLocation(value)).toBeUndefined();
+  });
+});
+
+describe('isCellensLocation', () => {
+  it.each([
+    ['a .cellens', 'file:///ws/.cellens', true],
+    ['a .cellens below a folder', 'file:///ws/policies/.cellens', true],
+    ['the rule of a YAML file', 'file:///ws/crd.yaml', false],
+    ['a file whose name ends the same', 'file:///ws/a.cellens', false],
+    ['a folder of that name', 'file:///ws/.cellens/crd.yaml', false],
+  ])('reads %s as a location in a .cellens: %s (#16)', (_name, uri, expected) => {
+    expect(isCellensLocation({ uri, range: RULE })).toBe(expected);
   });
 });
 

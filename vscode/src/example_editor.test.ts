@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   CodeLens,
@@ -35,7 +35,6 @@ import {
 import {
   EXAMPLE_SCHEME,
   ExampleEditors,
-  SAVE_DELAY_MS,
   ExampleFiles,
   ExampleNotes,
   USE_EXAMPLE_COMMAND,
@@ -85,10 +84,7 @@ async function memory(uri: string): Promise<string> {
 }
 
 describe('ExampleEditors', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    reset();
-  });
+  afterEach(reset);
 
   it('opens an in-memory YAML file beside the rule, named after the value for its tab, starting with what to paste, the cursor below it (#14)', async () => {
     const { document } = await openExample();
@@ -121,8 +117,7 @@ describe('ExampleEditors', () => {
     ]);
   });
 
-  it("saves a change of the active example to memory a moment later with Save without Formatting, never TextDocument.save(), so no save participant runs on what is typed (#14's review)", async () => {
-    vi.useFakeTimers();
+  it('saves a change of the active example in the same turn with Save without Formatting, never TextDocument.save(), so it is not dirty when closed, however soon (#16)', async () => {
     const { document } = await openExample();
     activeEditor.languageId = 'yaml';
     activeEditor.uri = EXAMPLE;
@@ -130,10 +125,6 @@ describe('ExampleEditors', () => {
 
     document.isDirty = true;
     changeDocument(document, change);
-    changeDocument(document, change);
-    vi.advanceTimersByTime(SAVE_DELAY_MS - 1);
-    expect(executedCommands).toEqual([]);
-    vi.advanceTimersByTime(1);
 
     expect(executedCommands).toEqual([
       { command: 'workbench.action.files.saveWithoutFormatting', args: [] },
@@ -141,8 +132,7 @@ describe('ExampleEditors', () => {
     expect(savedDocuments).toEqual([]);
   });
 
-  it("waits to save an example that is not the active editor until it is again, and leaves other files alone (#14's review)", async () => {
-    vi.useFakeTimers();
+  it('saves an example changed while another editor was active only once it is active again, and never another file (#16)', async () => {
     const { document } = await openExample();
     const other = {
       uri: Uri.parse(CELLENS),
@@ -156,12 +146,11 @@ describe('ExampleEditors', () => {
 
     changeDocument(document, [{ range: { start: { line: 3 }, end: { line: 3 } }, text: 'a' }]);
     changeDocument(other, [{ range: { start: { line: 0 }, end: { line: 0 } }, text: 'a' }]);
-    vi.advanceTimersByTime(SAVE_DELAY_MS);
+    changeActiveEditor('yaml');
     expect(executedCommands).toEqual([]);
 
     activeEditor.uri = EXAMPLE;
     changeActiveEditor('yaml');
-    vi.advanceTimersByTime(SAVE_DELAY_MS);
 
     expect(executedCommands).toEqual([
       { command: 'workbench.action.files.saveWithoutFormatting', args: [] },

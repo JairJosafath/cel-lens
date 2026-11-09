@@ -1,7 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type * as Yaml from 'yaml';
+
+/** How many times the YAML parser read a pasted example: a pass-through that counts. */
+const parses = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock('yaml', async (importOriginal) => {
+  const yaml = await importOriginal<typeof Yaml>();
+  return {
+    ...yaml,
+    parseAllDocuments: (...args: Parameters<typeof yaml.parseAllDocuments>) => {
+      parses.count += 1;
+      return yaml.parseAllDocuments(...args);
+    },
+  };
+});
 
 import {
   EXAMPLE_CURSOR_LINE,
+  MAX_EXAMPLE_BYTES,
+  exampleTooBig,
   exampleComment,
   pastedAsLines,
   pastedKinds,
@@ -100,6 +117,30 @@ describe('exampleComment', () => {
   });
 });
 
+describe('exampleTooBig', () => {
+  it.each([
+    ['an example of 1 MiB', 'a'.repeat(MAX_EXAMPLE_BYTES), undefined],
+    [
+      'one byte over',
+      'a'.repeat(MAX_EXAMPLE_BYTES + 1),
+      'the example is 1.0 MiB, and the engine reads at most 1 MiB',
+    ],
+    [
+      '1.5 MiB',
+      'a'.repeat(MAX_EXAMPLE_BYTES * 1.5),
+      'the example is 1.5 MiB, and the engine reads at most 1 MiB',
+    ],
+    [
+      'bytes, not characters: é is two',
+      'é'.repeat(MAX_EXAMPLE_BYTES / 2 + 1),
+      'the example is 1.0 MiB, and the engine reads at most 1 MiB',
+    ],
+    ['a short one', 'teams: []\n', undefined],
+  ])("says when %s is over the engine's limit (#16)", (_name, text, expected) => {
+    expect(exampleTooBig(text)).toBe(expected);
+  });
+});
+
 describe('pastedKinds', () => {
   it.each([
     ['a YAML resource', 'apiVersion: v1\nkind: ConfigMap\ndata: {}\n', ['ConfigMap']],
@@ -163,6 +204,16 @@ describe('pastedPath', () => {
     ],
   ])('takes the path for %s: %s', (_name, text, path, kinds, expected) => {
     expect(pastedPath(text, path, kinds)).toBe(expected);
+  });
+
+  it('reads nothing of an example for a value at the root of its object, such as params (#16)', () => {
+    parses.count = 0;
+
+    expect(pastedPath(limit, undefined, [])).toBe('none');
+    expect(parses.count).toBe(0);
+
+    expect(pastedPath(limit, 'spec.config', [])).toBe('ask');
+    expect(parses.count).toBe(1);
   });
 
   it("asks whether the resource holds the value first, then whether it is the value (#14's review)", () => {

@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type FakeDiagnostic,
+  FakeEditor,
   Range,
+  Uri,
+  ViewColumn,
   commandFailure,
   commands,
   diagnostics,
@@ -13,11 +16,13 @@ import {
   settings,
   shownDocuments,
   shownErrors,
+  visibleEditors,
   window,
 } from '../test/vscode';
 import { listValues, showRule } from './rule_commands';
 
 const URI = 'file:///workspace/crd.yaml';
+const CELLENS = 'file:///workspace/.cellens';
 
 /** Closes an open problems peek first, so the next-problem command starts afresh from the cursor. */
 const CLOSE_PEEK = { command: 'closeMarkersNavigation', args: [] };
@@ -42,6 +47,37 @@ describe('showRule', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     reset();
+  });
+
+  it("opens the .cellens entry a value's type comes from beside the rule, the entry selected, with no problems peek and no hover (#16)", async () => {
+    const entry = { start: { line: 4, character: 4 }, end: { line: 8, character: 20 } };
+
+    await showRule({ uri: CELLENS, range: entry }, log());
+
+    expect(shownDocuments).toEqual([
+      {
+        uri: CELLENS,
+        selection: new Range(4, 4, 8, 20),
+        viewColumn: ViewColumn.Beside,
+        preserveFocus: false,
+        preview: false,
+      },
+    ]);
+    expect(executedCommands).toEqual([]);
+  });
+
+  it('opens that .cellens in the editor group that already shows it (#16)', async () => {
+    const shown = new FakeEditor({
+      languageId: 'plaintext',
+      getText: () => '',
+      uri: Uri.parse(CELLENS),
+    });
+    shown.viewColumn = ViewColumn.Three;
+    visibleEditors.push(shown);
+
+    await showRule({ uri: CELLENS, range: RULE }, log());
+
+    expect(shownDocuments).toMatchObject([{ uri: CELLENS, viewColumn: ViewColumn.Three }]);
   });
 
   it("opens the problems peek at the rule's first problem", async () => {

@@ -150,11 +150,14 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
   where `ExampleEditors` keeps the pasted examples' editors and their code lens.
   Their files live in memory (`ExampleFiles`, a file system provider of the scheme
   `cel-lens-example`, which the `when` clauses of `cel-lens.useExample` name and
-  `onFileSystem:cel-lens-example` activates on). A change is saved there a moment
-  later with **Save without Formatting** while the editor is active, never with
+  `onFileSystem:cel-lens-example` activates on). A change of the active example is
+  saved there in the same turn with **Save without Formatting**, never with
   `TextDocument.save()`, whose save participants would trim or format what is
-  typed; an editor closed with a change not yet saved is reverted, so none asks to
-  save.
+  typed; one changed while another editor is active is saved when it is active
+  again, and an editor closed with a change not yet saved is reverted, so none asks
+  to save. `cel-lens.showRule` with a location in a `.cellens` (a value whose type
+  an entry gives) opens it beside the rule (`src/cellens_editor.ts`, shared with
+  Give it a type).
 
 ### Kubernetes version
 

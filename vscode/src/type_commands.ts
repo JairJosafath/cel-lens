@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { OPEN_ENGINE_SETTING_LABEL, SHOW_LOGS_LABEL } from './button_labels';
+import { openCellens } from './cellens_editor';
 import type { ExampleEditors, ExampleNotes } from './example_editor';
 import { EXPERIMENTAL_SETTING } from './experimental';
 import { readInlineInfo } from './inline_info_setting';
@@ -13,7 +14,7 @@ import {
   type TypeFlow,
   type TypeUi,
 } from './type_flow';
-import { OUTDATED_ENGINE_MESSAGE, type PickLine, type TextRange } from './value_types';
+import { OUTDATED_ENGINE_MESSAGE, type PickLine } from './value_types';
 
 /** What `cel-lens: Give a Value a Type…` says without a YAML file open. */
 export const OPEN_YAML_MESSAGE = 'Open a Kubernetes YAML file to give one of its values a type.';
@@ -96,29 +97,6 @@ function pick<T>(request: PickRequest<T>): Promise<Picked<T> | typeof BACK | und
       quickPick.dispose();
     });
     quickPick.show();
-  });
-}
-
-/**
- * Opens `.cellens` in the editor group that already shows it, else beside the active editor,
- * which is the rule's, so the rule stays in view; the focus goes to the selection, and the editor
- * is no preview, so it stays open while the person types.
- */
-async function openCellens(cellens: string, selection: TextRange): Promise<void> {
-  const uri = vscode.Uri.parse(cellens);
-  const shown = vscode.window.visibleTextEditors.find(
-    (editor) => editor.document.uri.toString() === uri.toString(),
-  );
-  await vscode.window.showTextDocument(uri, {
-    viewColumn: shown?.viewColumn ?? vscode.ViewColumn.Beside,
-    selection: new vscode.Range(
-      selection.start.line,
-      selection.start.character,
-      selection.end.line,
-      selection.end.character,
-    ),
-    preserveFocus: false,
-    preview: false,
   });
 }
 

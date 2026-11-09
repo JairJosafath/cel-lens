@@ -94,7 +94,8 @@ export function pastedKinds(text: string): string[] {
 
 /**
  * How `cel-lens.inferType` takes a pasted example for a value: `none`, as the value itself, for a
- * value at the root of its object or an example with no resource at its root; `send`, with the
+ * value at the root of its object, without reading the example, or an example with no resource at
+ * its root; `send`, with the
  * value's path, for resources of a kind the value is in (`kinds`, from the examples of the
  * workspace); `none` for resources of another kind, such as an object reference the value is;
  * and `ask` when the value's kinds are not known, as the resource may be either.
@@ -104,14 +105,35 @@ export function pastedPath(
   path: string | undefined,
   kinds: readonly string[],
 ): 'none' | 'send' | 'ask' {
+  if (path === undefined) {
+    return 'none';
+  }
   const pasted = pastedKinds(text);
-  if (path === undefined || pasted.length === 0) {
+  if (pasted.length === 0) {
     return 'none';
   }
   if (kinds.length === 0) {
     return 'ask';
   }
   return pasted.some((kind) => kinds.includes(kind)) ? 'send' : 'none';
+}
+
+/** The most `cel-lens.inferType` reads of an example, in bytes of UTF-8: 1 MiB, as the engine's `infer.MaxBytes`. */
+export const MAX_EXAMPLE_BYTES = 1 << 20;
+
+/**
+ * Why a pasted example is too big for the engine, said before anything reads it, such as `the
+ * example is 1.5 MiB, and the engine reads at most 1 MiB`; `undefined` when it is not.
+ */
+export function exampleTooBig(text: string): string | undefined {
+  // A UTF-16 unit is at most three bytes of UTF-8: a text this short cannot be over the limit.
+  if (text.length * 3 <= MAX_EXAMPLE_BYTES) {
+    return undefined;
+  }
+  const bytes = new TextEncoder().encode(text).byteLength;
+  return bytes <= MAX_EXAMPLE_BYTES
+    ? undefined
+    : `the example is ${(bytes / MAX_EXAMPLE_BYTES).toFixed(1)} MiB, and the engine reads at most 1 MiB`;
 }
 
 /** The answer of the question `pastedPath` asks: the value at its path in the resource, or the resource itself. */

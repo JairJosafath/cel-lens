@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 
 import { SHOW_LOGS_LABEL } from './button_labels';
+import { openCellens } from './cellens_editor';
 import {
   LIST_VALUES_COMMAND,
   SHOW_RULE_COMMAND,
+  isCellensLocation,
   moreValuesTitle,
   parseMoreValues,
   parseRuleLocation,
@@ -24,7 +26,8 @@ function problemOrder(): ProblemOrder {
 /**
  * Runs `cel-lens.showRule`, the first part of the line above a rule: opens the problems peek at
  * the rule's first problem, or shows the hover there when the peek cannot reach it, or the rule's
- * hover at its start when it has no problem.
+ * hover at its start when it has no problem. A location in a `.cellens`, the entry a value's type
+ * comes from, opens beside the rule with the entry selected, as Give it a type opens it.
  */
 export async function showRule(location: unknown, log: CommandLog): Promise<void> {
   const rule = parseRuleLocation(location);
@@ -32,6 +35,14 @@ export async function showRule(location: unknown, log: CommandLog): Promise<void
     log.warn(
       `${SHOW_RULE_COMMAND} was given no rule location; the engine may not match this extension.`,
     );
+    return;
+  }
+  if (isCellensLocation(rule)) {
+    try {
+      await openCellens(rule.uri, rule.range);
+    } catch (error) {
+      log.error(`Could not show the entry in ${rule.uri}: ${String(error)}`);
+    }
     return;
   }
   const uri = vscode.Uri.parse(rule.uri);

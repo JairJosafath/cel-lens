@@ -155,6 +155,8 @@ describe('CHANGELOG.md', () => {
     `a question says which ("Use the whole Deployment's spec.template" or "Use it as the value itself")`,
     'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; nothing is saved when the engine writes another `.cellens`',
     'An engine too old to work out a type from an example says so, whenever the example is used',
+    'An example over 1 MiB, the most the engine reads, is refused before anything reads it',
+    'A part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule, selected',
   ])('names %s under Added in the Unreleased section', (text) => {
     expect(unreleasedAdded()).toContain(text);
   });

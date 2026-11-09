@@ -152,6 +152,9 @@ describe('README.md as the store page', () => {
     const [placeholder, , line] = section.trimStart().split('\n');
     expect(placeholder).toMatch(/^<!-- Picture to take: images\/inline-info\.png, .+ -->$/);
     expect(line).toContain('cel-lens: Toggle Inline Info');
+    expect(line).toContain(
+      'a part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule',
+    );
   });
 
   it('names the picture of the type picker in a placeholder for a person to take, with its line', () => {
@@ -232,6 +235,7 @@ describe('README.md as the store page', () => {
     '**Use this example as the type** above it, or the check in its editor title',
     'and closing it yourself writes nothing',
     'the reason shows once and the editor stays open',
+    'an example over 1 MiB, the most the engine reads, is refused at once',
     'or a whole resource of its kind that holds it',
     'a resource of another kind, such as an object reference, is the value itself',
     "cel-lens asks: **Use the whole Deployment's spec.template** or **Use it as the value itself**",

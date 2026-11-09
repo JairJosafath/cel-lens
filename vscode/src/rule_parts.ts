@@ -86,6 +86,14 @@ function parseRange(value: unknown): Range | undefined {
   return start === undefined || end === undefined ? undefined : { start, end };
 }
 
+/**
+ * Whether a location of `cel-lens.showRule` is in a `.cellens`, as the part of a value whose type
+ * an entry gives points at that entry, rather than in the rule's own document.
+ */
+export function isCellensLocation(location: RuleLocation): boolean {
+  return location.uri.replace(/[?#].*$/, '').endsWith('/.cellens');
+}
+
 /** Reads the argument of `cel-lens.showRule`, `{uri, range}`; anything else gives `undefined`. */
 export function parseRuleLocation(value: unknown): RuleLocation | undefined {
   if (!isRecord(value) || typeof value['uri'] !== 'string' || value['uri'] === '') {

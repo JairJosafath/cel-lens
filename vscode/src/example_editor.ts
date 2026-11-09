@@ -96,10 +96,11 @@ function tabsOf(match: (uri: vscode.Uri) => boolean): vscode.Tab[] {
     .filter((tab) => tab.input instanceof vscode.TabInputText && match(tab.input.uri));
 }
 
-/** How long an example's editor waits after a change before it saves it to memory. */
-export const SAVE_DELAY_MS = 150;
-
-/** The command that saves the active editor with no save participant: no trim, no format. */
+/**
+ * The command that saves the active editor with no save participant: no trim, no format. In VS
+ * Code 1.100 it saves the active group's active editor, or the Open Editors view's selection when
+ * that view has the focus, which it has not while a person types in the editor.
+ */
 const SAVE_WITHOUT_FORMATTING = 'workbench.action.files.saveWithoutFormatting';
 
 /** The command that reverts the active editor and closes it, so it asks nothing. */
@@ -110,18 +111,17 @@ const REVERT_AND_CLOSE = 'workbench.action.revertAndCloseActiveEditor';
  * value, such as `Example of params.yaml`: each starts with a comment that says what to paste,
  * and has `Use this example as the type` as a code lens above it and in its editor title. Using
  * it hands its text to the flow, which closes it once the type is written; closing it otherwise
- * writes nothing, even while it is being used. A change is saved to memory a moment later, while
- * the editor is the active one, with Save without Formatting, so no save participant (trimming,
- * formatting, code actions on save) changes what the person types, and closing it asks nothing;
- * `TextDocument.save()` would run them on every keystroke. A language change, which closes the
+ * writes nothing, even while it is being used. A change of the active editor is saved to memory in
+ * the same turn, with Save without Formatting, so no save participant (trimming, formatting, code
+ * actions on save) changes what the person types, and the editor is not dirty by the time they
+ * close it, however soon; `TextDocument.save()` would run them on every keystroke. An example
+ * changed while another editor is active is saved once it is active again. A language change, which closes the
  * document and opens it again, keeps it. The editors of a window before a reload are closed, as
  * their files are gone.
  */
 export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposable {
   private readonly examples = new Map<string, Example>();
   private readonly files = new ExampleFiles();
-  /** The saves waiting for their delay, by URI. */
-  private readonly saves = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly registrations: vscode.Disposable[];
 
   constructor(private readonly log: Pick<vscode.LogOutputChannel, 'warn'>) {
@@ -134,13 +134,13 @@ export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposabl
       }),
       vscode.languages.registerCodeLensProvider({ scheme: EXAMPLE_SCHEME }, this),
       vscode.workspace.onDidChangeTextDocument(({ document }) => {
-        this.saveLater(document);
+        this.saveNow(document);
       }),
       vscode.window.onDidChangeActiveTextEditor(() => {
         const uri = vscode.window.activeTextEditor?.document.uri.toString();
         const example = uri === undefined ? undefined : this.examples.get(uri);
         if (example !== undefined) {
-          this.saveLater(example.document);
+          this.saveNow(example.document);
         }
       }),
       vscode.workspace.onDidCloseTextDocument((document) => {
@@ -206,44 +206,32 @@ export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposabl
     for (const registration of this.registrations) {
       registration.dispose();
     }
-    for (const timer of this.saves.values()) {
-      clearTimeout(timer);
-    }
-    this.saves.clear();
     this.examples.clear();
   }
 
   /**
-   * Saves a changed example to memory `SAVE_DELAY_MS` later, with Save without Formatting, which
-   * saves the active editor: one that is not active then waits until it is again.
+   * Saves a changed example to memory now, with Save without Formatting, which saves the active
+   * editor: the example's own, checked in this same turn; one that is not active waits until it
+   * is again.
    */
-  private saveLater(document: vscode.TextDocument): void {
+  private saveNow(document: vscode.TextDocument): void {
     const uri = document.uri.toString();
-    if (document.uri.scheme !== EXAMPLE_SCHEME || !document.isDirty) {
+    if (
+      document.uri.scheme !== EXAMPLE_SCHEME ||
+      !document.isDirty ||
+      vscode.window.activeTextEditor?.document.uri.toString() !== uri
+    ) {
       return;
     }
-    clearTimeout(this.saves.get(uri));
-    this.saves.set(
-      uri,
-      setTimeout(() => {
-        this.saves.delete(uri);
-        if (vscode.window.activeTextEditor?.document.uri.toString() === uri && document.isDirty) {
-          vscode.commands
-            .executeCommand(SAVE_WITHOUT_FORMATTING)
-            .then(undefined, (error: unknown) => {
-              this.log.warn(`Could not keep ${uri}: ${String(error)}`);
-            });
-        }
-      }, SAVE_DELAY_MS),
-    );
+    vscode.commands.executeCommand(SAVE_WITHOUT_FORMATTING).then(undefined, (error: unknown) => {
+      this.log.warn(`Could not keep ${uri}: ${String(error)}`);
+    });
   }
 
   /** An example whose document closed for good: a use still running writes nothing, and its file goes. */
   private drop(uri: string, resource: vscode.Uri): void {
     this.examples.get(uri)?.closed.abort();
     this.examples.delete(uri);
-    clearTimeout(this.saves.get(uri));
-    this.saves.delete(uri);
     if (resource.scheme === EXAMPLE_SCHEME) {
       this.files.delete(resource);
     }
@@ -301,8 +289,6 @@ export class ExampleEditors implements vscode.CodeLensProvider, vscode.Disposabl
     }
     const uri = document.uri.toString();
     this.examples.delete(uri);
-    clearTimeout(this.saves.get(uri));
-    this.saves.delete(uri);
     try {
       if (document.isDirty) {
         const shown = vscode.window.visibleTextEditors.find(

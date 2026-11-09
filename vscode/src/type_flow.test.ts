@@ -1249,6 +1249,27 @@ describe('a type from an example', () => {
     },
   );
 
+  it("refuses a paste over the engine's 1 MiB with its limit, before anything reads it or asks (#16)", async () => {
+    const { flow, ui, engine } = setUp();
+    engine.answers.set('cel-lens.typeChoices', { ...CHOICES, examples: [] });
+    ui.next.push(PASTE_LINE);
+    await flow.giveType(CONFIG);
+    const text = `apiVersion: v1\nkind: Secret\ndata: "${'a'.repeat(1 << 20)}"\n`;
+
+    await ui.pasted[0]?.use(text, editorOf(ui));
+
+    expect(ui.errors).toEqual([
+      {
+        message:
+          'cel-lens could not give params.spec.config a type: the example is 1.0 MiB, and the engine reads at most 1 MiB.',
+        offerLogs: false,
+      },
+    ]);
+    expect(ui.picks).toHaveLength(1);
+    expect(engine.calls.map((call) => call.command)).toEqual(['cel-lens.typeChoices']);
+    expect(ui.steps).toEqual([]);
+  });
+
   it("writes nothing, and keeps the example's editor, when that question is closed with Escape (#14's review)", async () => {
     const { flow, ui, engine } = setUp();
     engine.answers.set('cel-lens.typeChoices', { ...CHOICES, examples: [] });

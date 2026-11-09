@@ -1,5 +1,6 @@
 import {
   USE_EXAMPLE_TITLE,
+  exampleTooBig,
   notePlaces,
   pastedAsLines,
   pastedKinds,
@@ -434,7 +435,8 @@ export class TypeFlow {
    * A schema from a pasted example: of the value at its path in a pasted resource of its kind, or
    * of the example itself. When the value's kinds are not known, a pasted resource may be either,
    * such as a Deployment for `object.spec.template` or an object reference, so the person says
-   * which; Escape writes nothing.
+   * which; Escape writes nothing. An example over the engine's 1 MiB is refused before anything
+   * reads it.
    */
   private async typeFromPaste(
     target: TypeTarget,
@@ -443,6 +445,12 @@ export class TypeFlow {
     editor: PastedEditor,
     known: () => TypeChoices | undefined,
   ): Promise<void> {
+    const tooBig = exampleTooBig(text);
+    if (tooBig !== undefined) {
+      this.log.warn(`Could not ${action}: ${tooBig}`);
+      await this.ui.showError(sentence(`cel-lens could not ${action}: ${tooBig}`), false);
+      return;
+    }
     const kinds = known()?.examples.map((example) => example.kind) ?? [];
     let as = pastedPath(text, target.path, kinds);
     if (as === 'ask' && target.path !== undefined) {
