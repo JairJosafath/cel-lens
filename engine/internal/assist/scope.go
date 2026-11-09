@@ -36,7 +36,7 @@ func (v variable) typ() string {
 	if v.typeName != "" {
 		return v.typeName
 	}
-	return v.schema.name()
+	return assumedType(v.schema)
 }
 
 // scope returns the variables the expression e of doc can use, with the
@@ -51,7 +51,9 @@ func scope(doc *Document, e extract.Expression, v kubeversion.Version, on featur
 	case "CustomResourceDefinition":
 		return crdScope(root, e, on.Has(feature.FittingCompletion))
 	case "ValidatingAdmissionPolicy", "MutatingAdmissionPolicy":
-		return policyScope(root, e, v, doc.crds, on.Has(feature.CRDTypedPolicies))
+		vars := policyScope(root, e, v, doc.crds, on.Has(feature.CRDTypedPolicies))
+		assumeInPolicy(vars, doc.assumedFor(root))
+		return vars
 	}
 	return nil
 }

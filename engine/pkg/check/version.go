@@ -18,6 +18,7 @@ type settings struct {
 	version kubeversion.Version
 	crds    *CRDs
 	on      feature.Set
+	assumed []AssumedType
 }
 
 // typingCRDs returns the CRDs that type params, none unless the experimental

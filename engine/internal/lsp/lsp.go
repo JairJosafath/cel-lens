@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"reflect"
 	"slices"
 	"unicode/utf16"
 
@@ -70,13 +71,36 @@ type session struct {
 	fileCap int
 	// scan is the workspace scan in progress, nil when there is none.
 	scan *scan
-	// scanChanged is set when the batch that started the scan changed the CRDs;
-	// the end of the scan then checks the open documents.
-	scanChanged bool
-	// queued are the created folders to scan once the scan in progress ends.
-	queued   []string
-	init     bool
-	shutdown bool
+	// batch numbers the message in hand, such as a didChangeWatchedFiles
+	// batch: a scan and a search it starts or queues work for that batch, and
+	// the check of the open documents the batch owes waits for both (see
+	// settle).
+	batch int
+	// owed are the batches owed a check of the open documents once none of
+	// their scans and searches is left.
+	owed map[int]bool
+	// queued are the created folders to scan once the scan in progress ends,
+	// for queuedBatches.
+	queued        []string
+	queuedBatches []int
+	// lenses are the .cellens files of the workspace folders and the open
+	// ones, by key (see crdKey), which give types to assume where values are
+	// dyn. They are found by a search of the folders at initialize, which
+	// runs whatever the experimental features.
+	lenses map[string]*lens
+	// lensSearch is the search for .cellens files in progress, nil when none.
+	lensSearch *lensSearch
+	// lensQueued are the created folders to search once lensSearch ends, for
+	// lensQueuedBatches.
+	lensQueued        []string
+	lensQueuedBatches []int
+	// kinds are the schemas of the built-in kinds kind: entries name, made
+	// once, by apiVersion and kind; nil for one that is no built-in kind.
+	kinds map[string]map[string]any
+	// lensShown are the diagnostics last sent for each .cellens file, by URI.
+	lensShown map[string][]map[string]any
+	init      bool
+	shutdown  bool
 }
 
 // document is an open file. Only the message loop uses it, so the cached
@@ -94,6 +118,9 @@ type document struct {
 	// for codeAction; checked tells whether there was one.
 	diags   []check.Diagnostic
 	checked bool
+	// assumed are the types the .cellens files assume in the document, as of
+	// its last check; parsed is made with them.
+	assumed []check.AssumedType
 }
 
 // diagnostics returns the problems of the document as it is, checking it only
@@ -109,7 +136,7 @@ func (ss *session) diagnostics(ctx context.Context, uri string, doc *document) (
 	}
 	// Check's error is for YAML that does not parse, which it also returns as
 	// diagnostics, or for ctx.
-	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds))
+	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds), check.WithAssumedTypes(doc.assumed))
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -131,7 +158,7 @@ func (d *document) parse(ctx context.Context, uri string) *assist.Document {
 	if d.parsed != nil {
 		return d.parsed
 	}
-	p := assist.Parse(ctx, uri, d.text, assist.WithCRDs(d.crds))
+	p := assist.Parse(ctx, uri, d.text, assist.WithCRDs(d.crds), assist.WithAssumedTypes(d.assumed))
 	if ctx.Err() == nil {
 		d.parsed = p
 	}
@@ -162,25 +189,29 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	msgs, stop := readMessages(ss.conn, in)
 	defer stop()
 	defer ss.stopScan()
+	defer ss.stopLensSearch()
 	for {
 		var r readResult
 		var scanned <-chan *check.CRDs
 		if ss.scan != nil {
 			scanned = ss.scan.done
 		}
+		var lensesFound <-chan lensFound
+		if ss.lensSearch != nil {
+			lensesFound = ss.lensSearch.done
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case found := <-lensesFound:
+			if err := ss.finishLensSearch(ctx, found); err != nil {
+				return err
+			}
+			continue
 		case found := <-scanned:
-			notes := ss.scan.notes
-			ss.scan = nil
-			if err := ss.warn(notes); err != nil {
+			if err := ss.endScan(ctx, found); err != nil {
 				return err
 			}
-			if err := ss.finishScan(ctx, found); err != nil {
-				return err
-			}
-			ss.scanQueued(ctx)
 			continue
 		case r = <-msgs:
 		}
@@ -272,6 +303,7 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	case msg.Method == "shutdown":
 		ss.shutdown = true
 		ss.stopScan()
+		ss.stopLensSearch()
 		return reply(nil, nil)
 	case ss.shutdown:
 		return reply(nil, &rpcError{jsonrpc.CodeInvalidRequest, "the server is shut down"})
@@ -329,9 +361,11 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	}
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
 	ss.folders = p.folders()
+	ss.batch++ // the workspace scan and search work for one batch
 	if ss.features.Has(feature.CRDTypedPolicies) {
 		ss.startScan(ctx)
 	}
+	ss.searchLenses(ctx, ss.folders)
 	return ss.warn(problems)
 }
 
@@ -424,6 +458,7 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 		return err
 	}
 	if !wasOn && ss.features.Has(feature.CRDTypedPolicies) {
+		ss.batch++
 		ss.startScan(ctx)
 	}
 	if err := ss.warn(problems); err != nil || !changed {
@@ -494,6 +529,10 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 		return nil // a notification has nobody to tell
 	}
 	d := p.TextDocument
+	if isLens(d.URI) {
+		ss.putLens(d.URI, []byte(d.Text), true)
+		return ss.publishAll(ctx, "")
+	}
 	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text), crds: &ss.crds}
 	return ss.publishWithCRDs(ctx, d.URI, ss.crds.Set(ctx, crdKey(d.URI), []byte(d.Text)))
 }
@@ -513,6 +552,12 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 	}
 	uri := p.TextDocument.URI
 	text := []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
+	if isLens(uri) {
+		if !ss.putLens(uri, text, true) {
+			return nil
+		}
+		return ss.publishAll(ctx, "")
+	}
 	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds}
 	return ss.publishWithCRDs(ctx, uri, ss.crds.Set(ctx, crdKey(uri), text))
 }
@@ -527,29 +572,51 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 		return nil
 	}
 	uri := p.TextDocument.URI
+	if isLens(uri) {
+		// The editor's text is gone: the file on disk, if any, is what the
+		// workspace has, and its problems still show.
+		if l := ss.lenses[crdKey(uri)]; l != nil {
+			l.open = false
+		}
+		if !ss.readLens(uri) {
+			return nil
+		}
+		return ss.publishAll(ctx, "")
+	}
 	delete(ss.docs, uri)
 	// The editor's text is gone: the file on disk is what the workspace has.
 	changed := ss.readFromDisk(ctx, uri)
-	if err := ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []any{}}); err != nil || !changed {
+	if err := ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []any{}}); err != nil {
 		return err
+	}
+	if !changed {
+		return ss.publishLenses(ctx, crdKey(uri))
 	}
 	return ss.publishAll(ctx, "")
 }
 
 // publishWithCRDs sends the diagnostics of the document at uri and, when the
 // custom resources changed, those of the other open documents, whose params
-// may be typed from them.
+// may be typed from them. It also sends those of the .cellens files that name
+// the document, which may now have what they name, or not.
 func (ss *session) publishWithCRDs(ctx context.Context, uri string, crdsChanged bool) error {
-	if err := ss.publish(ctx, uri); err != nil || !crdsChanged {
+	if err := ss.publish(ctx, uri); err != nil {
 		return err
+	}
+	if !crdsChanged {
+		return ss.publishLenses(ctx, crdKey(uri))
 	}
 	return ss.publishAll(ctx, uri)
 }
 
-// publish checks the document at uri and sends its diagnostics.
+// publish checks the document at uri, with the types the .cellens files
+// assume in it, and sends its diagnostics.
 func (ss *session) publish(ctx context.Context, uri string) error {
 	doc := ss.docs[uri]
 	doc.checked = false // the Kubernetes version may have changed
+	if assumed := ss.assumedFor(uri); !reflect.DeepEqual(assumed, doc.assumed) {
+		doc.assumed, doc.parsed = assumed, nil
+	}
 	diags, err := ss.diagnostics(ctx, uri, doc)
 	if err != nil {
 		return err

@@ -387,14 +387,14 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 			return hover(declaration("field", word, resourceCheckType, requestResourceDesc))
 		}
 		if f := recv.known.field(word); isChain && recv.found && f != nil {
-			return hover(a.withDynReason(declaration("field", word, f.name(), withKinds(f.str("description"), f.kinds())), f))
+			return hover(a.withDynReason(declaration("field", word, assumedType(f), withAssumed(withKinds(f.str("description"), f.kinds()), f)), f))
 		}
 	case called:
 		return a.hoverFunction(word, false, a.argTypes(s.line, end, vars), hover)
 	default:
 		for _, v := range vars {
 			if v.name == word {
-				md := declaration("variable", word, v.typ(), v.desc)
+				md := declaration("variable", word, v.typ(), withAssumed(v.desc, v.schema))
 				if v.typeName == "" {
 					md = a.withDynReason(md, v.schema)
 				}

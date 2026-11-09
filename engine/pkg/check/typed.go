@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	celgo "github.com/google/cel-go/cel"
@@ -57,6 +58,15 @@ func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.
 	for _, v := range p.Spec.Variables {
 		composite.CompileAndStoreVariable(accessor{name: v.Name, expression: v.Expression, returns: anyTypes}, decls, environment.NewExpressions)
 	}
+	return eachValidation(ctx, p, exprs, clean, func(text string) *apiservercel.Error {
+		return composite.CompileCELExpression(accessor{expression: text}, decls, environment.NewExpressions).Error
+	}, fail)
+}
+
+// eachValidation compiles each expression of the validations of p that is in
+// clean with compile, and calls fail with the issues of each one that does not
+// compile.
+func eachValidation(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, compile func(text string) *apiservercel.Error, fail func(e extract.Expression, issues []string)) error {
 	for i := range p.Spec.Validations {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -67,13 +77,13 @@ func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.
 			if !ok || !clean[field] {
 				continue
 			}
-			res := composite.CompileCELExpression(accessor{expression: e.Text}, decls, environment.NewExpressions)
-			if res.Error == nil || res.Error.Type != apiservercel.ErrorTypeInvalid {
+			cerr := compile(e.Text)
+			if cerr == nil || cerr.Type != apiservercel.ErrorTypeInvalid {
 				continue
 			}
-			issues := issuePattern.FindAllString(res.Error.Detail, -1)
+			issues := issuePattern.FindAllString(cerr.Detail, -1)
 			if len(issues) == 0 {
-				issues = []string{res.Error.Detail}
+				issues = []string{cerr.Detail}
 			}
 			fail(e, issues)
 		}
@@ -106,7 +116,7 @@ func (r *reporter) typedComposite(p *admissionregistrationv1.ValidatingAdmission
 	}
 	declType = declType.MaybeAssignTypeName(kind.GVK.Kind)
 	hasParams := p.Spec.ParamKind != nil
-	envSet, err := typedEnvSet(r.version.EnvSet(), declType, r.paramsType(p.Spec.ParamKind), hasParams)
+	envSet, err := typedEnvSet(r.version.EnvSet(), declType, declType, r.paramsType(p.Spec.ParamKind), hasParams)
 	if err != nil {
 		return nil, decls, fmt.Errorf("build CEL environment for %s: %w", kind, err)
 	}
@@ -149,10 +159,11 @@ func (r *reporter) paramsType(pk *admissionregistrationv1.ParamKind) *apiserverc
 }
 
 // typedEnvSet extends base with the variables of the admission CEL environment
-// as the API server's type checker declares them: object and oldObject of
-// objectType (dyn when that is nil), params of paramsType (dyn when that is nil), and request,
-// namespaceObject and authorizer.
-func typedEnvSet(base *environment.EnvSet, objectType, paramsType *apiservercel.DeclType, hasParams bool) (*environment.EnvSet, error) {
+// as the API server's type checker declares them: object of objectType and
+// oldObject of oldObjectType (each dyn when nil; the API server gives both
+// the matched kind's type), params of paramsType (dyn when that is nil), and
+// request, namespaceObject and authorizer.
+func typedEnvSet(base *environment.EnvSet, objectType, oldObjectType, paramsType *apiservercel.DeclType, hasParams bool) (*environment.EnvSet, error) {
 	request, namespace := plugincel.BuildRequestType(), plugincel.BuildNamespaceType()
 	opts := []celgo.EnvOption{
 		celgo.Variable(plugincel.NamespaceVarName, namespace.CelType()),
@@ -160,15 +171,18 @@ func typedEnvSet(base *environment.EnvSet, objectType, paramsType *apiservercel.
 		celgo.Variable("authorizer", library.AuthorizerType),
 	}
 	declTypes := []*apiservercel.DeclType{namespace, request}
-	if objectType != nil {
-		opts = append(opts,
-			celgo.Variable(plugincel.ObjectVarName, objectType.CelType()),
-			celgo.Variable(plugincel.OldObjectVarName, objectType.CelType()))
-		declTypes = append(declTypes, objectType)
-	} else {
-		opts = append(opts,
-			celgo.Variable(plugincel.ObjectVarName, celgo.DynType),
-			celgo.Variable(plugincel.OldObjectVarName, celgo.DynType))
+	for _, v := range []struct {
+		name string
+		typ  *apiservercel.DeclType
+	}{{plugincel.ObjectVarName, objectType}, {plugincel.OldObjectVarName, oldObjectType}} {
+		if v.typ == nil {
+			opts = append(opts, celgo.Variable(v.name, celgo.DynType))
+			continue
+		}
+		opts = append(opts, celgo.Variable(v.name, v.typ.CelType()))
+		if !slices.Contains(declTypes, v.typ) {
+			declTypes = append(declTypes, v.typ)
+		}
 	}
 	switch {
 	case paramsType != nil:

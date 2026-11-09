@@ -9,12 +9,12 @@
 //	  - file: config/crd/bases/widgets.yaml
 //	    document: CustomResourceDefinition widgets.example.com
 //	    version: v1
-//	    path: spec.config
-//	    type: "{name: string, replicas: int}"
+//	    path: spec.maxSurge
+//	    type: int
 //	  - file: policies/limits.yaml
 //	    document: ValidatingAdmissionPolicy limits
 //	    variable: params
-//	    kind: example.com/v1 Limit
+//	    type: "{name: string, replicas: int}"
 //
 // Parse reads a file and reports every problem in it with its line; nothing
 // here reads the workspace or knows which values are dyn.

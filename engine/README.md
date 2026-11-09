@@ -107,6 +107,7 @@ Stable:
 | Kubernetes version | Results match the version picked with `--kube-version` or `kubernetesVersion` |
 | Typed `object`, `oldObject` and policy variables | Typed from the built-in kinds a policy matches |
 | Typed `params` of a built-in kind | Typed from `spec.paramKind` when it names a built-in kind |
+| Types from `.cellens` | The language server types the `dyn` values a `.cellens` file names ([docs/cellens.md](docs/cellens.md)) |
 
 Experimental:
 
@@ -120,8 +121,9 @@ How the types of `object`, `params` and the policy variables are found is in
 [docs/type-sources.md](docs/type-sources.md), which also reports how many
 expressions of real policies still get `dyn`, and why.
 Where a value stays `dyn`, a `.cellens` file can say what it looks like
-([docs/cellens.md](docs/cellens.md)); the format is settled and the engine has
-a reader for it, and a later release reads `.cellens` files and uses the types.
+([docs/cellens.md](docs/cellens.md)); the language server then checks, completes
+and explains it with that type, and what only that type shows is a warning that
+names the `.cellens` line.
 
 ## Other editors
 
@@ -141,6 +143,7 @@ ships the engine. See [docs/engine.md](docs/engine.md) for what the server does.
 - Schemas for `object` that follow `--kube-version`: they are those of the
   bundled `k8s.io/api`.
 - Transports other than stdio for the language server.
+- `.cellens` types in `cel-lens-core check`: only the language server reads them.
 
 ## Contributing
 

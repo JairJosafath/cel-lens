@@ -8,19 +8,22 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
 )
 
-// The two examples of docs/cellens.md.
+// The example of docs/cellens.md.
 const example = `# .cellens: types cel-lens assumes where Kubernetes gives dyn. Commit it.
 types:
   - file: config/crd/bases/widgets.yaml
     document: CustomResourceDefinition widgets.example.com
     version: v1
-    path: spec.config
-    type: "{name: string, replicas: int, labels: map(string, string)}"
+    path: spec.maxSurge
+    type: int
   - file: policies/limits.yaml
     document: ValidatingAdmissionPolicy limits
     variable: params
-    path: spec
-    kind: example.com/v1 Limit
+    type: "{name: string, replicas: int, labels: map(string, string)}"
+  - file: policies/limits.yaml
+    document: ValidatingAdmissionPolicy limits
+    variable: object
+    kind: example.com/v1 Widget
 `
 
 func TestParseExample(t *testing.T) {
@@ -29,10 +32,10 @@ func TestParseExample(t *testing.T) {
 	if len(problems) > 0 {
 		t.Fatalf("Parse(example) problems = %v, want none", problems)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("Parse(example) = %d entries, want 2", len(entries))
+	if len(entries) != 3 {
+		t.Fatalf("Parse(example) = %d entries, want 3", len(entries))
 	}
-	crd, policy := entries[0], entries[1]
+	crd, params, object := entries[0], entries[1], entries[2]
 	checks := []struct {
 		name      string
 		got, want any
@@ -42,17 +45,21 @@ func TestParseExample(t *testing.T) {
 		{"crd document", crd.Document, cellens.Document{Kind: "CustomResourceDefinition", Name: "widgets.example.com"}},
 		{"crd version", crd.Version, "v1"},
 		{"crd variable", crd.Variable, ""},
-		{"crd path", crd.Path.String(), "spec.config"},
-		{"crd type", crd.Type.String(), "{name: string, replicas: int, labels: map(string, string)}"},
+		{"crd path", crd.Path.String(), "spec.maxSurge"},
+		{"crd type", crd.Type.String(), "int"},
 		{"crd kind", crd.Kind, (*cellens.KindRef)(nil)},
-		{"policy line", policy.Line, 8},
-		{"policy file", policy.File, "policies/limits.yaml"},
-		{"policy document", policy.Document, cellens.Document{Kind: "ValidatingAdmissionPolicy", Name: "limits"}},
-		{"policy version", policy.Version, ""},
-		{"policy variable", policy.Variable, "params"},
-		{"policy path", policy.Path.String(), "spec"},
-		{"policy type", policy.Type, (*cellens.Type)(nil)},
-		{"policy kind", *policy.Kind, cellens.KindRef{APIVersion: "example.com/v1", Kind: "Limit"}},
+		{"params line", params.Line, 8},
+		{"params file", params.File, "policies/limits.yaml"},
+		{"params document", params.Document, cellens.Document{Kind: "ValidatingAdmissionPolicy", Name: "limits"}},
+		{"params version", params.Version, ""},
+		{"params variable", params.Variable, "params"},
+		{"params path", params.Path.String(), ""},
+		{"params type", params.Type.String(), "{name: string, replicas: int, labels: map(string, string)}"},
+		{"params kind", params.Kind, (*cellens.KindRef)(nil)},
+		{"object line", object.Line, 12},
+		{"object variable", object.Variable, "object"},
+		{"object type", object.Type, (*cellens.Type)(nil)},
+		{"object kind", *object.Kind, cellens.KindRef{APIVersion: "example.com/v1", Kind: "Widget"}},
 	}
 	for _, c := range checks {
 		if !reflect.DeepEqual(c.got, c.want) {

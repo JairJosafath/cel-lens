@@ -123,7 +123,7 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 	if err != nil {
 		return nil, fmt.Errorf("build syntax environment for %s: %w", file, err)
 	}
-	r := reporter{version: set.version, crds: set.typingCRDs(), kyverno: set.on.Has(feature.Kyverno), file: file, lines: extract.SplitLines(text), data: data, eol: "\n", spans: spans{env: parser}}
+	r := reporter{version: set.version, crds: set.typingCRDs(), assumed: set.assumed, kyverno: set.on.Has(feature.Kyverno), file: file, lines: extract.SplitLines(text), data: data, eol: "\n", spans: spans{env: parser}}
 	if bytes.Contains(extract.Text(data), []byte("\r\n")) {
 		r.eol = "\r\n"
 	}
@@ -149,7 +149,9 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 type reporter struct {
 	version kubeversion.Version
 	crds    *CRDs // the custom resources params may be typed from; may be nil
-	kyverno bool  // whether Kyverno ValidatingPolicy documents are checked
+	// assumed are the types to assume where values are dyn (WithAssumedTypes).
+	assumed []AssumedType
+	kyverno bool // whether Kyverno ValidatingPolicy documents are checked
 	file    string
 	lines   [][]rune
 	data    []byte // the file as read, for bytes that lines cannot show

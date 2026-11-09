@@ -104,7 +104,9 @@ func (pc policyCompile) common(ctx context.Context, composite *plugincel.Composi
 // namespaceObject, authorizer and, when the policy has a paramKind, params.
 // Variables are compiled first and in order, so that later expressions can use
 // variables.<name>; matchConditions cannot. When the policy matches one built-in
-// kind, typeCheck then types object and oldObject from it.
+// kind, typeCheck then types object and oldObject from it, and
+// assumedTypeCheck checks the validations again with the types assumed for
+// the policy.
 func (r *reporter) policy(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression) error {
 	var p admissionregistrationv1.ValidatingAdmissionPolicy
 	if _, err := r.read(ctx, node, &p); err != nil {
@@ -128,7 +130,11 @@ func (r *reporter) policy(ctx context.Context, node *yaml.Node, exprs map[string
 	for i := range p.Spec.AuditAnnotations {
 		pc.compile(composite, fmt.Sprintf("spec.auditAnnotations[%d].valueExpression", i), accessor{returns: []*celgo.Type{celgo.StringType, celgo.NullType}})
 	}
-	return r.typeCheck(ctx, &p, exprs, pc.clean)
+	base := len(r.diags)
+	if err := r.typeCheck(ctx, &p, exprs, pc.clean); err != nil {
+		return err
+	}
+	return r.assumedTypeCheck(ctx, node, &p, exprs, pc.clean, base)
 }
 
 // mutatingPolicy compiles the expressions of a MutatingAdmissionPolicy with the

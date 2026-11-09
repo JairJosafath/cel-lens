@@ -2,15 +2,12 @@ package check
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	celgo "github.com/google/cel-go/cel"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	plugincel "k8s.io/apiserver/pkg/admission/plugin/cel"
 	"k8s.io/apiserver/pkg/cel/environment"
-
-	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 )
 
 // Variable is one entry of a policy's spec.variables with the type the API
@@ -56,35 +53,26 @@ func VariableTypes(ctx context.Context, root map[string]any, opts ...Option) ([]
 	for _, o := range opts {
 		o(&set)
 	}
-	raw, err := json.Marshal(root)
+	// Only what the types depend on is read, so a wrong value elsewhere in the
+	// policy does not hide them.
+	in, err := readPolicyVars(root)
 	if err != nil {
 		return nil, fmt.Errorf("read spec.variables: %w", err)
 	}
-	// Only what the types depend on is read, so a wrong value elsewhere in the
-	// policy does not hide them.
-	var in struct {
-		Spec struct {
-			ParamKind        *admissionregistrationv1.ParamKind      `json:"paramKind"`
-			MatchConstraints *admissionregistrationv1.MatchResources `json:"matchConstraints"`
-			Variables        []admissionregistrationv1.Variable      `json:"variables"`
-		} `json:"spec"`
-	}
-	if err := json.Unmarshal(raw, &in); err != nil {
-		return nil, fmt.Errorf("read spec.variables: %w", err)
-	}
+	r := reporter{version: set.version, crds: set.typingCRDs()}
+	return r.variableTypes(ctx, in)
+}
+
+// variableTypes is VariableTypes for the policy in.
+func (r *reporter) variableTypes(ctx context.Context, in *policyVars) ([]Variable, error) {
 	var p admissionregistrationv1.ValidatingAdmissionPolicy
 	p.Spec.ParamKind, p.Spec.MatchConstraints, p.Spec.Variables = in.Spec.ParamKind, in.Spec.MatchConstraints, in.Spec.Variables
 	if len(p.Spec.Variables) == 0 {
 		return nil, nil
 	}
-	r := reporter{version: set.version, crds: set.typingCRDs()}
 	var perKind [][]*celgo.Type
 	if p.Spec.MatchConstraints != nil {
-		rules := make([]matchkind.Rule, len(p.Spec.MatchConstraints.ResourceRules))
-		for i, rule := range p.Spec.MatchConstraints.ResourceRules {
-			rules[i] = matchkind.Rule{Groups: rule.APIGroups, Versions: rule.APIVersions, Resources: rule.Resources}
-		}
-		if kinds, ok := r.crds.Resolve(rules); ok {
+		if kinds, ok := r.crds.Resolve(in.rules()); ok {
 			for _, kind := range kinds {
 				composite, decls, err := r.typedComposite(&p, kind)
 				if err != nil {

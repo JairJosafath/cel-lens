@@ -52,6 +52,14 @@ Server Protocol on stdin and stdout, for any editor:
   the rule under its budget (a cost error on the CRD's total is solved when the
 number also brings the total under its budget). No fix is offered when there is no clear one.
 
+- **Types from `.cellens`**: the server finds the `.cellens` files of the
+  workspace folders, and follows them as they are opened, edited, saved,
+  created or deleted (it registers a watcher for `**/.cellens`). A `dyn` value
+  an entry names gets the entry's type in diagnostics, hover and completion;
+  a problem only that type shows is a warning that names the `.cellens` file and
+  line, and the problems of a `.cellens` are published on it. See
+  [cellens.md](cellens.md).
+
 Positions outside CEL expressions get no hover and no completion. Documents are
 synchronised in full; the server exits 0 after `shutdown` and `exit`, and 1 when
 the client leaves without `shutdown`. `go test -bench Diagnostics ./internal/lsp/`

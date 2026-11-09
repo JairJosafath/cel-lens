@@ -11,7 +11,13 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ### Added
 
-- The `.cellens` format, for types cel-lens assumes where Kubernetes gives `dyn`: `docs/cellens.md` describes it, and the engine has a reader that reports each problem with its line and column. Nothing reads `.cellens` files yet.
+- The `.cellens` format, for types cel-lens assumes where Kubernetes gives `dyn`: `docs/cellens.md` describes it, and the engine reads it and reports its problems with their line and column.
+- The language server reads every `.cellens` of the workspace and uses its types: an `x-kubernetes-int-or-string` value of a CustomResourceDefinition, the one value its rules see as `dyn`, or `params`, `object`, `oldObject` or `variables.<name>` of a ValidatingAdmissionPolicy, gets checks, completion and hover with the type an entry gives it, and `kind:` names a built-in kind or a workspace CRD. A problem only the type shows is a warning naming the `.cellens` file and line; the API server's own problems keep their severity. The problems of a `.cellens`, such as an entry for a file, document or value that does not exist or for a value Kubernetes already types, are diagnostics on it, and opening, editing, saving, creating or deleting one checks the open documents again. `pkg/check` takes the types with `WithAssumedTypes` and says why one does not apply with `AssumedTypeProblems`.
+
+### Fixed
+
+- A `didChangeWatchedFiles` batch that changes the CRDs and creates a folder while a workspace scan runs is published once, when the scan of that folder ends: the end of the scan in progress no longer publishes the state without the folder's CRDs. What a batch changes waits for the end of both the CRD scan and the search for `.cellens` files it starts; what a scan finds is published when it ends, whatever other batches wait for.
+- The workspace CRD scan, and a CRD file read again after a change on disk, read only regular files of at most 1 MiB, through the workspace folder: a symbolic link to `/dev/zero`, to a pipe, out of the folder, or to a bigger file is skipped, where before it could hold the server or fill its memory.
 
 ## [0.27.0] - 2026-11-04
 
