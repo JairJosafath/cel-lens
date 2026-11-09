@@ -31,6 +31,11 @@ const (
 	CodeInvalidParams = -32602
 	// CodeNotInitialized means a request came before initialize.
 	CodeNotInitialized = -32002
+	// CodeRequestFailed means a valid request failed, such as an edit the
+	// client did not apply.
+	CodeRequestFailed = -32803
+	// CodeRequestCancelled means the client cancelled the request.
+	CodeRequestCancelled = -32800
 )
 
 // Error is the error of a response.

@@ -77,8 +77,23 @@ type initializeParams struct {
 			CodeLens struct {
 				RefreshSupport bool `json:"refreshSupport"`
 			} `json:"codeLens"`
+			ApplyEdit     bool `json:"applyEdit"`
+			WorkspaceEdit struct {
+				DocumentChanges    bool     `json:"documentChanges"`
+				ResourceOperations []string `json:"resourceOperations"`
+			} `json:"workspaceEdit"`
 		} `json:"workspace"`
 	} `json:"capabilities"`
+}
+
+// editCaps are what the client says it can do with a workspace/applyEdit.
+func (p initializeParams) editCaps() editCaps {
+	w := p.Capabilities.Workspace
+	ops := w.WorkspaceEdit.ResourceOperations
+	return editCaps{
+		apply: w.ApplyEdit, documentChanges: w.WorkspaceEdit.DocumentChanges,
+		create: slices.Contains(ops, "create"), delete: slices.Contains(ops, "delete"),
+	}
 }
 
 // folders returns the folders of the workspace as paths.

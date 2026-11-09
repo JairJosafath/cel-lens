@@ -1,7 +1,9 @@
 package matchkind_test
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -129,5 +131,50 @@ func TestLookup(t *testing.T) {
 				t.Errorf("Lookup(%q, %q) = %q, %v, want %q", tt.apiVersion, tt.kind, k.String(), ok, tt.want)
 			}
 		})
+	}
+}
+
+// TestKinds checks that Kinds lists the built-in kinds a version serves, by
+// their prerelease lifecycle, sorted, with their descriptions (#4).
+func TestKinds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		minor int
+		kind  string
+		want  bool
+	}{
+		{"a kind without a lifecycle", 33, "apps/v1 Deployment", true},
+		{"the core group", 33, "v1 ConfigMap", true},
+		{"an alpha kind introduced before", 33, "admissionregistration.k8s.io/v1alpha1 MutatingAdmissionPolicy", true},
+		{"a beta kind introduced after", 33, "admissionregistration.k8s.io/v1beta1 MutatingAdmissionPolicy", false},
+		{"a beta kind introduced then", 34, "admissionregistration.k8s.io/v1beta1 MutatingAdmissionPolicy", true},
+		{"a GA kind introduced after", 35, "admissionregistration.k8s.io/v1 MutatingAdmissionPolicy", false},
+		{"a GA kind introduced then", 36, "admissionregistration.k8s.io/v1 MutatingAdmissionPolicy", true},
+		{"a list", 37, "apps/v1 DeploymentList", false},
+		{"no resource", 37, "v1 Status", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			kinds := matchkind.Kinds(tc.minor)
+			got := slices.ContainsFunc(kinds, func(k matchkind.Listed) bool {
+				return k.GVK.GroupVersion().String()+" "+k.GVK.Kind == tc.kind
+			})
+			if got != tc.want {
+				t.Errorf("Kinds(%d) has %s = %t, want %t", tc.minor, tc.kind, got, tc.want)
+			}
+		})
+	}
+	kinds := matchkind.Kinds(37)
+	sorted := slices.IsSortedFunc(kinds, func(a, b matchkind.Listed) int {
+		return cmp.Or(cmp.Compare(a.GVK.Group, b.GVK.Group), cmp.Compare(a.GVK.Version, b.GVK.Version), cmp.Compare(a.GVK.Kind, b.GVK.Kind))
+	})
+	if !sorted {
+		t.Error("Kinds(37) is not sorted by group, version and kind")
+	}
+	i := slices.IndexFunc(kinds, func(k matchkind.Listed) bool { return k.GVK.Group == "apps" && k.GVK.Kind == "Deployment" })
+	const want = "Deployment enables declarative updates for Pods and ReplicaSets."
+	if i < 0 || kinds[i].Description != want {
+		t.Errorf("Kinds(37) lists apps/v1 Deployment at %d, want it with the description %q", i, want)
 	}
 }

@@ -298,15 +298,51 @@ func (e *Entry) readType(item *yaml.Node, fields map[string]*yaml.Node, src [][]
 		}
 		e.Type = t
 	case hasKind:
-		words := strings.Fields(kind.Value)
-		if len(words) != 2 || !apiVersion.MatchString(words[0]) || !kindName.MatchString(words[1]) {
-			return []Problem{at(kind, fmt.Sprintf(`kind %q: write the apiVersion and kind, such as "apps/v1 Deployment"`, kind.Value))}
+		k, err := ParseKind(kind.Value)
+		if err != nil {
+			return []Problem{at(kind, err.Error())}
 		}
-		e.Kind = &KindRef{APIVersion: words[0], Kind: words[1]}
+		e.Kind = k
 	default:
 		return []Problem{at(item, `the entry has neither type nor kind: give the value a type, such as "{name: string}", or a kind, such as "apps/v1 Deployment"`)}
 	}
 	return nil
+}
+
+// ParseKind reads a kind as kind: takes it: its apiVersion and kind,
+// separated by a space, such as "apps/v1 Deployment".
+func ParseKind(s string) (*KindRef, error) {
+	words := strings.Fields(s)
+	if len(words) != 2 || !apiVersion.MatchString(words[0]) || !kindName.MatchString(words[1]) {
+		return nil, fmt.Errorf(`kind %q: write the apiVersion and kind, such as "apps/v1 Deployment"`, s)
+	}
+	return &KindRef{APIVersion: words[0], Kind: words[1]}, nil
+}
+
+// valueKeys are the keys of an entry that name its value.
+var valueKeys = []string{"file", "document", "version", "variable", "path"}
+
+// ReadValue reads the keys of an entry that name its value, as Parse reads
+// them in a file: f maps file, document, version, variable and path to what
+// is written there, and a key that is missing or "" is not written; other
+// keys of f are ignored. It returns the entry, without a type or kind, or what
+// Parse would report wrong with those keys, as problems without a line or
+// column.
+func ReadValue(f map[string]string) (Entry, []Problem) {
+	fields := map[string]*yaml.Node{}
+	for _, k := range valueKeys {
+		if v := f[k]; v != "" {
+			fields[k] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v}
+		}
+	}
+	item := &yaml.Node{Kind: yaml.MappingNode}
+	var e Entry
+	problems := e.readTarget(item, fields)
+	problems = append(problems, e.readValue(item, fields)...)
+	if len(problems) > 0 {
+		return Entry{}, problems
+	}
+	return e, nil
 }
 
 // typeProblem places a type's problem on its character when the source

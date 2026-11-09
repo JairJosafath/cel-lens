@@ -111,7 +111,7 @@ Stable:
 | Kubernetes version | Results match the version picked with `--kube-version` or `kubernetesVersion` |
 | Typed `object`, `oldObject` and policy variables | Typed from the built-in kinds a policy matches |
 | Typed `params` of a built-in kind | Typed from `spec.paramKind` when it names a built-in kind |
-| Types from `.cellens` | The language server types the `dyn` values a `.cellens` file names ([docs/cellens.md](docs/cellens.md)) |
+| Types from `.cellens` | The language server types the `dyn` values a `.cellens` file names, and writes its entries for the editor through `workspace/applyEdit` ([docs/cellens.md](docs/cellens.md)) |
 
 Experimental:
 

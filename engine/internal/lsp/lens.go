@@ -36,8 +36,10 @@ type lens struct {
 	text     []byte
 	entries  []cellens.Entry
 	problems []cellens.Problem
-	// open is true while the editor has it open: its text is the editor's.
-	open bool
+	// open is true while the editor has it open: its text is the editor's,
+	// and version the editor's version of it.
+	open    bool
+	version int
 	// checked are the diagnostics of its entries for each file they name, by
 	// key, as lensDiagnostics last made them; a new text starts without.
 	checked map[string][]map[string]any
@@ -511,17 +513,8 @@ func (ss *session) entryDiagnostics(ctx context.Context, l *lens, lines [][]rune
 	}
 	data, err := ss.targetText(l.target(entries[0]))
 	if err != nil {
-		why := "cannot be read: " + err.Error()
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			why = "does not exist"
-		case errors.Is(err, errTooBig):
-			why = fmt.Sprintf("is over the limit of %d bytes cel-lens reads", maxWorkspaceFileSize)
-		case errors.Is(err, errNotRegular):
-			why = "is no regular file"
-		}
 		for _, e := range entries {
-			warn(e, fmt.Sprintf("file %s %s", e.File, why))
+			warn(e, fmt.Sprintf("file %s %s", e.File, unreadable(err)))
 		}
 		return out, nil
 	}
@@ -547,6 +540,20 @@ func (ss *session) entryDiagnostics(ctx context.Context, l *lens, lines [][]rune
 		warn(of[p.Index], p.Message)
 	}
 	return out, nil
+}
+
+// unreadable says why a file an entry names could not be read, after its
+// name.
+func unreadable(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "does not exist"
+	case errors.Is(err, errTooBig):
+		return fmt.Sprintf("is over the limit of %d bytes cel-lens reads", maxWorkspaceFileSize)
+	case errors.Is(err, errNotRegular):
+		return "is no regular file"
+	}
+	return "cannot be read: " + err.Error()
 }
 
 // lensDiagnostic is a problem of a .cellens at line and column, from 1, as the

@@ -172,7 +172,8 @@ spec:
 // TestLensProblems checks that the problems of a .cellens are diagnostics on
 // it, at the line of their entry (#2): a format problem as an error, and as
 // warnings an entry for a file, document or value that does not exist, or for
-// a value Kubernetes already types.
+// a value Kubernetes already types, and a type other than int or string for
+// an x-kubernetes-int-or-string value of a CRD (#4).
 func TestLensProblems(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -203,6 +204,11 @@ func TestLensProblems(t *testing.T) {
     type: "{max: int}"
   - file: crd.yaml
     type: string
+  - file: crd.yaml
+    document: CustomResourceDefinition widgets.example.com
+    version: v1
+    path: spec.config
+    type: "{max: int}"
 `
 	c := start(t)
 	initializeIn(t, c, "", map[string]any{})
@@ -220,6 +226,7 @@ func TestLensProblems(t *testing.T) {
 		{14, 2, "spec has no field nosuch"},
 		{19, 2, "the API server lets no rule read spec.open, which keeps unknown fields: give it a schema in the CustomResourceDefinition instead of this entry"},
 		{24, 1, `the entry has no document: write its kind and metadata.name, such as "CustomResourceDefinition widgets.example.com"`},
+		{26, 2, "spec.config is x-kubernetes-int-or-string, an int or a string to a rule: give it int or string"},
 	}
 	if len(diags) != len(want) {
 		t.Fatalf("diagnostics of .cellens = %+v, want %d", diags, len(want))

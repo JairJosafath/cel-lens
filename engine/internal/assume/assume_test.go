@@ -38,6 +38,8 @@ func TestAt(t *testing.T) {
 		name string
 		mode assume.Mode
 		path []string
+		// typ is the type to place, as JSON; empty for an object with a field replicas.
+		typ string
 		// want is the value at path after placing, as JSON; empty when an error is wanted.
 		want    string
 		reason  assume.Reason
@@ -59,8 +61,17 @@ func TestAt(t *testing.T) {
 		{name: "not a map", path: []string{"spec", "ports", "[*]"}, reason: assume.NotMap, message: "self.spec.ports is list(object), not a map: [*] steps into a map's values"},
 		{name: "below dyn", path: []string{"spec", "config", "replicas"}, reason: assume.BelowDyn, message: "self.spec.config is dyn, so nothing below it is known: write the entry for self.spec.config"},
 		{name: "list without items", path: []string{"spec", "bare", "[]"}, reason: assume.BelowDyn},
-		// A CRD's rules see only x-kubernetes-int-or-string as dyn (#2).
-		{name: "rules: int-or-string", mode: assume.Rules, path: []string{"spec", "size"}, want: `{"type": "object", "properties": {"replicas": {"type": "integer"}}}`},
+		// A CRD's rules see only x-kubernetes-int-or-string as dyn (#2), an
+		// int or a string (#4).
+		{name: "rules: int-or-string", mode: assume.Rules, path: []string{"spec", "size"}, typ: `{"type": "integer"}`, want: `{"type": "integer"}`},
+		{name: "rules: int-or-string as uint", mode: assume.Rules, path: []string{"spec", "size"}, typ: `{"type": "integer", "minimum": 0}`, want: `{"type": "integer", "minimum": 0}`},
+		{name: "rules: int-or-string as string", mode: assume.Rules, path: []string{"spec", "size"}, typ: `{"type": "string"}`, want: `{"type": "string"}`},
+		{
+			name: "rules: int-or-string as an object", mode: assume.Rules, path: []string{"spec", "size"}, reason: assume.NotIntOrString,
+			message: "self.spec.size is x-kubernetes-int-or-string, an int or a string to a rule: give it int or string",
+		},
+		{name: "rules: int-or-string as a timestamp", mode: assume.Rules, path: []string{"spec", "size"}, typ: `{"type": "string", "format": "date-time"}`, reason: assume.NotIntOrString},
+		{name: "rules: int-or-string as a list", mode: assume.Rules, path: []string{"spec", "size"}, typ: `{"type": "array", "items": {"type": "string"}}`, reason: assume.NotIntOrString},
 		{
 			name: "rules: preserve-unknown-fields without a type", mode: assume.Rules, path: []string{"spec", "config"}, reason: assume.Unreadable,
 			message: "the API server lets no rule read self.spec.config, which keeps unknown fields: give it a schema in the CustomResourceDefinition instead of this entry",
@@ -73,7 +84,11 @@ func TestAt(t *testing.T) {
 			t.Parallel()
 			in := schemaOf(t, root)
 			before := assume.Copy(in)
-			got, err := assume.At(in, "self", tc.path, typ, tc.mode)
+			placed := typ
+			if tc.typ != "" {
+				placed = schemaOf(t, tc.typ)
+			}
+			got, err := assume.At(in, "self", tc.path, placed, tc.mode)
 			if !reflect.DeepEqual(in, before) {
 				t.Errorf("At(%v) changed its input", tc.path)
 			}

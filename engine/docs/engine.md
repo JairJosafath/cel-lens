@@ -59,6 +59,9 @@ number also brings the total under its budget). No fix is offered when there is 
   a problem only that type shows is a warning that names the `.cellens` file and
   line, and the problems of a `.cellens` are published on it. See
   [cellens.md](cellens.md).
+- **Commands** (`workspace/executeCommand`): the type choices for a `dyn`
+  value, the check of a type as it is typed, and setting or removing a
+  `.cellens` entry through `workspace/applyEdit`. See [Commands](#commands).
 
 - **Inline info**: `textDocument/codeLens` (the server declares
   `codeLensProvider`, without `resolveProvider`: each lens comes with its
@@ -136,6 +139,92 @@ The command accepts the flags language clients pass: `--stdio` (the default and
 only transport) and `--clientProcessId=<pid>`, which makes the server exit when
 that process is gone. `--socket`, `--pipe` and `--node-ipc` are refused with
 exit code 2. `lsp --help` lists them.
+
+## Commands
+
+`initialize` declares four commands under `executeCommandProvider`, which a
+client runs with `workspace/executeCommand`. The VS Code extension runs them
+from the lines above a rule: their parts run its own commands
+`cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, which ask
+the person for a type and pass these commands the same argument, with the
+type or kind chosen. Each takes one argument, an object with these keys:
+
+| Key | What it is |
+| --- | --- |
+| `cellens` | The URI of the `.cellens` file that `file` is relative to |
+| `file`, `document`, `version` or `variable`, `path` | The value, as an entry of that `.cellens` names it ([cellens.md](cellens.md)); a `path` left out, or `""`, is the root |
+| `value` | The value's CEL, such as `self.spec.config`, for messages and the edit's label |
+| `type` or `kind` | The type or kind to check or set; `null` counts as left out |
+
+- `cel-lens.typeChoices` takes no argument and returns the kinds a `kind:`
+  entry can name, each with a one-line description: the first sentence of its
+  schema's description, or where it comes from when it has none.
+
+  ```json
+  {
+    "kubernetesVersion": "1.37",
+    "builtIn": [{"apiVersion": "apps/v1", "group": "apps", "version": "v1", "kind": "Deployment",
+                 "description": "Deployment enables declarative updates for Pods and ReplicaSets.",
+                 "stability": "ga"}],
+    "crds": [{"apiVersion": "example.com/v1", "group": "example.com", "version": "v1", "kind": "Widget",
+              "description": "A widget."}]
+  }
+  ```
+
+  `builtIn` lists the built-in kinds the Kubernetes version in use has,
+  sorted by group, version and kind: the kinds of the bundled `k8s.io/api`
+  whose API version its prerelease lifecycle says was introduced by that
+  version and not yet removed, so
+  `admissionregistration.k8s.io/v1beta1 MutatingAdmissionPolicy` is listed
+  from 1.34 on. That includes alpha and beta API versions, which an API
+  server serves only when they are turned on: `stability` says which a kind
+  is, `ga`, `beta` or `alpha`, from its version. A kind without lifecycle
+  data in `k8s.io/api` is listed for every version. `crds` lists each version of each kind the
+  CustomResourceDefinitions the server knows define, from the workspace scan
+  and the open documents, sorted the same way. The server reads the workspace's
+  CRDs, and a `kind:` entry can name one, only while `crd-typed-policies` is
+  on: off, `crds` is `[]` and `crdsNote` says why.
+- `cel-lens.checkType` with `type` returns `null` when the type is fine. One
+  that does not parse gets the message and the character it is at, from 1, in
+  Unicode code points: `{"type": "{name: strin}"}` returns
+  `{"message": "unknown type \"strin\": use string, int, ...", "column": 8}`.
+  When the argument also names a value, the type is checked for it as an
+  entry would be, and what the entry would get on its line of the `.cellens`
+  comes back without `column`, such as
+  `{"message": "spec.config is x-kubernetes-int-or-string, an int or a string to a rule: give it int or string"}`.
+  A `kind` in the argument is not checked.
+- `cel-lens.setType` with a value and its `type` or `kind`, not both, writes
+  its entry, and returns `{"cellens": "file:///repo/.cellens", "change": "added"}`:
+  the `.cellens` it changed and how, `added`, `replaced` or `created`. Which
+  `.cellens` the entry goes in, and how its text changes, is in
+  [cellens.md](cellens.md#writing-entries-from-the-editor).
+- `cel-lens.removeType` with a value removes its entry, and returns
+  `{"cellens": "file:///repo/.cellens", "change": "removed"}`, or `deleted`
+  when the `.cellens` went with it. A value no `.cellens` types is an error.
+
+`setType` and `removeType` never write a file. They send the client a
+`workspace/applyEdit`: a text edit on the `.cellens` as it is then (the
+editor's text, at its version, when it has the file open, else the file on
+disk), in `documentChanges` when the client supports them, and otherwise in
+`changes`, which carry no version, so the client cannot tell that the file
+changed since; a new `.cellens` is a `create` followed by its text, and an empty
+one may be a `delete`, which the client must list in
+`workspace.workspaceEdit.resourceOperations`. Without `create` the command
+fails and asks for the file to be created; without `delete` the file keeps
+its first comment. The command answers when the client does: with the result
+above when it applied the edit, and else with the error `RequestFailed`
+(-32803) saying that the editor refused the edit and nothing was written. A
+client without `workspace.applyEdit` gets that error at once, and so does one
+that shuts the server down first. While an edit of a `.cellens` waits for the
+client's answer, a command that would read or edit that file is refused with
+`RequestFailed`, as its text would not have that edit yet: run it again once
+the edit is applied. A client that cancels a waiting command
+(`$/cancelRequest`) gets `RequestCancelled` (-32800), and its answer to the
+edit is then ignored. The `cellens` of the argument must be in a workspace
+folder, or in the folder of a file the editor has open; another is refused. A wrong argument, or an entry that would get
+a problem on the `.cellens`, such as a type that does not parse or a struct for
+an `x-kubernetes-int-or-string` value, is refused before any edit with
+`InvalidParams` (-32602) and the reason.
 
 ## Typed `object` and `oldObject`
 

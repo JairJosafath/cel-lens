@@ -95,7 +95,8 @@ where the value is `dyn` without it:
 
 - In a CustomResourceDefinition, an `x-kubernetes-int-or-string` value, the
   one value a rule sees as `dyn`. The API server validates such a value as an
-  integer or a string, so give it `int` or `string`. A value that keeps
+  integer or a string, so give it `int` (or `uint`) or `string`: another type,
+  even `timestamp` or `bytes`, is a problem on the entry. A value that keeps
   unknown fields with `x-kubernetes-preserve-unknown-fields` is no `dyn` to a
   rule: the API server lets a rule read only the fields its schema declares,
   and none of one without a `type`, so an entry there is a problem that says
@@ -145,7 +146,57 @@ without the `.cellens`.
 The problems of a `.cellens` are diagnostics on that file, at the entry's
 line: those of the format above as errors, and as warnings an entry whose
 file does not exist or is no regular file, whose file has no such document,
-version, variable or value, whose value Kubernetes already types or no rule
+version, variable or value, whose type an `x-kubernetes-int-or-string` value
+cannot have, whose value Kubernetes already types or no rule
 may read, whose kind is not found, or whose value another `.cellens` already
 types: the one first by its path gives the type. A symbolic link to a
 `.cellens` is not followed, and a file over 1 MiB is not read.
+
+## Writing entries from the editor
+
+The lines above a rule offer `Give it a type`, `Edit` and `Remove` for a `dyn`
+value; the editor asks what type is meant and the language server writes the
+entry, with the commands of [engine.md](engine.md#commands). It never writes a
+file itself: it sends the editor an edit (`workspace/applyEdit`), which lands
+in the editor's buffer and can be undone, on the `.cellens` as it is then, the
+editor's text when it is open. An editor that refuses the edit gets an error
+saying so.
+
+Setting a type for a value changes the entry that gives the value its type,
+in whichever `.cellens` it is (the first by path, when several are). With no
+entry, the new one goes in the nearest `.cellens` at or above the YAML file:
+in the file's folder, else the nearest folder above it, up to the workspace
+folder. With no `.cellens` there either, the editor creates `.cellens` at the
+root of the workspace folder (the file's own folder, outside every workspace
+folder), starting with the comment
+`# .cellens: types cel-lens assumes where Kubernetes gives dyn. Commit it.`.
+A `.cellens` below a hidden folder or `node_modules` counts only while it is
+open, as the search for them skips those folders. The entry is refused,
+before any edit, when it would get a problem: a type that does not parse, or
+that the value cannot have, a value Kubernetes already types, a file or
+document that does not exist, a kind that is not found.
+
+The edit changes only the entry's own lines, so every other line, comments
+included, stays as a person wrote it:
+
+- A changed type replaces the `type:` or `kind:` of the entry, keeping a
+  comment after it on its line, and the comments around and inside the entry.
+- A new entry goes before the first entry that sorts after it, by `file`, then
+  `document`, then `version` or `variable`, then `path`, and after the last one
+  otherwise, above the comment lines directly above the entry it goes before,
+  and before a comment after a blank line at the end of the list.
+  Its keys come in the order of the table above, indented like the other
+  entries.
+- Types are written in the form above (`{name: string, replicas: int}`), quoted
+  when they have a struct or a comma in them, or anything YAML would read
+  otherwise, such as `true`.
+- Removing a type removes the entry with its comments: the comment lines
+  directly above its `-`, those inside it, and those right after it, indented
+  more than its `-`. A comment after a blank line is not the entry's above
+  it, and stays. When nothing would be left but
+  `types:` and the comment cel-lens starts a `.cellens` with, the editor
+  deletes the file when it can, and else keeps those two lines.
+
+A `.cellens` that is not YAML, or whose `types` is not a list of entries on
+their own lines (`- file: ...`, with the other keys below), is not edited: the
+command says what to fix.

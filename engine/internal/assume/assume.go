@@ -41,6 +41,9 @@ const (
 	// Unreadable: in Rules, the value keeps unknown fields, which the API
 	// server lets no rule of a CustomResourceDefinition read.
 	Unreadable
+	// NotIntOrString: in Rules, the value is x-kubernetes-int-or-string,
+	// which a rule sees as an int or a string, and the type is neither.
+	NotIntOrString
 )
 
 // Mode says which values are dyn, as the CEL of a kind of document sees them.
@@ -100,6 +103,8 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("%s is already typed as %s: remove this entry", at, e.Type)
 	case Unreadable:
 		return fmt.Sprintf("the API server lets no rule read %s, which keeps unknown fields: give it a schema in the CustomResourceDefinition instead of this entry", at)
+	case NotIntOrString:
+		return fmt.Sprintf("%s is x-kubernetes-int-or-string, an int or a string to a rule: give it int or string", at)
 	}
 	return at
 }
@@ -183,7 +188,8 @@ var keptKeys = []string{"description", "title", "nullable", "x-kubernetes-valida
 // At returns a copy of root, the schema of the value called rootName, with
 // typ placed at the value path leads to. That value must be dyn in mode m,
 // and every value before it on the path must have a type, so the path can
-// follow it. Of the old value only its description, title, nullable and
+// follow it. In Rules the value is x-kubernetes-int-or-string, so typ must be
+// an integer or a string without a format: int, uint or string. Of the old value only its description, title, nullable and
 // x-kubernetes-validations stay, so its rules still apply. When
 // the type cannot be placed, the error is an *Error. Neither root nor typ
 // changes; the result shares the parts of both it does not change.
@@ -201,6 +207,9 @@ func place(node map[string]any, rootName string, path []string, depth int, typ m
 	if depth == len(path) {
 		if !m.IsDyn(node) {
 			return nil, fail(Typed)
+		}
+		if m == Rules && !intOrString(typ) {
+			return nil, fail(NotIntOrString)
 		}
 		out := maps.Clone(typ)
 		for _, k := range keptKeys {
@@ -251,6 +260,20 @@ func place(node map[string]any, rootName string, path []string, depth int, typ m
 	props[field] = placed
 	out["properties"] = props
 	return out, nil
+}
+
+// intOrString reports whether a value of schema s is an int or a string to
+// CEL: an integer, or a string without a format, which would make it a
+// timestamp, duration or bytes.
+func intOrString(s map[string]any) bool {
+	format, _ := s["format"].(string)
+	switch t, _ := s["type"].(string); t {
+	case "integer":
+		return true
+	case "string":
+		return format == ""
+	}
+	return false
 }
 
 // Copy returns a deep copy of s: its maps and lists are new, so the copy can

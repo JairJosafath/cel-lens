@@ -113,6 +113,12 @@ type session struct {
 	lensChanges int
 	init        bool
 	shutdown    bool
+	// edits are what the client can do with a workspace/applyEdit; pending
+	// are the ones sent for a command and not answered yet, by the id of
+	// the request, the editSeq-th one.
+	edits   editCaps
+	pending map[string]pendingEdit
+	editSeq int
 }
 
 // document is an open file. Only the message loop uses it, so the cached
@@ -305,7 +311,7 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	}
 	switch {
 	case msg.Method == "" && !msg.IsNotification():
-		return nil // a response from the client; nothing to answer
+		return ss.answered(msg) // a response from the client
 	case msg.Method == "initialize":
 		ss.init = true
 		return ss.initialize(ctx, msg.Params, reply)
@@ -313,7 +319,9 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		return ss.didChangeConfiguration(ctx, msg.Params)
 	case msg.Method == "initialized":
 		return ss.registerWatchers()
-	case msg.Method == "$/cancelRequest" || msg.Method == "$/setTrace":
+	case msg.Method == "$/cancelRequest":
+		return ss.cancel(msg.Params)
+	case msg.Method == "$/setTrace":
 		return nil
 	case !ss.init:
 		return reply(nil, &rpcError{jsonrpc.CodeNotInitialized, "the server is not initialized"})
@@ -321,6 +329,9 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		ss.shutdown = true
 		ss.stopScan()
 		ss.stopLensSearch()
+		if err := ss.dropPending(); err != nil {
+			return err
+		}
 		return reply(nil, nil)
 	case ss.shutdown:
 		return reply(nil, &rpcError{jsonrpc.CodeInvalidRequest, "the server is shut down"})
@@ -346,6 +357,8 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	case "textDocument/codeLens":
 		res, err := ss.codeLens(ctx, msg.Params)
 		return reply(res, err)
+	case "workspace/executeCommand":
+		return ss.executeCommand(ctx, msg, reply)
 	}
 	return reply(nil, &rpcError{jsonrpc.CodeMethodNotFound, "method not supported: " + msg.Method})
 }
@@ -381,6 +394,7 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	}
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
 	ss.codeLensRefresh = p.Capabilities.Workspace.CodeLens.RefreshSupport
+	ss.edits = p.editCaps()
 	ss.folders = p.folders()
 	ss.batch++ // the workspace scan and search work for one batch
 	if ss.features.Has(feature.CRDTypedPolicies) {
@@ -514,10 +528,11 @@ func (ss *session) initializeResult() any {
 	return map[string]any{
 		"kubernetesVersion": ss.kube.String(),
 		"capabilities": map[string]any{
-			"textDocumentSync":   map[string]any{"openClose": true, "change": 1},
-			"hoverProvider":      true,
-			"codeActionProvider": map[string]any{"codeActionKinds": []string{quickFix}},
-			"codeLensProvider":   map[string]any{},
+			"textDocumentSync":       map[string]any{"openClose": true, "change": 1},
+			"hoverProvider":          true,
+			"codeActionProvider":     map[string]any{"codeActionKinds": []string{quickFix}},
+			"codeLensProvider":       map[string]any{},
+			"executeCommandProvider": map[string]any{"commands": commandNames()},
 			"completionProvider": map[string]any{
 				"triggerCharacters": []string{"."},
 			},
@@ -566,6 +581,7 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 	d := p.TextDocument
 	if isLens(d.URI) {
 		ss.putLens(d.URI, []byte(d.Text), true)
+		ss.lenses[crdKey(d.URI)].version = d.Version
 		return ss.publishAll(ctx, "")
 	}
 	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text), crds: &ss.crds}
@@ -588,7 +604,9 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 	uri := p.TextDocument.URI
 	text := []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
 	if isLens(uri) {
-		if !ss.putLens(uri, text, true) {
+		changed := ss.putLens(uri, text, true)
+		ss.lenses[crdKey(uri)].version = p.TextDocument.Version
+		if !changed {
 			return nil
 		}
 		return ss.publishAll(ctx, "")
