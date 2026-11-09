@@ -295,5 +295,19 @@
   "homepage": "https://github.com/JairJosafath/cel-lens/tree/main/vscode#readme",
   "bugs": {
     "url": "https://github.com/JairJosafath/cel-lens/issues"
+  },
+  "overrides": {
+    "@eslint/config-array": {
+      "minimatch": "11.0.5"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.5"
+    },
+    "@vscode/vsce": {
+      "minimatch": "11.0.5"
+    },
+    "eslint": {
+      "minimatch": "11.0.5"
+    }
   }
 }

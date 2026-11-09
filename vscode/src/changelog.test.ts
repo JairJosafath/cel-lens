@@ -117,10 +117,10 @@ describe('CHANGELOG.md', () => {
     expect(sections.length).toBeGreaterThan(1);
   });
 
-  /** The Added part of the Unreleased section. */
-  function unreleasedAdded(): string | undefined {
+  /** The part of the Unreleased section under the heading of `kind`. */
+  function unreleasedPart(kind: string): string | undefined {
     const unreleased = CHANGELOG.split(/^(?=## \[)/m)[1] ?? '';
-    return unreleased.split(/^(?=### )/m).find((part) => part.startsWith('### Added'));
+    return unreleased.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
   }
 
   it.each([
@@ -158,15 +158,38 @@ describe('CHANGELOG.md', () => {
     'An example over 1 MiB, the most the engine reads, is refused before anything reads it',
     'A part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule, selected',
   ])('names %s under Added in the Unreleased section', (text) => {
-    expect(unreleasedAdded()).toContain(text);
+    expect(unreleasedPart('Added')).toContain(text);
   });
 
   it.each(['input box', 'Write a struct…', 'Pick a kind…', 'untitled', 'Use the whole'])(
     'names no %s, which no release had, in the Unreleased section',
     (text) => {
-      expect(unreleasedAdded()).not.toContain(text);
+      expect(unreleasedPart('Added')).not.toContain(text);
     },
   );
+
+  it.each([
+    'Vite 8.3.7 replaces 8.3.2',
+    'qs 6.17.1 replaces 6.16.0',
+    '`@azure/msal-node` 7.2.1 (with `@azure/identity` 4.14.1) replaces 6.0.1',
+    '`overrides` in `package.json` give `eslint`, `@eslint/config-array`, `@typescript-eslint/typescript-estree` and `@vscode/vsce` minimatch 11.0.5 in place of 10.2.6',
+    'GHSA-587h-7wmj-h5pm',
+    'GHSA-698v-4r3x-3vcv',
+    'GHSA-9jrq-w75r-8gcw',
+    'GHSA-r825-w8mm-5pxw',
+    'GHSA-rq7h-c2jc-7f22',
+    'GHSA-vfpm-58rq-9qcg',
+    'GHSA-6pq8-jhm2-2vcw (qs)',
+    'GHSA-xcx6-jx8p-x3h5 (`@azure/msal-node`)',
+    'GHSA-g3hv-75wg-m249 (minimatch)',
+    'One advisory stays, and does not apply',
+    '`vscode-languageclient`, which is part of the extension, keeps minimatch 10.2.6, as it calls `Minimatch.makeRe()`, which minimatch 11 removed, and has no release without it',
+    "a denial of service through a glob pattern an attacker chooses, and the client matches only the extension's own patterns and the ones the engine registers",
+    '`osv-scanner.toml` ignores it for that copy until 2027-03-01',
+    '`npm audit` still reports it, as 2 moderate vulnerabilities',
+  ])('names %s under Security in the Unreleased section', (text) => {
+    expect(unreleasedPart('Security')).toContain(text);
+  });
 
   it.each(
     sections.slice(0, sections.findIndex(({ version }) => version === OLDEST_PUBLIC_VERSION) + 1),
