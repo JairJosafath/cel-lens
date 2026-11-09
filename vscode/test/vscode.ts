@@ -26,6 +26,12 @@ const registry = new Map<string, (...args: unknown[]) => unknown>();
 /** The commands run with commands.executeCommand, oldest first. */
 export const executedCommands: { command: string; args: unknown[] }[] = [];
 
+/** The error the next calls to commands.executeCommand reject with, after recording the call, if any. */
+export const commandFailure: { error: Error | undefined } = { error: undefined };
+
+/** What commands.executeCommand resolves to, by command; undefined for the others. */
+export const commandResults = new Map<string, unknown>();
+
 export const commands = {
   registerCommand(command: string, callback: (...args: unknown[]) => unknown): Disposable {
     // VS Code refuses a second registration, which is how leaks show.
@@ -40,7 +46,10 @@ export const commands = {
   },
   executeCommand<T>(command: string, ...args: unknown[]): Thenable<T> {
     executedCommands.push({ command, args });
-    return Promise.resolve(undefined as T);
+    if (commandFailure.error !== undefined) {
+      return Promise.reject(commandFailure.error);
+    }
+    return Promise.resolve(commandResults.get(command) as T);
   },
 } satisfies Partial<typeof vscode.commands>;
 
@@ -197,20 +206,44 @@ export function changeActiveEditor(languageId: string | undefined): void {
 export const quickPicks: {
   shown: unknown[][];
   active: unknown[][];
+  /** The options of each window.showQuickPick call, oldest first. */
+  options: (vscode.QuickPickOptions | undefined)[];
+  /** Each quick pick window.createQuickPick made, oldest first, as it was when shown. */
+  created: {
+    title: string | undefined;
+    placeholder: string | undefined;
+    matchOnDescription: boolean;
+    matchOnDetail: boolean;
+    busy: boolean;
+    /** The labels of the lines it showed at once. */
+    labels: string[];
+  }[];
   next: string | undefined;
+  /** What the user types in the filter of the next quick pick window.createQuickPick made. */
+  typed: string;
   acceptAtOnce: boolean;
 } = {
   shown: [],
   active: [],
+  options: [],
+  created: [],
   next: undefined,
+  typed: '',
   acceptAtOnce: false,
 };
+
+/** The documents shown with window.showTextDocument, oldest first, with the selection asked for. */
+export const shownDocuments: { uri: string; selection: unknown }[] = [];
 
 /** The members of vscode.QuickPick the code under test uses; the stand-in is checked against them. */
 type UsedQuickPick<T extends vscode.QuickPickItem> = Pick<
   vscode.QuickPick<T>,
   | 'title'
   | 'placeholder'
+  | 'matchOnDescription'
+  | 'matchOnDetail'
+  | 'busy'
+  | 'value'
   | 'items'
   | 'activeItems'
   | 'selectedItems'
@@ -225,11 +258,18 @@ type UsedQuickPick<T extends vscode.QuickPickItem> = Pick<
  * A quick pick that, once shown, moves the highlight to the `next` label and
  * accepts it, or accepts the highlight as it is when `acceptAtOnce`, or is
  * dismissed. Like VS Code, it highlights the first item unless told otherwise.
+ * Shown busy, it waits until it is no longer busy, when its lines have come.
  */
 class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> {
   title: string | undefined;
   placeholder: string | undefined;
+  matchOnDescription = false;
+  matchOnDetail = false;
+  /** The filter text. */
+  value = '';
   selectedItems: T[] = [];
+  private busyNow = false;
+  private waiting = false;
   activeItems: T[] = [];
   private itemList: T[] = [];
   private readonly acceptListeners = new Set<() => void>();
@@ -244,6 +284,18 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
     this.activeItems = items.slice(0, 1);
   }
 
+  get busy(): boolean {
+    return this.busyNow;
+  }
+
+  set busy(busy: boolean) {
+    this.busyNow = busy;
+    if (!busy && this.waiting) {
+      this.waiting = false;
+      this.act();
+    }
+  }
+
   onDidAccept(listener: () => void): Disposable {
     this.acceptListeners.add(listener);
     return new Disposable(() => this.acceptListeners.delete(listener));
@@ -255,8 +307,26 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
   }
 
   show(): void {
+    quickPicks.created.push({
+      title: this.title,
+      placeholder: this.placeholder,
+      matchOnDescription: this.matchOnDescription,
+      matchOnDetail: this.matchOnDetail,
+      busy: this.busyNow,
+      labels: this.itemList.map((item) => item.label),
+    });
+    if (this.busyNow) {
+      this.waiting = true;
+    } else {
+      this.act();
+    }
+  }
+
+  /** What the user does once the lines are there: picks the `next` label, or Escape. */
+  private act(): void {
     quickPicks.shown.push(this.itemList);
     quickPicks.active.push([...this.activeItems]);
+    this.value = quickPicks.typed;
     const target = this.itemList.find((item) => item.label === quickPicks.next);
     if (target !== undefined) {
       this.activeItems = [target];
@@ -283,6 +353,121 @@ class FakeQuickPick<T extends vscode.QuickPickItem> implements UsedQuickPick<T> 
   }
 }
 
+/** The members of vscode.InputBox the code under test uses; the stand-in is checked against them. */
+type UsedInputBox = Pick<
+  vscode.InputBox,
+  | 'title'
+  | 'placeholder'
+  | 'prompt'
+  | 'value'
+  | 'validationMessage'
+  | 'busy'
+  | 'enabled'
+  | 'buttons'
+  | 'onDidTriggerButton'
+  | 'onDidChangeValue'
+  | 'onDidAccept'
+  | 'onDidHide'
+  | 'show'
+  | 'hide'
+  | 'dispose'
+>;
+
+/** Every input box window.createInputBox made, oldest first. */
+export const inputBoxes: FakeInputBox[] = [];
+
+/** An input box a test drives as a person would: it types, presses Enter or Escape. */
+export class FakeInputBox implements UsedInputBox {
+  title: string | undefined;
+  placeholder: string | undefined;
+  prompt: string | undefined;
+  value = '';
+  validationMessage: string | vscode.InputBoxValidationMessage | undefined;
+  busy = false;
+  enabled = true;
+  buttons: readonly vscode.QuickInputButton[] = [];
+  visible = false;
+  disposed = false;
+  private readonly buttonListeners = new Set<(button: vscode.QuickInputButton) => void>();
+  private readonly changeListeners = new Set<(value: string) => void>();
+  private readonly acceptListeners = new Set<() => void>();
+  private readonly hideListeners = new Set<() => void>();
+
+  onDidTriggerButton(listener: (button: vscode.QuickInputButton) => void): Disposable {
+    this.buttonListeners.add(listener);
+    return new Disposable(() => this.buttonListeners.delete(listener));
+  }
+
+  onDidChangeValue(listener: (value: string) => void): Disposable {
+    this.changeListeners.add(listener);
+    return new Disposable(() => this.changeListeners.delete(listener));
+  }
+
+  onDidAccept(listener: () => void): Disposable {
+    this.acceptListeners.add(listener);
+    return new Disposable(() => this.acceptListeners.delete(listener));
+  }
+
+  onDidHide(listener: () => void): Disposable {
+    this.hideListeners.add(listener);
+    return new Disposable(() => this.hideListeners.delete(listener));
+  }
+
+  show(): void {
+    this.visible = true;
+  }
+
+  /** Escape, or the code closing the box: tells the listeners once. */
+  hide(): void {
+    if (!this.visible) {
+      return;
+    }
+    this.visible = false;
+    for (const listener of this.hideListeners) {
+      listener();
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.buttonListeners.clear();
+    this.changeListeners.clear();
+    this.acceptListeners.clear();
+    this.hideListeners.clear();
+  }
+
+  /** Replaces the text, as typing does, and tells the listeners. */
+  type(text: string): void {
+    this.value = text;
+    for (const listener of this.changeListeners) {
+      listener(text);
+    }
+  }
+
+  /** Clicks the button with this tooltip. */
+  press(tooltip: string): void {
+    for (const button of this.buttons.filter((each) => each.tooltip === tooltip)) {
+      for (const listener of this.buttonListeners) {
+        listener(button);
+      }
+    }
+  }
+
+  /** Presses Enter. */
+  accept(): void {
+    for (const listener of this.acceptListeners) {
+      listener();
+    }
+  }
+}
+
+export const QuickPickItemKind = { Separator: -1, Default: 0 } as const;
+
+/** A product icon, by its name. */
+export class ThemeIcon {
+  constructor(readonly id: string) {}
+}
+
 export const StatusBarAlignment = { Left: 1, Right: 2 } as const;
 
 export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 } as const;
@@ -294,6 +479,7 @@ export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3
  */
 type LooseWindowMember =
   | 'createStatusBarItem'
+  | 'showTextDocument'
   | 'activeTextEditor'
   | 'onDidChangeActiveTextEditor'
   | 'showQuickPick'
@@ -457,12 +643,25 @@ export const window = {
     editorListeners.add(listener);
     return new Disposable(() => editorListeners.delete(listener));
   },
-  showQuickPick<T extends { label: string }>(items: T[]): Promise<T | undefined> {
+  showQuickPick<T extends { label: string }>(
+    items: T[],
+    options?: vscode.QuickPickOptions,
+  ): Promise<T | undefined> {
     quickPicks.shown.push(items);
+    quickPicks.options.push(options);
     return Promise.resolve(items.find((item) => item.label === quickPicks.next));
+  },
+  showTextDocument(uri: vscode.Uri, options?: vscode.TextDocumentShowOptions): Promise<object> {
+    shownDocuments.push({ uri: uri.toString(), selection: options?.selection });
+    return Promise.resolve({});
   },
   createQuickPick<T extends vscode.QuickPickItem>(): FakeQuickPick<T> {
     return new FakeQuickPick<T>();
+  },
+  createInputBox(): FakeInputBox {
+    const box = new FakeInputBox();
+    inputBoxes.push(box);
+    return box;
   },
   showErrorMessage<T extends string>(message: string, ...buttons: T[]): Promise<T | undefined> {
     shownErrors.push({ message, buttons });
@@ -491,9 +690,12 @@ export const window = {
     channels.set(name, channel);
     return channel;
   },
-} satisfies Partial<Omit<typeof vscode.window, LooseWindowMember | 'createQuickPick'>> &
+} satisfies Partial<
+  Omit<typeof vscode.window, LooseWindowMember | 'createQuickPick' | 'createInputBox'>
+> &
   Partial<Record<LooseWindowMember, unknown>> & {
     createQuickPick?: <T extends vscode.QuickPickItem>() => UsedQuickPick<T>;
+    createInputBox?: () => UsedInputBox;
   };
 
 /** The settings `workspace.getConfiguration` returns, by full name. */
@@ -654,6 +856,27 @@ export const workspace = {
   onDidOpenTextDocument?: FiredEvent<typeof vscode.workspace.onDidOpenTextDocument, OpenedDocument>;
 };
 
+/** A diagnostic as the code under test reads it: the members of vscode.Diagnostic with plain positions. */
+export interface FakeDiagnostic {
+  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  severity: number;
+  source?: string;
+  message: string;
+}
+
+/** The diagnostics `languages.getDiagnostics` returns, by document URI. */
+export const diagnostics = new Map<string, FakeDiagnostic[]>();
+
+/** The overloaded getDiagnostics returns real Diagnostics; the stand-in's carry only what is read. */
+type LooseLanguagesMember = 'getDiagnostics';
+
+export const languages = {
+  getDiagnostics(resource: vscode.Uri): FakeDiagnostic[] {
+    return diagnostics.get(resource.toString()) ?? [];
+  },
+} satisfies Partial<Omit<typeof vscode.languages, LooseLanguagesMember>> &
+  Partial<Record<LooseLanguagesMember, unknown>>;
+
 /** The URLs opened with env.openExternal, oldest first. */
 export const openedUrls: string[] = [];
 
@@ -708,6 +931,11 @@ export function reset(): void {
   workspaceFolderSettings.clear();
   workspaceFolderNames.length = 0;
   executedCommands.length = 0;
+  commandFailure.error = undefined;
+  commandResults.clear();
+  inputBoxes.length = 0;
+  shownDocuments.length = 0;
+  diagnostics.clear();
   openedUrls.length = 0;
   env.remoteName = undefined;
   channels.clear();
@@ -718,8 +946,11 @@ export function reset(): void {
   errorChoice.next = undefined;
   quickPicks.shown.length = 0;
   quickPicks.active.length = 0;
+  quickPicks.options.length = 0;
+  quickPicks.created.length = 0;
   quickPicks.next = undefined;
   quickPicks.acceptAtOnce = false;
+  quickPicks.typed = '';
   editorListeners.clear();
   configListeners.clear();
   decorationTypes.length = 0;

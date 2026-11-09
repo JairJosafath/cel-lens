@@ -6,6 +6,13 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The setting `cel-lens.inlineInfo` (on by default) and the command **cel-lens: Toggle Inline Info** turn the engine's line above each CEL rule off and on; open editors follow at once, without a reload. The status bar menu shows **Inline info: on** or **off** and flips it. The toggle writes the scope that sets the value in force for the open file (its workspace folder, the workspace or the user settings), or the user settings when none does.
+- The parts of the line above a CEL rule act when clicked. The first part opens the problems peek at the rule's first problem, or the hover there when VS Code's problem order would open another problem first, or the rule's hover when it has no problem. **+N more** lists the values the line leaves out, titled after the rule's line (such as "More of the rule on line 16"), each with its action; picking one runs it.
+- **Give it a type** on the line above a CEL rule gives a `dyn` value a type in `.cellens`. It opens a picker titled after the value, such as "Give params a type": **Write a struct…** first, then the built-in kinds and the kinds of the workspace's CRDs, each with its icon, its group and version (and `alpha` or `beta` when it is not GA), and its description; typing `deploy` finds Deployment. **Write a struct…** opens an input box with the placeholder `{name: string, replicas: int}` that shows what is wrong as you type; Enter sets the type, and Escape changes nothing. The picker opens at once and lists the kinds as the engine gives them; a struct typed in its filter starts the input box. A value of a CRD is offered `int` and `string`. **Edit** opens the same box filled with the type, or the picker on the kind, and the box's **Pick a kind…** button turns to the picker, so a struct can become a kind; **Remove** removes the entry at once. The engine writes `.cellens` in the editor, so **Undo** there takes a change back. A change the engine refuses, such as one made while another edit of `.cellens` waits, is shown once with the reason.
+- The command **cel-lens: Give a Value a Type…** lists the values the rules of the open YAML file read, from the line above each rule, and gives the one picked a type, or edits it; with none, it says so.
+
 ## [0.35.0] - 2026-11-04
 
 ### Changed

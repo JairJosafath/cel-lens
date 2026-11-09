@@ -117,6 +117,21 @@ describe('CHANGELOG.md', () => {
     expect(sections.length).toBeGreaterThan(1);
   });
 
+  it.each([
+    '`cel-lens.inlineInfo`',
+    '**cel-lens: Toggle Inline Info**',
+    '**Give it a type**',
+    '**Write a struct…**',
+    '`{name: string, replicas: int}`',
+    '**Remove** removes the entry at once',
+    '**Pick a kind…** button',
+    '**cel-lens: Give a Value a Type…**',
+  ])('names %s under Added in the Unreleased section', (text) => {
+    const unreleased = CHANGELOG.split(/^(?=## \[)/m)[1] ?? '';
+    const added = unreleased.split(/^(?=### )/m).find((part) => part.startsWith('### Added'));
+    expect(added).toContain(text);
+  });
+
   it.each(
     sections.slice(0, sections.findIndex(({ version }) => version === OLDEST_PUBLIC_VERSION) + 1),
   )('ends with one link reference for $version', ({ version }) => {

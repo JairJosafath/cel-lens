@@ -9,6 +9,7 @@ import {
 } from './actions_menu';
 import { RELEASES_PAGE_URL } from './core_releases';
 import { currentColorStyle } from './color_painter';
+import { readInlineInfo } from './inline_info_setting';
 import {
   ENGINE_DOWN_TEXT,
   KUBERNETES_VERSION_SETTING,
@@ -96,6 +97,7 @@ export class VersionStatus implements vscode.Disposable {
         currentColorStyle(),
         versionDescription(this.state, readSetting()),
         this.state.kind === 'failed' || this.state.kind === 'crashed',
+        readInlineInfo(vscode.window.activeTextEditor?.document.uri),
       ),
       { title: 'cel-lens', placeHolder: 'Pick an action' },
     );

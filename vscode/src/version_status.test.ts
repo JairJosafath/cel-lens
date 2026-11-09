@@ -20,6 +20,7 @@ import {
 import { PICK_VERSION_COMMAND, RESTART_SERVER_COMMAND } from './kubernetes_version';
 import { SHOW_ACTIONS_COMMAND, SHOW_LOGS_COMMAND } from './actions_menu';
 import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
+import { TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
 import { VersionStatus } from './version_status';
 
 const INFO = { inUse: '1.37', defaultVersion: '1.37', supported: ['1.37', '1.36'] };
@@ -259,7 +260,7 @@ describe('VersionStatus', () => {
   });
 
   describe('showActions', () => {
-    it('lists the four actions in order, with the current style and version', async () => {
+    it('lists the five actions in order, with the current style, version and inline info', async () => {
       const status = new VersionStatus();
       status.setState(RUNNING);
       settings.set('cel-lens.colorStyle', 'classic');
@@ -271,10 +272,30 @@ describe('VersionStatus', () => {
       expect(quickPicks.shown[0]).toMatchObject([
         { label: 'Color style', description: 'Classic' },
         { label: 'Kubernetes version', description: '1.36' },
+        { label: 'Inline info: on' },
         { label: 'Restart Engine' },
         { label: 'Show Logs' },
       ]);
     });
+
+    it.each([
+      ['a', 'Inline info: off'],
+      ['b', 'Inline info: on'],
+    ])(
+      'shows whether the lines show in the active editor folder %s of a two-folder workspace: %s',
+      async (folder, label) => {
+        const status = new VersionStatus();
+        status.setState(RUNNING);
+        addWorkspaceFolder('a', { 'cel-lens.inlineInfo': false });
+        addWorkspaceFolder('b');
+        activeEditor.uri = `file:///workspace/${folder}/crd.yaml`;
+        changeActiveEditor('yaml');
+
+        await status.showActions();
+
+        expect(quickPicks.shown[0]?.[2]).toMatchObject({ label });
+      },
+    );
 
     it.each([
       ['a', 'Classic'],
@@ -336,6 +357,7 @@ describe('VersionStatus', () => {
         { label: 'Show Logs' },
         { label: 'Color style' },
         { label: 'Kubernetes version' },
+        { label: 'Inline info: on' },
       ]);
     });
 
@@ -362,6 +384,7 @@ describe('VersionStatus', () => {
     it.each([
       ['Color style', CHOOSE_COLOR_STYLE_COMMAND],
       ['Kubernetes version', PICK_VERSION_COMMAND],
+      ['Inline info: on', TOGGLE_INLINE_INFO_COMMAND],
       ['Restart Engine', RESTART_SERVER_COMMAND],
       ['Show Logs', SHOW_LOGS_COMMAND],
     ])('runs the command of the %s entry', async (label, command) => {

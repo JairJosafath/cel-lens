@@ -1,6 +1,7 @@
 import { RESTART_ENGINE_LABEL, SHOW_LOGS_LABEL } from './button_labels';
 import type { CelStyle } from './cel_styles';
 import { CHOOSE_COLOR_STYLE_COMMAND, styleLabel } from './color_style';
+import { TOGGLE_INLINE_INFO_COMMAND, inlineInfoLabel } from './inline_info';
 import {
   PICK_VERSION_COMMAND,
   RESTART_SERVER_COMMAND,
@@ -21,24 +22,24 @@ export interface ActionItem {
   readonly command: string;
 }
 
-/** The menu's entries in order; style and version are shown as descriptions. */
-export function actionItems(style: CelStyle, version: string, engineDown = false): ActionItem[] {
+/**
+ * The menu's entries in order; style and version are shown as descriptions, and whether the
+ * lines above the rules show is in the inline info entry's label.
+ */
+export function actionItems(
+  style: CelStyle,
+  version: string,
+  engineDown = false,
+  inlineInfo = true,
+): ActionItem[] {
   const restart = { label: RESTART_ENGINE_LABEL, description: '', command: RESTART_SERVER_COMMAND };
   const logs = { label: SHOW_LOGS_LABEL, description: '', command: SHOW_LOGS_COMMAND };
-  if (engineDown) {
-    return [
-      restart,
-      logs,
-      { label: 'Color style', description: styleLabel(style), command: CHOOSE_COLOR_STYLE_COMMAND },
-      { label: 'Kubernetes version', description: version, command: PICK_VERSION_COMMAND },
-    ];
-  }
-  return [
+  const settings = [
     { label: 'Color style', description: styleLabel(style), command: CHOOSE_COLOR_STYLE_COMMAND },
     { label: 'Kubernetes version', description: version, command: PICK_VERSION_COMMAND },
-    restart,
-    logs,
+    { label: inlineInfoLabel(inlineInfo), description: '', command: TOGGLE_INLINE_INFO_COMMAND },
   ];
+  return engineDown ? [restart, logs, ...settings] : [...settings, restart, logs];
 }
 
 /** What the version entry says: the version in use, or the engine's state when none is known. */
