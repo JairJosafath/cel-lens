@@ -56,6 +56,9 @@ func TestDefaultAndRange(t *testing.T) {
 	if len(sup) < 3 || sup[len(sup)-1] != kubeversion.Default() {
 		t.Errorf("Supported() = %v, want at least three versions ending with the default", sup)
 	}
+	if v, _ := kubeversion.Parse("1.34"); v.Minor() != 34 || zero.Minor() != 37 {
+		t.Errorf("Minor() of 1.34 and the zero Version = %d, %d, want 34, 37", v.Minor(), zero.Minor())
+	}
 	want := "matches Kubernetes 1.37; supports 1.33–1.37"
 	if got := kubeversion.Summary(); got != want {
 		t.Errorf("Summary() = %q, want %q", got, want)

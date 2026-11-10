@@ -1,0 +1,27 @@
+# The advisories the dependency check leaves aside. SECURITY.md, "Dependencies",
+# says how the check runs and what a reason holds.
+#
+# A reason starts with the module and the version it was checked at.
+# TestIgnoredVulnerabilities fails when one does not, or when go.mod requires
+# another version of that module or none: check the reason again, then name the
+# new version or remove the entry.
+#
+# The three below are about Kyverno's admission controller. The Go vulnerability
+# database gives them no fixed version, so it reports every version of
+# github.com/kyverno/kyverno. The engine compiles a policy's expressions and
+# never runs them, and of that module it builds two packages, pkg/cel/compiler
+# and pkg/toggle:
+#
+#   go list -deps ./... | grep kyverno/kyverno/
+
+[[IgnoredVulns]]
+id = "GO-2025-3615"
+reason = "github.com/kyverno/kyverno v1.19.1: GHSA-459x-q9hg-4gpq, a request to any address through the service call of a policy's apiCall, lists v1.13.4 as the last affected version. The code is pkg/engine/apicall of the admission controller, which the engine does not build."
+
+[[IgnoredVulns]]
+id = "GO-2026-5337"
+reason = "github.com/kyverno/kyverno v1.19.1: GHSA-cvq5-hhx3-f99p, a namespaced policy that reads a ConfigMap of another namespace through its configMap context, lists v1.17.1 as the last affected version. The code is pkg/engine/context/loaders of the admission controller, which the engine does not build."
+
+[[IgnoredVulns]]
+id = "GO-2026-5594"
+reason = "github.com/kyverno/kyverno v1.19.1: GHSA-qr4g-8hrp-c4rw, unrestricted outbound requests through the service.url of a policy's apiCall, lists v1.17.1 as the last affected version. The code is pkg/engine/apicall of the admission controller, which the engine does not build."

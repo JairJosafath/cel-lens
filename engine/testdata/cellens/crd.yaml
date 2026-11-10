@@ -1,0 +1,26 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {plural: widgets, singular: widget, kind: Widget, listKind: WidgetList}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-validations:
+            - rule: "self.spec.config > 0"
+            - rule: "self.spec.config.startsWith('a')"
+          properties:
+            spec:
+              type: object
+              properties:
+                # x-kubernetes-int-or-string leaves the value dyn to a rule; the
+                # .cellens says it is an int.
+                config:
+                  x-kubernetes-int-or-string: true

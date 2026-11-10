@@ -1,6 +1,7 @@
 // Package lsp serves CEL language support for Kubernetes YAML files over the
 // Language Server Protocol: diagnostics for every CEL expression of an open
-// document, hover and completion inside them.
+// document, hover and completion inside them, and above each the inline info
+// of package inline as code lenses.
 //
 // Documents are synchronised in full. Positions use the protocol's default
 // encoding, UTF-16 code units. A YAML document that does not parse is reported
@@ -15,7 +16,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"reflect"
 	"slices"
+	"time"
 	"unicode/utf16"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
@@ -35,7 +38,8 @@ var ErrNoShutdown = errors.New("client ended the session without shutdown")
 // kubeversion.Default until the client chooses a Kubernetes version with
 // kubernetesVersion in initializationOptions or didChangeConfiguration. Every
 // experimental feature is off until the client lists it in experimental, in
-// the same two places.
+// the same two places, and the inline info is on until inlineInfo is false
+// there.
 type Server struct {
 	// Version is reported to the client in the initialize result.
 	Version string
@@ -70,13 +74,95 @@ type session struct {
 	fileCap int
 	// scan is the workspace scan in progress, nil when there is none.
 	scan *scan
-	// scanChanged is set when the batch that started the scan changed the CRDs;
-	// the end of the scan then checks the open documents.
-	scanChanged bool
-	// queued are the created folders to scan once the scan in progress ends.
-	queued   []string
-	init     bool
-	shutdown bool
+	// batch numbers the message in hand, such as a didChangeWatchedFiles
+	// batch: a scan and a search it starts or queues work for that batch, and
+	// the check of the open documents the batch owes waits for both (see
+	// settle).
+	batch int
+	// owed are the batches owed a check of the open documents once none of
+	// their scans and searches is left.
+	owed map[int]bool
+	// queued are the created folders to scan once the scan in progress ends,
+	// for queuedBatches.
+	queued        []string
+	queuedBatches []int
+	// lenses are the .cellens files of the workspace folders and the open
+	// ones, by key (see crdKey), which give types to assume where values are
+	// dyn. They are found by a search of the folders at initialize, which
+	// runs whatever the experimental features.
+	lenses map[string]*lens
+	// lensSearch is the search for .cellens files in progress, nil when none.
+	lensSearch *lensSearch
+	// lensQueued are the created folders to search once lensSearch ends, for
+	// lensQueuedBatches.
+	lensQueued        []string
+	lensQueuedBatches []int
+	// kinds are the schemas of the built-in kinds kind: entries name, made
+	// once, by apiVersion and kind; nil for one that is no built-in kind.
+	kinds map[string]map[string]any
+	// goReads are the Go types go: entries name, as last read, by the key of
+	// their folder, # and their name (see goType).
+	goReads map[string]goRead
+	// goFiles is what the last listing of the workspace's Go types for
+	// typeChoices read of each .go file, which the next reuses while the
+	// file stays as it was.
+	goFiles map[string]goFile
+	// goGen counts the changes to .go files and folders the client told of;
+	// goListedAt is goGen when the listing in goFiles started, so goFiles is
+	// as the workspace is while the two are equal (see goFresh).
+	goGen, goListedAt int
+	// goLister lists the Go types for the job of typeChoices (see
+	// answerTypeChoices) and for completion (see listGo); nil means
+	// goChoices.
+	goLister func(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, known map[string]goFile) goListed
+	// lensShown are the diagnostics last sent for each .cellens file, by URI.
+	lensShown map[string][]map[string]any
+	// lensGen counts the changes, other than to the .cellens files, that may
+	// change the problems of their entries: the settings, the CRDs and the
+	// files on disk. The problems found at one count are kept until another
+	// (see lensDiagnostics).
+	lensGen int
+	// inlineOff is true while the client's setting inlineInfo is false: the
+	// server then answers no code lenses.
+	inlineOff bool
+	// completionRegistration is true when the client registers completion
+	// itself, a provider for YAML files and one for .cellens files;
+	// completionRegistered once the server asked it to.
+	completionRegistration, completionRegistered bool
+	// snippets is true when the client takes snippets in completion items,
+	// asIs when it takes their text with the indentation it has
+	// (insertTextMode asIs).
+	snippets, asIs bool
+	// codeLensRefresh is true when the client lets the server ask it to request
+	// the code lenses again; refreshes counts the times it did, for the ids.
+	codeLensRefresh bool
+	refreshes       int
+	// refreshedAt is lensChanges when the client was last asked to refresh
+	// the code lenses, or would have been.
+	refreshedAt int
+	// lensChanges counts the changes to lenses; the code lenses a document
+	// keeps were made at one count, and are made again at another.
+	lensChanges int
+	// retry fires once to send the last refresh again while the code lenses
+	// are owed, and stopRetry stops it; both nil while none is set (see
+	// armRetry). retryTimer makes them; nil means newTimer.
+	retry      <-chan time.Time
+	stopRetry  func() bool
+	retryTimer func(d time.Duration) (<-chan time.Time, func() bool)
+	init       bool
+	shutdown   bool
+	// edits are what the client can do with a workspace/applyEdit; pending
+	// are the ones sent for a command and not answered yet, by the id of
+	// the request, the editSeq-th one.
+	edits   editCaps
+	pending map[string]pendingEdit
+	editSeq int
+	// jobs are the commands whose work runs in a goroutine, by number, the
+	// jobSeq-th one last; each sends what it returns on jobDone (see
+	// startJob).
+	jobs    map[int]*job
+	jobSeq  int
+	jobDone chan jobResult
 }
 
 // document is an open file. Only the message loop uses it, so the cached
@@ -94,6 +180,18 @@ type document struct {
 	// for codeAction; checked tells whether there was one.
 	diags   []check.Diagnostic
 	checked bool
+	// assumed are the types the .cellens files assume in the document, as of
+	// its last check; parsed is made with them.
+	assumed []check.AssumedType
+	// codeLenses are the code lenses of this version as of its last check,
+	// made when the session's lensChanges was codeLensesAt; nil until a
+	// codeLens request makes them.
+	codeLenses   []any
+	codeLensesAt int
+	// shown is true once the client asked for the code lenses of the
+	// document, at any version: an editor shows them, and asks again on a
+	// refresh (see lensesOwed).
+	shown bool
 }
 
 // diagnostics returns the problems of the document as it is, checking it only
@@ -109,7 +207,7 @@ func (ss *session) diagnostics(ctx context.Context, uri string, doc *document) (
 	}
 	// Check's error is for YAML that does not parse, which it also returns as
 	// diagnostics, or for ctx.
-	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds))
+	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds), check.WithAssumedTypes(doc.assumed))
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -131,7 +229,7 @@ func (d *document) parse(ctx context.Context, uri string) *assist.Document {
 	if d.parsed != nil {
 		return d.parsed
 	}
-	p := assist.Parse(ctx, uri, d.text, assist.WithCRDs(d.crds))
+	p := assist.Parse(ctx, uri, d.text, assist.WithCRDs(d.crds), assist.WithAssumedTypes(d.assumed))
 	if ctx.Err() == nil {
 		d.parsed = p
 	}
@@ -162,25 +260,45 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	msgs, stop := readMessages(ss.conn, in)
 	defer stop()
 	defer ss.stopScan()
+	defer ss.stopLensSearch()
+	defer ss.stopJobs()
+	defer ss.cancelRetry()
 	for {
 		var r readResult
 		var scanned <-chan *check.CRDs
 		if ss.scan != nil {
 			scanned = ss.scan.done
 		}
+		var lensesFound <-chan lensFound
+		if ss.lensSearch != nil {
+			lensesFound = ss.lensSearch.done
+		}
+		var jobDone <-chan jobResult
+		if len(ss.jobs) > 0 {
+			jobDone = ss.jobDone
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case r := <-jobDone:
+			if err := ss.finishJob(r); err != nil {
+				return err
+			}
+			continue
+		case <-ss.retry:
+			if err := ss.retryRefresh(); err != nil {
+				return err
+			}
+			continue
+		case found := <-lensesFound:
+			if err := ss.finishLensSearch(ctx, found); err != nil {
+				return err
+			}
+			continue
 		case found := <-scanned:
-			notes := ss.scan.notes
-			ss.scan = nil
-			if err := ss.warn(notes); err != nil {
+			if err := ss.endScan(ctx, found); err != nil {
 				return err
 			}
-			if err := ss.finishScan(ctx, found); err != nil {
-				return err
-			}
-			ss.scanQueued(ctx)
 			continue
 		case r = <-msgs:
 		}
@@ -257,21 +375,34 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	}
 	switch {
 	case msg.Method == "" && !msg.IsNotification():
-		return nil // a response from the client; nothing to answer
+		return ss.answered(msg) // a response from the client
 	case msg.Method == "initialize":
 		ss.init = true
 		return ss.initialize(ctx, msg.Params, reply)
 	case msg.Method == "workspace/didChangeConfiguration":
 		return ss.didChangeConfiguration(ctx, msg.Params)
 	case msg.Method == "initialized":
-		return ss.registerWatchers()
-	case msg.Method == "$/cancelRequest" || msg.Method == "$/setTrace":
+		if err := ss.registerWatchers(); err != nil {
+			return err
+		}
+		return ss.registerCompletion()
+	case msg.Method == "$/cancelRequest":
+		return ss.cancel(msg.Params)
+	case msg.Method == "$/setTrace":
 		return nil
 	case !ss.init:
 		return reply(nil, &rpcError{jsonrpc.CodeNotInitialized, "the server is not initialized"})
 	case msg.Method == "shutdown":
 		ss.shutdown = true
+		ss.cancelRetry()
 		ss.stopScan()
+		ss.stopLensSearch()
+		if err := ss.dropPending(); err != nil {
+			return err
+		}
+		if err := ss.dropJobs(); err != nil {
+			return err
+		}
 		return reply(nil, nil)
 	case ss.shutdown:
 		return reply(nil, &rpcError{jsonrpc.CodeInvalidRequest, "the server is shut down"})
@@ -294,6 +425,11 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	case "textDocument/codeAction":
 		res, err := ss.codeAction(ctx, msg.Params)
 		return reply(res, err)
+	case "textDocument/codeLens":
+		res, err := ss.codeLens(ctx, msg.Params)
+		return reply(res, err)
+	case "workspace/executeCommand":
+		return ss.executeCommand(ctx, msg, reply)
 	}
 	return reply(nil, &rpcError{jsonrpc.CodeMethodNotFound, "method not supported: " + msg.Method})
 }
@@ -324,14 +460,21 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	if decode(params, &p) && p.InitializationOptions != nil {
 		_, problems, _ = ss.configure(p.InitializationOptions)
 	}
+	ss.completionRegistration = p.Capabilities.TextDocument.Completion.DynamicRegistration
 	if err := reply(ss.initializeResult(), nil); err != nil {
 		return err
 	}
 	ss.watchFiles = p.Capabilities.Workspace.DidChangeWatchedFiles.DynamicRegistration
+	ss.codeLensRefresh = p.Capabilities.Workspace.CodeLens.RefreshSupport
+	item := p.Capabilities.TextDocument.Completion.CompletionItem
+	ss.snippets, ss.asIs = item.SnippetSupport, slices.Contains(item.InsertTextModeSupport.ValueSet, insertAsIs)
+	ss.edits = p.editCaps()
 	ss.folders = p.folders()
+	ss.batch++ // the workspace scan and search work for one batch
 	if ss.features.Has(feature.CRDTypedPolicies) {
 		ss.startScan(ctx)
 	}
+	ss.searchLenses(ctx, ss.folders)
 	return ss.warn(problems)
 }
 
@@ -343,12 +486,17 @@ type kubeOptions struct {
 	// Experimental lists the experimental features to switch on. Empty means
 	// none; absent means no change.
 	Experimental *[]string `json:"experimental"`
+	// InlineInfo turns the code lenses on or off; absent means no change.
+	InlineInfo *bool `json:"inlineInfo"`
 }
 
-// configure applies the Kubernetes version and the experimental features in o.
-// It reports whether either in use changed, and why each value that is not
-// supported was ignored.
+// configure applies the Kubernetes version, the experimental features and
+// inlineInfo in o. It reports whether the version or the features in use
+// changed, and why each value that is not supported was ignored.
 func (ss *session) configure(o *kubeOptions) (changed bool, problems []message, err error) {
+	if o.InlineInfo != nil {
+		ss.inlineOff = !*o.InlineInfo
+	}
 	v, on := ss.kube, ss.features
 	if o.KubernetesVersion != nil {
 		v = kubeversion.Default()
@@ -407,10 +555,12 @@ func (ss *session) warn(problems []message) error {
 	return nil
 }
 
-// didChangeConfiguration applies a new kubernetesVersion and experimental list
-// and checks the open documents again when either changed. Turning on
-// crd-typed-policies starts a scan of the workspace for CRDs in the
-// background; the open documents are checked again when it ends.
+// didChangeConfiguration applies a new kubernetesVersion, experimental list
+// and inlineInfo, checks the open documents again when the version or the
+// features changed, and asks the client to request the code lenses again when
+// they may have changed. Turning on crd-typed-policies starts a scan of the
+// workspace for CRDs in the background; the open documents are checked again
+// when it ends.
 func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		Settings *kubeOptions `json:"settings"`
@@ -418,21 +568,29 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	if !decode(params, &p) || p.Settings == nil {
 		return nil
 	}
-	wasOn := ss.features.Has(feature.CRDTypedPolicies)
+	wasOn, wasOff := ss.features.Has(feature.CRDTypedPolicies), ss.inlineOff
 	changed, problems, err := ss.configure(p.Settings)
 	if err != nil {
 		return err
 	}
 	if !wasOn && ss.features.Has(feature.CRDTypedPolicies) {
+		ss.batch++
 		ss.startScan(ctx)
 	}
-	if err := ss.warn(problems); err != nil || !changed {
+	if err := ss.warn(problems); err != nil {
 		return err
 	}
-	return ss.publishAll(ctx, "")
+	if changed {
+		return ss.publishAll(ctx, "") // which refreshes the lenses
+	}
+	if ss.inlineOff != wasOff {
+		return ss.refreshCodeLenses()
+	}
+	return nil
 }
 
-func (ss *session) initializeResult() any {
+// initializeInfo is initializeResult without completion.
+func (ss *session) initializeInfo() map[string]any {
 	type info struct {
 		Name    string `json:"name"`
 		Version string `json:"version,omitempty"`
@@ -445,12 +603,11 @@ func (ss *session) initializeResult() any {
 	return map[string]any{
 		"kubernetesVersion": ss.kube.String(),
 		"capabilities": map[string]any{
-			"textDocumentSync":   map[string]any{"openClose": true, "change": 1},
-			"hoverProvider":      true,
-			"codeActionProvider": map[string]any{"codeActionKinds": []string{quickFix}},
-			"completionProvider": map[string]any{
-				"triggerCharacters": []string{"."},
-			},
+			"textDocumentSync":       map[string]any{"openClose": true, "change": 1},
+			"hoverProvider":          true,
+			"codeActionProvider":     map[string]any{"codeActionKinds": []string{quickFix}},
+			"codeLensProvider":       map[string]any{},
+			"executeCommandProvider": map[string]any{"commands": commandNames()},
 			"experimental": map[string]any{"celLens": map[string]any{
 				"kubernetesVersion":           kubeversion.Default().String(),
 				"supportedKubernetesVersions": supported,
@@ -461,6 +618,18 @@ func (ss *session) initializeResult() any {
 		},
 		"serverInfo": info{"cel-lens-core", ss.version},
 	}
+}
+
+// initializeResult is the answer to initialize: the server's capabilities,
+// completion among them unless the client registers it (registerCompletion),
+// the Kubernetes version and the server's name.
+func (ss *session) initializeResult() any {
+	res := ss.initializeInfo()
+	if !ss.completionRegistration {
+		caps, _ := res["capabilities"].(map[string]any)
+		caps["completionProvider"] = map[string]any{"triggerCharacters": lensTriggerCharacters}
+	}
+	return res
 }
 
 type textDocumentItem struct {
@@ -494,6 +663,11 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 		return nil // a notification has nobody to tell
 	}
 	d := p.TextDocument
+	if isLens(d.URI) {
+		ss.putLens(ctx, d.URI, []byte(d.Text), true)
+		ss.lenses[crdKey(d.URI)].version = d.Version
+		return ss.publishTyped(ctx, true)
+	}
 	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text), crds: &ss.crds}
 	return ss.publishWithCRDs(ctx, d.URI, ss.crds.Set(ctx, crdKey(d.URI), []byte(d.Text)))
 }
@@ -513,7 +687,16 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 	}
 	uri := p.TextDocument.URI
 	text := []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
-	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds}
+	if isLens(uri) {
+		changed := ss.putLens(ctx, uri, text, true)
+		ss.lenses[crdKey(uri)].version = p.TextDocument.Version
+		if !changed {
+			return nil
+		}
+		return ss.publishTyped(ctx, false)
+	}
+	shown := ss.docs[uri] != nil && ss.docs[uri].shown
+	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds, shown: shown}
 	return ss.publishWithCRDs(ctx, uri, ss.crds.Set(ctx, crdKey(uri), text))
 }
 
@@ -527,29 +710,58 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 		return nil
 	}
 	uri := p.TextDocument.URI
+	if isLens(uri) {
+		// The editor's text is gone: the file on disk, if any, is what the
+		// workspace has, and its problems still show.
+		if l := ss.lenses[crdKey(uri)]; l != nil {
+			l.open = false
+		}
+		if !ss.readLens(ctx, uri) {
+			return ss.refreshOwed()
+		}
+		return ss.publishTyped(ctx, true)
+	}
 	delete(ss.docs, uri)
 	// The editor's text is gone: the file on disk is what the workspace has.
 	changed := ss.readFromDisk(ctx, uri)
-	if err := ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []any{}}); err != nil || !changed {
+	if err := ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []any{}}); err != nil {
 		return err
+	}
+	if !changed {
+		return ss.publishLenses(ctx, crdKey(uri))
 	}
 	return ss.publishAll(ctx, "")
 }
 
 // publishWithCRDs sends the diagnostics of the document at uri and, when the
 // custom resources changed, those of the other open documents, whose params
-// may be typed from them.
+// may be typed from them. It also sends those of the .cellens files that name
+// the document, which may now have what they name, or not.
 func (ss *session) publishWithCRDs(ctx context.Context, uri string, crdsChanged bool) error {
-	if err := ss.publish(ctx, uri); err != nil || !crdsChanged {
+	if err := ss.publish(ctx, uri); err != nil {
 		return err
+	}
+	if !crdsChanged {
+		return ss.publishLenses(ctx, crdKey(uri))
 	}
 	return ss.publishAll(ctx, uri)
 }
 
-// publish checks the document at uri and sends its diagnostics.
+// publish checks the document at uri, with the types the .cellens files
+// assume in it, and sends its diagnostics.
 func (ss *session) publish(ctx context.Context, uri string) error {
+	return ss.publishAssumed(ctx, uri, ss.assumedFor(ctx, uri))
+}
+
+// publishAssumed is publish with assumed, the types the .cellens files
+// assume in the document at uri.
+func (ss *session) publishAssumed(ctx context.Context, uri string, assumed []check.AssumedType) error {
 	doc := ss.docs[uri]
 	doc.checked = false // the Kubernetes version may have changed
+	doc.codeLenses = nil
+	if !reflect.DeepEqual(assumed, doc.assumed) {
+		doc.assumed, doc.parsed = assumed, nil
+	}
 	diags, err := ss.diagnostics(ctx, uri, doc)
 	if err != nil {
 		return err
@@ -596,6 +808,9 @@ func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, erro
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, badParams("textDocument/hover", err)
 	}
+	if isLens(p.TextDocument.URI) {
+		return ss.lensHover(ctx, p.TextDocument.URI, p.Position)
+	}
 	doc, ok := ss.docs[p.TextDocument.URI]
 	if !ok {
 		return nil, nil
@@ -611,10 +826,42 @@ func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, erro
 	}, nil
 }
 
+// triggerCharacters are the characters after which the client asks for
+// completion in a YAML file: a dot in CEL, and the characters of a .cellens
+// but the space, which a client that cannot register completion per kind of
+// file (registerCompletion) has for every file. In a .cellens they are a dot
+// in a path, the / of a file or folder, the # of a Go type, the ( of a list
+// or map type and the colon after a key; lensTriggerCharacters add the space
+// after that colon. The server answers null at once where one gives nothing
+// (see completion).
+var (
+	triggerCharacters     = []string{".", "/", "#", "(", ":"}
+	lensTriggerCharacters = []string{".", "/", "#", "(", ":", " "}
+)
+
+// triggerCharacter is the protocol's CompletionTriggerKind for a character.
+const triggerCharacter = 2
+
 func (ss *session) completion(ctx context.Context, params json.RawMessage) (any, error) {
-	var p positionParams
+	var p struct {
+		positionParams
+		Context *struct {
+			TriggerKind      int    `json:"triggerKind"`
+			TriggerCharacter string `json:"triggerCharacter"`
+		} `json:"context"`
+	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, badParams("textDocument/completion", err)
+	}
+	trigger := ""
+	if c := p.Context; c != nil && c.TriggerKind == triggerCharacter {
+		trigger = c.TriggerCharacter
+	}
+	if isLens(p.TextDocument.URI) {
+		return ss.lensCompletion(ctx, p.TextDocument.URI, p.Position, trigger)
+	}
+	if trigger != "" && trigger != "." {
+		return nil, nil // the other characters are for .cellens files
 	}
 	doc, ok := ss.docs[p.TextDocument.URI]
 	if !ok {

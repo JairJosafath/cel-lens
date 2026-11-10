@@ -360,7 +360,7 @@ func TestScanSkipsFilesChangedDuringScan(t *testing.T) {
 			close(release)
 			found := <-ss.scan.done
 			ss.scan = nil
-			if err := ss.finishScan(context.Background(), found); err != nil {
+			if err := ss.finishScan(context.Background(), found, nil); err != nil {
 				t.Fatal(err)
 			}
 			if _, ok := ss.crds.Schema("g/v1", "K"); ok {
@@ -391,7 +391,7 @@ func TestRescanRefreshesEditedCRD(t *testing.T) {
 		ss.startScan(ctx)
 		found := <-ss.scan.done
 		ss.scan = nil
-		if err := ss.finishScan(ctx, found); err != nil {
+		if err := ss.finishScan(ctx, found, nil); err != nil {
 			t.Fatal(err)
 		}
 		disk = edited
@@ -411,7 +411,7 @@ func TestFinishScanAfterFeatureOff(t *testing.T) {
 	ss := newSession(t)
 	var found check.CRDs
 	found.Set(context.Background(), "/ws/crd.yaml", []byte(scanCRD))
-	if err := ss.finishScan(context.Background(), &found); err != nil {
+	if err := ss.finishScan(context.Background(), &found, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
@@ -469,7 +469,7 @@ func TestRescanForgetsDeletedCRDFile(t *testing.T) {
 		ss.startScan(ctx)
 		found := <-ss.scan.done
 		ss.scan = nil
-		if err := ss.finishScan(ctx, found); err != nil {
+		if err := ss.finishScan(ctx, found, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -520,7 +520,7 @@ func TestRescanFollowsEditUnderSkippedFolder(t *testing.T) {
 			ss.startScan(ctx)
 			found := <-ss.scan.done
 			ss.scan = nil
-			if err := ss.finishScan(ctx, found); err != nil {
+			if err := ss.finishScan(ctx, found, nil); err != nil {
 				t.Fatal(err)
 			}
 			if _, ok := ss.crds.Schema("g/v1", "Other"); !ok {
@@ -557,7 +557,7 @@ func TestRescanKeepsOpenDocumentUnderSkippedFolder(t *testing.T) {
 	ss.startScan(ctx)
 	found := <-ss.scan.done
 	ss.scan = nil
-	if err := ss.finishScan(ctx, found); err != nil {
+	if err := ss.finishScan(ctx, found, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := ss.crds.Schema("g/v1", "K"); !ok {
@@ -594,7 +594,7 @@ func TestRescanKeepsCRDUnderSkippedFolder(t *testing.T) {
 				ss.startScan(ctx)
 				found := <-ss.scan.done
 				ss.scan = nil
-				if err := ss.finishScan(ctx, found); err != nil {
+				if err := ss.finishScan(ctx, found, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -634,7 +634,7 @@ func TestRescanKeepsFilesPastCap(t *testing.T) {
 	ss.startScan(ctx)
 	found := <-ss.scan.done
 	ss.scan = nil
-	if err := ss.finishScan(ctx, found); err != nil {
+	if err := ss.finishScan(ctx, found, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !ss.crds.Forget(crdKey(pathURI(pastCap))) {
@@ -735,7 +735,7 @@ func TestRescanWithUnreadableFolder(t *testing.T) {
 		found := <-ss.scan.done
 		notes := ss.scan.notes
 		ss.scan = nil
-		if err := ss.finishScan(ctx, found); err != nil {
+		if err := ss.finishScan(ctx, found, nil); err != nil {
 			t.Fatal(err)
 		}
 		if len(notes) != 1 || !strings.Contains(notes[0].text, "incomplete") || !strings.Contains(notes[0].text, stale) {
@@ -768,7 +768,7 @@ func finishCreatedScan(t *testing.T, ss *session) {
 	found := <-ss.scan.done
 	ss.scan = nil
 	ss.crds.Untrack()
-	if err := ss.finishScan(context.Background(), found); err != nil {
+	if err := ss.finishScan(context.Background(), found, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -975,7 +975,7 @@ func TestRescanWithUnreadableSubfolder(t *testing.T) {
 		found := <-ss.scan.done
 		notes := ss.scan.notes
 		ss.scan = nil
-		if err := ss.finishScan(ctx, found); err != nil {
+		if err := ss.finishScan(ctx, found, nil); err != nil {
 			t.Fatal(err)
 		}
 		if len(notes) != 1 || !strings.Contains(notes[0].text, "scan of "+locked+" incomplete") {

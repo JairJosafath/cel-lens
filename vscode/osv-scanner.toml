@@ -1,0 +1,20 @@
+# The advisories the OSV scanners skip for package-lock.json, each with why it
+# does not apply and when it goes. A reason starts with the package and the
+# version the lockfile still holds; src/lockfile.test.ts checks that it does.
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2027-03-01
+reason = """\
+  minimatch 10.2.6 stays for vscode-languageclient alone: 10.1.2, and 11.0.0 \
+  after it, ask for minimatch ^10.2.6 and call Minimatch.makeRe(), which \
+  minimatch 11 removed. The advisory is a denial of service through a glob \
+  pattern an attacker chooses, in firstPhasePreProcess(), which runs only \
+  with optimizationLevel 2 or more. The client never sets that option, and \
+  the only patterns it matches are the extension's own and the ones the \
+  language server registers: the server is cel-lens-core, the engine the \
+  extension itself carries and starts. Every other package gets minimatch \
+  11.0.5, through the overrides of package.json. Remove this entry, and the \
+  copy with it, once a vscode-languageclient release asks for minimatch \
+  11.0.1 or newer.\
+  """

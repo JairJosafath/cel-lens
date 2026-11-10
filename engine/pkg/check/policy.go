@@ -60,7 +60,8 @@ type policyCompile struct {
 	r     *reporter
 	exprs map[string]extract.Expression
 	decls plugincel.OptionalVariableDeclarations
-	// clean holds the fields of the expressions that compiled without error.
+	// clean holds the fields of the expressions that compiled without error,
+	// variables included.
 	clean map[string]bool
 }
 
@@ -90,6 +91,8 @@ func (pc policyCompile) common(ctx context.Context, composite *plugincel.Composi
 			a := accessor{name: v.Name, expression: e.Text, returns: anyTypes}
 			if res := composite.CompileAndStoreVariable(a, pc.decls, environment.NewExpressions); res.Error != nil {
 				pc.r.report(e, res.Error.Detail)
+			} else {
+				pc.clean[field] = true
 			}
 		}
 	}
@@ -104,7 +107,9 @@ func (pc policyCompile) common(ctx context.Context, composite *plugincel.Composi
 // namespaceObject, authorizer and, when the policy has a paramKind, params.
 // Variables are compiled first and in order, so that later expressions can use
 // variables.<name>; matchConditions cannot. When the policy matches one built-in
-// kind, typeCheck then types object and oldObject from it.
+// kind, typeCheck then types object and oldObject from it, and
+// assumedTypeCheck checks the validations again with the types assumed for
+// the policy.
 func (r *reporter) policy(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression) error {
 	var p admissionregistrationv1.ValidatingAdmissionPolicy
 	if _, err := r.read(ctx, node, &p); err != nil {
@@ -128,7 +133,11 @@ func (r *reporter) policy(ctx context.Context, node *yaml.Node, exprs map[string
 	for i := range p.Spec.AuditAnnotations {
 		pc.compile(composite, fmt.Sprintf("spec.auditAnnotations[%d].valueExpression", i), accessor{returns: []*celgo.Type{celgo.StringType, celgo.NullType}})
 	}
-	return r.typeCheck(ctx, &p, exprs, pc.clean)
+	base := len(r.diags)
+	if err := r.typeCheck(ctx, &p, exprs, pc.clean); err != nil {
+		return err
+	}
+	return r.assumedTypeCheck(ctx, node, &p, exprs, pc.clean, base)
 }
 
 // mutatingPolicy compiles the expressions of a MutatingAdmissionPolicy with the
@@ -136,7 +145,8 @@ func (r *reporter) policy(ctx context.Context, node *yaml.Node, exprs map[string
 // ValidatingAdmissionPolicy, with object and oldObject as dyn, and the types of
 // patches: Object for an applyConfiguration, JSONPatch for a jsonPatch. The API
 // server does not type check the expressions of a mutating policy against the
-// kinds it matches, and nor does this.
+// kinds it matches, and nor does this, but for its variables, which the
+// engine types with those kinds (see checkVariables).
 func (r *reporter) mutatingPolicy(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression) error {
 	var p admissionregistrationv1.MutatingAdmissionPolicy
 	if _, err := r.read(ctx, node, &p); err != nil {
@@ -148,6 +158,14 @@ func (r *reporter) mutatingPolicy(ctx context.Context, node *yaml.Node, exprs ma
 		return fmt.Errorf("build CEL environment: %w", err)
 	}
 	if err := pc.common(ctx, composite, p.Spec.Variables, p.Spec.MatchConditions); err != nil {
+		return err
+	}
+	// Its variables are typed with the kinds matched (see VariableTypes), so
+	// one that does not compile with them is reported, as for a
+	// ValidatingAdmissionPolicy.
+	var typed admissionregistrationv1.ValidatingAdmissionPolicy
+	typed.Spec.ParamKind, typed.Spec.MatchConstraints, typed.Spec.Variables = p.Spec.ParamKind, p.Spec.MatchConstraints, p.Spec.Variables
+	if err := r.checkVariables(ctx, &typed, exprs, pc.clean); err != nil {
 		return err
 	}
 	pc.decls.HasPatchTypes = true

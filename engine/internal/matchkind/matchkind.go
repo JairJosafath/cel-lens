@@ -8,6 +8,7 @@
 package matchkind
 
 import (
+	"cmp"
 	"reflect"
 	"slices"
 	"strings"
@@ -98,6 +99,14 @@ func lookupCustom(custom func(schema.GroupVersionResource) (Kind, bool), gvr sch
 
 func wild(s string) bool { return strings.Contains(s, "*") }
 
+// ResourceKind returns the kind of the built-in resource gvr, such as
+// Endpoints for v1 endpoints, and reports false for a resource that is not
+// built in, such as a custom resource.
+func ResourceKind(gvr schema.GroupVersionResource) (string, bool) {
+	gvk, _, ok := kindOf(gvr)
+	return gvk.Kind, ok
+}
+
 // kindOf finds the kind served as the resource gvr.
 func kindOf(gvr schema.GroupVersionResource) (schema.GroupVersionKind, reflect.Type, bool) {
 	for kind, t := range scheme.Scheme.KnownTypes(gvr.GroupVersion()) {
@@ -132,4 +141,55 @@ func Lookup(apiVersion, kind string) (Kind, bool) {
 		return Kind{}, false
 	}
 	return Kind{GVK: gvk, Schema: schemaOf(t)}, true
+}
+
+// Listed is a built-in kind as Kinds lists it.
+type Listed struct {
+	// GVK is the group, version and kind, such as apps/v1 Deployment.
+	GVK schema.GroupVersionKind
+	// Description is the kind's description from its generated swagger doc,
+	// "" when it has none.
+	Description string
+}
+
+// Kinds returns the built-in resource kinds that an API server of Kubernetes
+// 1.minor serves, sorted by group, version and kind: the kinds Lookup knows
+// whose API version was introduced by 1.minor and not yet removed, as the
+// prerelease lifecycle k8s.io/api generates for a type says. A type without
+// one is in every version.
+func Kinds(minor int) []Listed {
+	var out []Listed
+	for gvk, t := range scheme.Scheme.AllKnownTypes() {
+		if !isResource(gvk, t) || !served(t, minor) {
+			continue
+		}
+		out = append(out, Listed{GVK: gvk, Description: docs(t)[""]})
+	}
+	slices.SortFunc(out, func(a, b Listed) int {
+		return cmp.Or(cmp.Compare(a.GVK.Group, b.GVK.Group), cmp.Compare(a.GVK.Version, b.GVK.Version), cmp.Compare(a.GVK.Kind, b.GVK.Kind))
+	})
+	return out
+}
+
+// The methods k8s.io/api generates for a type's prerelease lifecycle.
+type (
+	introduced interface{ APILifecycleIntroduced() (major, minor int) }
+	removed    interface{ APILifecycleRemoved() (major, minor int) }
+)
+
+// served reports whether Kubernetes 1.minor serves the type t, as its
+// prerelease lifecycle says.
+func served(t reflect.Type, minor int) bool {
+	v := reflect.New(t).Interface()
+	if i, ok := v.(introduced); ok {
+		if major, m := i.APILifecycleIntroduced(); major > 1 || major == 1 && m > minor {
+			return false
+		}
+	}
+	if r, ok := v.(removed); ok {
+		if major, m := r.APILifecycleRemoved(); major < 1 || major == 1 && m <= minor {
+			return false
+		}
+	}
+	return true
 }

@@ -107,13 +107,68 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
 - **Errors:** a red squiggle under the part of the rule that is wrong.
 - **Hover:** a field in a rule shows its type and description.
 - **Completion:** typing `self.` offers the fields of the schema.
+- **Inline info:** a line above each rule says what `self` is, whether the rule
+  compiles, and the values it reads as `dyn`. Its first part opens the rule's first
+  problem in the problems peek (or the hover there, when VS Code's problem order would
+  open another problem first), or the rule's hover when it has no problem; **+N more**
+  lists the values the line leaves out, and picking one runs its action. The engine
+  names these parts' commands, `cel-lens.showRule`, `cel-lens.listValues`,
+  `cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, so they are not
+  in the Command Palette.
+- **Types for `dyn` values:** **Give it a type** and **Edit** open a picker:
+  **Write a schema in .cellens…**, **Use a Go type…** (a second picker of the
+  Go types of the `.cellens`'s workspace folder, with a Back button) and **Write a
+  short type in .cellens…**, then the kinds there are; a CRD's value gets `int` and
+  `string` only. An engine that lists no Go types, or refuses `snippet`, is too old:
+  the flow says so, with a button to `cel-lens.serverPath`.
+  **Remove** removes the entry at once. The extension asks, and the engine writes
+  `.cellens`: it runs the engine's commands `cel-lens.typeChoices` (cancelled once the
+  flow ends, as the Go walk may still run), `cel-lens.setType` and
+  `cel-lens.removeType` with `workspace/executeCommand`, and the engine sends the edit
+  back through `workspace/applyEdit`, so it lands in the editor and Undo takes it
+  back. A Go type, a kind, `int` or `string` is set at once; the two lines that write
+  in `.cellens` send `setType` a `snippet` instead, and the engine answers where the
+  cursor goes once its edit is applied, at a new entry or at the one the value has,
+  so the extension opens `.cellens` there beside the rule
+  (`window.showTextDocument` with `ViewColumn.Beside`, or the group that already
+  shows it). The language client would register each command the engine lists as a
+  VS Code command, and the engine's `cel-lens.removeType` has the name of the line's
+  part; a second registration throws, so the client registers none of them
+  (`CelLensClient.registerFeature`) and the extension sends the requests itself. The
+  flow is in `src/type_flow.ts` and `src/value_types.ts`, which do not import
+  `vscode`, and `src/type_commands.ts` shows it.
+- **Types from examples:** `cel-lens.typeChoices` gets the value's argument, so it
+  also lists the documents of the workspace of its kind. A document picked, or the
+  text of the editor `Paste an example…` opens, goes to `cel-lens.inferType` with
+  the value (`value`, the line's argument) and its `path`: an engine that knows the
+  value's kinds (`valueKinds` of `typeChoices`) takes a pasted example of another
+  kind as the value itself, with a note. With them not known, or an engine older
+  than `valueKinds`, a paste gets the `path` only when `apiVersion` and `kind` start
+  its lines (or JSON's root), and is sent again without it when no example has a
+  value there; nothing in the extension parses YAML. Its schema is set with
+  `cel-lens.setType`, and a second `setType` with a `snippet`, which the engine
+  answers `unchanged`, gives the place of the entry to open. The engine's notes are
+  placed at their keys of `.cellens` by `src/example_schema.ts` (no `vscode`) and
+  shown as information diagnostics by `ExampleNotes` in `src/example_editor.ts`,
+  where `ExampleEditors` keeps the pasted examples' editors and their code lens.
+  Their files live in memory (`ExampleFiles`, a file system provider of the scheme
+  `cel-lens-example`, which the `when` clauses of `cel-lens.useExample` name and
+  `onFileSystem:cel-lens-example` activates on). A change of the active example is
+  saved there in the same turn with **Save without Formatting**, never with
+  `TextDocument.save()`, whose save participants would trim or format what is
+  typed; one changed while another editor is active is saved when it is active
+  again, and an editor closed with a change not yet saved is reverted, so none asks
+  to save. `cel-lens.showRule` with a location in a `.cellens` (a value whose type
+  an entry gives) opens it beside the rule (`src/cellens_editor.ts`, shared with
+  Give it a type).
 
 ### Kubernetes version
 
 On YAML files a status bar item such as `CEL · K8s 1.37` shows the Kubernetes
 version the results match. Click it (or run **cel-lens: Show Actions**) to open a
 menu of the main actions: **Color style** (shows the current style), **Kubernetes
-version** (shows the current version), **Restart Engine** and **Show Logs**.
+version** (shows the current version), **Inline info: on** or **off** (turns the
+line above each CEL rule off or on), **Restart Engine** and **Show Logs**.
 Most people leave the version alone. If your cluster runs
 another version, choose **Kubernetes version** in the menu (or run **cel-lens: Pick Kubernetes Version**); the choice is saved in the workspace setting
 `cel-lens.kubernetesVersion` and takes effect at once (the extension restarts the engine for you).
@@ -187,6 +242,13 @@ The colors follow the theme kind, so they read in light, dark and high contrast 
   style of CEL: CEL, Classic or Off.
 - **cel-lens: Restart Engine** (`cel-lens.restartServer`) restarts the engine.
   Use it after changing `cel-lens.serverPath`.
+- **cel-lens: Toggle Inline Info** (`cel-lens.toggleInlineInfo`) turns the line
+  above each CEL rule off or on, by flipping `cel-lens.inlineInfo` at the scope that
+  sets it for the open file, or in your user settings.
+- **cel-lens: Give a Value a Type…** (`cel-lens.giveValueType`) lists the values the
+  line above each rule of the open YAML file names, from its code lenses
+  (`vscode.executeCodeLensProvider`), and gives the one picked a type, or edits it.
+  With the line off for the file, it says so.
 
 ## Develop
 

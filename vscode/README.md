@@ -4,6 +4,14 @@ Shows CEL errors, hover, completion, quick fixes and colors inside Kubernetes YA
 
 ## What it looks like
 
+<!-- Picture to take: images/inline-info.png, the line above the rules of test/pictures/widget_crd.yaml in a dark theme, such as `self: Widget.spec · compiles` above `- rule: self.replicas >= self.minReplicas`. -->
+
+The line above each CEL rule: what `self` is, whether the rule compiles, and the values it reads as `dyn`. Click the first part to open the rule's first problem in the problems peek, or its hover when it has none; a part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule. Click **+N more** to pick from the values the line leaves out. **cel-lens: Toggle Inline Info** turns the line off and on.
+
+<!-- Picture to take: images/give-type.png, the picker titled `Give params a type`, opened from `params: dyn · Give it a type` above a rule of a ValidatingAdmissionPolicy whose spec.paramKind names a custom kind, in a dark theme: `Write a schema in .cellens…`, `Use a Go type…` and `Write a short type in .cellens…` first, then the built-in kinds with their group and version. -->
+
+Click **Give it a type** on the line above a rule to give a `dyn` value a type: write a schema or a short type in `.cellens`, opened beside the rule, or pick a Go type of the workspace, a built-in kind or a kind of the workspace's CRDs.
+
 ![Colors: a CEL rule colored part by part as it is typed in a CRD](https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/colors.gif)
 
 A CEL rule colored part by part as it is typed in a CRD.
@@ -42,15 +50,83 @@ The only way to install today is the `.vsix` from the GitHub releases of JairJos
 
 The extension carries the cel-lens engine for your platform, so there is nothing else to install or set up.
 
+## Give a value a type
+
+Where Kubernetes gives a CEL value no type, it is `dyn`, and cel-lens can't check, complete or explain it: an `x-kubernetes-int-or-string` field to a CRD's rule, or the `params` of a policy whose `paramKind` is a custom kind. A `.cellens` file says what such a value is; commit it, so everyone gets the same types. cel-lens writes it with you:
+
+1. On the line above the rule, click **Give it a type** after the value (such as `params: dyn · Give it a type`), or **+N more** and then the value. Or run **cel-lens: Give a Value a Type…** and pick one of the values of the open file.
+2. The picker is titled after the value, such as **Give params a type**. It opens at once and lists the Go types, examples and kinds as the engine finds them. Pick one of the forms below.
+3. The entry goes in the nearest `.cellens` at or above the file, or a new one at the root of its workspace folder, and the rules are checked again with the type. A type written at once (a Go type, a kind, `int` or `string`, or one from an example), or removed, is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; when the engine writes another `.cellens`, nothing is saved. What you write in `.cellens` is yours to save.
+
+A schema or a short type is written in `.cellens` itself: cel-lens adds the entry and opens `.cellens` beside the rule (in the editor group that already shows it, if one does), with the cursor where the type goes. There you have the engine's completion, hover and problems as you type, and the line above the rule follows each change.
+
+### A schema
+
+<!-- Picture to take: images/give-type-schema.png, `.cellens` open beside a ValidatingAdmissionPolicy after Write a schema in .cellens…, in a dark theme: the new entry's `schema:` with `type: object` and `properties: {maxReplicas: {type: integer}}` half typed and the completion of its keywords open, and on the left `params: {maxReplicas} · Edit` above the rule. -->
+
+Pick **Write a schema in .cellens…** to describe the value as an OpenAPI schema, as a CRD's `openAPIV3Schema` does: properties, descriptions, formats and the `x-kubernetes-` extensions. The entry starts as `schema:` with `type: object` and `properties: {}`, the cursor between the braces.
+
+### A Go type
+
+<!-- Picture to take: images/give-type-go.png, the picker of Go types after Use a Go type…, in a dark theme: `quota` typed in the filter, and `QuotaSpec` with its folder `api/v1` and its doc comment `QuotaSpec is the quota of a team.` highlighted. -->
+
+Pick **Use a Go type…** when the value is a struct of the workspace's Go code, such as a kubebuilder API type. A second picker lists the exported structs with a `json` tag of the workspace folder of the `.cellens`, each with its folder and the first sentence of its doc comment, found by any of them as you type; it starts with what you typed in the first picker, and its **Back** button returns to the first. The entry is written at once, as `go: ./api/v1#QuotaSpec`, and follows the Go code from then on.
+
+### A short type
+
+<!-- Picture to take: images/give-type-short.png, `.cellens` open beside a ValidatingAdmissionPolicy after Write a short type in .cellens…, in a dark theme: the new entry's `type: "{name: string, replicas: int}"` being typed with the completion of the type names open, and on the left the line above the rule showing `params: {name, replicas} · Edit`. -->
+
+Pick **Write a short type in .cellens…** for a CEL type that needs nothing more, such as `int` or `{name: string, replicas: int}`. The entry starts as `type: "{}"`, the cursor between the braces.
+
+### An example
+
+<!-- Picture to take: images/give-type-example.png, the picker titled `Give params a type` in a dark theme, opened from `params: dyn · Give it a type` above a rule of a ValidatingAdmissionPolicy whose paramKind is ReplicaLimit: `Examples in the workspace` with `config/samples/limit.yaml`, `rules.example.com/v1 ReplicaLimit` and `Document at line 1`, then `Paste an example…`. -->
+
+Under **Examples in the workspace**, the picker lists the documents of the workspace of the value's kind, such as the samples in `config/samples/` for a policy's `params`, each by its file (with its workspace folder in a multi-root workspace), its kind and the line it starts at. Pick one, and cel-lens works out an OpenAPI schema from it (from the value's own part of it, such as its `spec.config`), writes it as the entry's `schema:` and opens `.cellens` beside the rule at the entry, for you to refine. What the example leaves open, such as the items of an empty list or a field that is a number in one document and a string in another, shows once as an information problem at its key in `.cellens`; it goes when you edit there.
+
+<!-- Picture to take: images/give-type-paste.png, the editor `Example of params.yaml` beside a ValidatingAdmissionPolicy after Paste an example…, in a dark theme: `Use this example as the type` above the comment `# An example of params`, a ReplicaLimit pasted below it, and the check icon in the editor title. -->
+
+Or pick **Paste an example…**: an editor opens beside the rule, named after the value, such as **Example of params.yaml**, with a comment that says what to paste. Paste an example of the value there, or a whole resource of its kind that holds it (cel-lens then takes the value's part of it; a resource of another kind, such as an object reference, is the value itself, which the engine tells from the value's kinds and says in a note; when it does not know them, a paste with `apiVersion` and `kind` at its root is read as a resource, and as the value itself when it has no value at the value's path), YAML or JSON, one document or several, and click **Use this example as the type** above it, or the check in its editor title: cel-lens does the same as for a document of the workspace, and closes the editor. cel-lens keeps the example in memory, so closing its editor never asks to save, and closing it yourself writes nothing. After a window reload, the examples of the window before are closed. When the engine cannot read the example, the reason shows once and the editor stays open, to fix it; an example over 1 MiB, the most the engine reads, is refused at once.
+
+### A kind
+
+<!-- Picture to take: images/give-type-kind.png, the picker titled `Give params a type` in a dark theme with `deploy` typed in the filter and `Deployment`, `apps/v1`, highlighted under Built-in kinds. -->
+
+Type to find a built-in kind, such as `deploy` for Deployment, or a kind of the workspace's CRDs (listed with the `crd-typed-policies` experimental feature on), and pick it: the entry is written at once, as `kind: apps/v1 Deployment`.
+
+### A value of a CRD
+
+A value of a CRD takes an int or a string: its picker offers `int` and `string` only, written at once. A schema, a short type, a Go type or a kind would not fit it.
+
+### Edit or remove a type
+
+**Edit** opens the same picker on what the value has. The schema and short type lines open `.cellens` at its entry, with the cursor on the type it has; a Go type, a kind, `int` or `string` replaces it at once. An engine too old for the schema and short type lines or the Go types says so, with a button to `cel-lens.serverPath`. **Remove** removes the entry at once. The engine changes `.cellens` in the editor, so **Undo** in the `.cellens` editor takes a change back.
+
+## Commands
+
+The Command Palette lists the commands under **cel-lens**: **cel-lens: Show Logs** on any file, the others on YAML files, and **cel-lens: Use This Example as the Type** only on the editor of a pasted example. None has a keybinding.
+
+| Command                                    | What it does                                                                                                               |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| **cel-lens: Give a Value a Type…**         | Lists the values the rules of the open file read as `dyn` or with a type from `.cellens`, and gives the one picked a type. |
+| **cel-lens: Use This Example as the Type** | On the editor **Paste an example…** opens: gives the value the schema worked out from the example in it.                   |
+| **cel-lens: Toggle Inline Info**           | Turns the line above each CEL rule off and on.                                                                             |
+| **cel-lens: Choose Color Style**           | Picks how CEL is colored: CEL, Classic or Off.                                                                             |
+| **cel-lens: Pick Kubernetes Version**      | Picks the Kubernetes version the results match.                                                                            |
+| **cel-lens: Show Actions**                 | Opens the status bar menu.                                                                                                 |
+| **cel-lens: Restart Engine**               | Restarts the engine, such as after changing `cel-lens.serverPath`.                                                         |
+| **cel-lens: Show Logs**                    | Opens the **cel-lens** output channel.                                                                                     |
+
 ## Settings
 
-| Setting                      | Default | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cel-lens.colorStyle`        | `cel`   | `cel`, `classic` or `off`: the color style of the parts of a CEL expression. Change it with **cel-lens: Choose Color Style** or the status bar menu. Resource scope: user, workspace or workspace folder.                                                                                                                                                                                                                                                                            |
-| `cel-lens.kubernetesVersion` | `""`    | Advanced: the Kubernetes version the results match, such as `1.36`. Empty means the engine's default. The status bar shows the version the engine uses; one it refuses is logged and the engine keeps its default. May restart the engine.                                                                                                                                                                                                                                           |
-| `cel-lens.experimental`      | `[]`    | Advanced: the experimental features to turn on, from `kyverno`, `crd-typed-policies` and `fitting-completion`. Empty means none; see [Experimental features](#experimental-features). A name the engine does not know is ignored and reported once in a notification with a button to the setting; a misspelt name gets a suggestion of the closest known one, and when every unknown name has one, a Replace button rewrites those names in the setting at the scope that set them. |
-| `cel-lens.trace.server`      | `off`   | `off`, `messages` or `verbose`: traces the protocol in the **cel-lens** output channel.                                                                                                                                                                                                                                                                                                                                                                                              |
-| `cel-lens.serverPath`        | `""`    | Advanced: a `cel-lens-core` binary to use instead of the bundled engine. Empty (the default) uses the bundled one. Machine scope: in a remote window (WSL, SSH, a dev container) set it on the Remote tab of Settings.                                                                                                                                                                                                                                                               |
+| Setting                      | Default | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cel-lens.colorStyle`        | `cel`   | `cel`, `classic` or `off`: the color style of the parts of a CEL expression. Change it with **cel-lens: Choose Color Style** or the status bar menu. Resource scope: user, workspace or workspace folder.                                                                                                                                                                                                                                                                             |
+| `cel-lens.inlineInfo`        | `true`  | Shows a line above each CEL rule: what `self` (or a policy's `object`) is, whether the rule compiles or how many problems it has, and the values it reads as `dyn`. Turn it off and on with **cel-lens: Toggle Inline Info** or the status bar menu, which shows **Inline info: on** or **off**; open editors follow at once. The toggle writes the scope that sets the value in force for the open file, or your user settings. Resource scope: user, workspace or workspace folder. |
+| `cel-lens.kubernetesVersion` | `""`    | Advanced: the Kubernetes version the results match, such as `1.36`. Empty means the engine's default. The status bar shows the version the engine uses; one it refuses is logged and the engine keeps its default. May restart the engine.                                                                                                                                                                                                                                            |
+| `cel-lens.experimental`      | `[]`    | Advanced: the experimental features to turn on, from `kyverno`, `crd-typed-policies` and `fitting-completion`. Empty means none; see [Experimental features](#experimental-features). A name the engine does not know is ignored and reported once in a notification with a button to the setting; a misspelt name gets a suggestion of the closest known one, and when every unknown name has one, a Replace button rewrites those names in the setting at the scope that set them.  |
+| `cel-lens.trace.server`      | `off`   | `off`, `messages` or `verbose`: traces the protocol in the **cel-lens** output channel.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `cel-lens.serverPath`        | `""`    | Advanced: a `cel-lens-core` binary to use instead of the bundled engine. Empty (the default) uses the bundled one. Machine scope: in a remote window (WSL, SSH, a dev container) set it on the Remote tab of Settings.                                                                                                                                                                                                                                                                |
 
 ## Supported Kubernetes versions
 

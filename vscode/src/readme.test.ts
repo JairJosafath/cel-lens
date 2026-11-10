@@ -5,6 +5,7 @@ import {
   readmeHeadings,
   readmeImages,
   readmeKubernetesVersions,
+  readmePicturePlaceholders,
   readmeSection,
   readmeSettingDefaults,
 } from './readme';
@@ -42,6 +43,19 @@ describe('the helpers', () => {
     expect(readmeSection(text, heading)?.trimStart()).toBe(expected);
   });
 
+  it.each([
+    ['one placeholder', '<!-- Picture to take: images/a.png, the line. -->\n', ['images/a.png']],
+    [
+      'two placeholders',
+      '<!-- Picture to take: images/a.png -->\n<!-- Picture to take: images/b.gif, b -->\n',
+      ['images/a.png', 'images/b.gif'],
+    ],
+    ['another comment', '<!-- a note -->\n', []],
+    ['an image', '![x](https://e/x.png)\n', []],
+  ])('readmePicturePlaceholders reads %s', (_name, text, expected) => {
+    expect(readmePicturePlaceholders(text)).toEqual(expected);
+  });
+
   it('lists headings, images and versions', () => {
     expect(readmeHeadings(text)).toEqual(['A', 'B']);
     expect(readmeImages(text)).toEqual([{ alt: 'x', url: 'https://e/x.png' }]);
@@ -70,6 +84,8 @@ describe('README.md as the store page', () => {
     expect(readmeHeadings(README)).toEqual([
       'What it looks like',
       'Install',
+      'Give a value a type',
+      'Commands',
       'Settings',
       'Supported Kubernetes versions',
       'Experimental features',
@@ -120,10 +136,161 @@ describe('README.md as the store page', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(PICTURES.map((name) => IMAGE_BASE + name));
     expect(images.every((image) => image.alt.length > 0)).toBe(true);
-    const lines = (readmeSection(README, 'What it looks like') ?? '')
+    const section = readmeSection(README, 'What it looks like') ?? '';
+    const lines = section
       .split('\n')
-      .filter((line) => line.trim() !== '' && !line.startsWith('!['));
-    expect(lines).toHaveLength(PICTURES.length);
+      .filter((line) => line.trim() !== '' && !line.startsWith('![') && !line.startsWith('<!--'));
+    expect(lines).toHaveLength(PICTURES.length + readmePicturePlaceholders(section).length);
+  });
+
+  it('names the picture of the line above each rule in a placeholder for a person to take, with its line', () => {
+    const section = readmeSection(README, 'What it looks like') ?? '';
+    expect(readmePicturePlaceholders(section)).toEqual([
+      'images/inline-info.png',
+      'images/give-type.png',
+    ]);
+    const [placeholder, , line] = section.trimStart().split('\n');
+    expect(placeholder).toMatch(/^<!-- Picture to take: images\/inline-info\.png, .+ -->$/);
+    expect(line).toContain('cel-lens: Toggle Inline Info');
+    expect(line).toContain(
+      'a part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule',
+    );
+  });
+
+  it('names the picture of the type picker in a placeholder for a person to take, with its line', () => {
+    const lines = (readmeSection(README, 'What it looks like') ?? '').trimStart().split('\n');
+    const [placeholder, , line] = lines.slice(4);
+    expect(placeholder).toMatch(
+      /^<!-- Picture to take: images\/give-type\.png, the picker titled `Give params a type`.+`Write a schema in \.cellens…`, `Use a Go type…` and `Write a short type in \.cellens…` first.+ -->$/,
+    );
+    expect(line).toContain('**Give it a type**');
+  });
+
+  it.each([
+    '**Give it a type**',
+    'opens `.cellens` beside the rule',
+    'in the editor group that already shows it',
+    "the engine's completion, hover and problems as you type",
+    '`{name: string, replicas: int}`',
+    '`go: ./api/v1#QuotaSpec`',
+    '`kind: apps/v1 Deployment`',
+    'offers `int` and `string` only',
+    'A schema, a short type, a Go type or a kind would not fit it',
+    'of the workspace folder of the `.cellens`',
+    'its **Back** button returns to the first',
+    'with a button to `cel-lens.serverPath`',
+    'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; when the engine writes another `.cellens`, nothing is saved',
+    '**Edit** opens the same picker on what the value has',
+    'open `.cellens` at its entry',
+    '**Remove**',
+    '**Undo** in the `.cellens` editor',
+    '**cel-lens: Give a Value a Type…**',
+  ])('says how to give a value a type: %s', (text) => {
+    expect(readmeSection(README, 'Give a value a type')).toContain(text);
+  });
+
+  it('says how to give a type in each form, in the order of the picker, each under its heading with a picture for a person to take', () => {
+    const section = readmeSection(README, 'Give a value a type') ?? '';
+    const forms = section.split(/^(?=### )/m).slice(1);
+
+    expect(forms.map((form) => form.split('\n')[0])).toEqual([
+      '### A schema',
+      '### A Go type',
+      '### A short type',
+      '### An example',
+      '### A kind',
+      '### A value of a CRD',
+      '### Edit or remove a type',
+    ]);
+    expect(readmePicturePlaceholders(section)).toEqual([
+      'images/give-type-schema.png',
+      'images/give-type-go.png',
+      'images/give-type-short.png',
+      'images/give-type-example.png',
+      'images/give-type-paste.png',
+      'images/give-type-kind.png',
+    ]);
+    expect(
+      forms.slice(0, 5).map((form) => readmePicturePlaceholders(form.split('\n')[2] ?? '')),
+    ).toEqual([
+      ['images/give-type-schema.png'],
+      ['images/give-type-go.png'],
+      ['images/give-type-short.png'],
+      ['images/give-type-example.png'],
+      ['images/give-type-kind.png'],
+    ]);
+    expect(forms.slice(0, 4).map((form) => /\*\*([^*]+)\*\*/.exec(form)?.[1])).toEqual([
+      'Write a schema in .cellens…',
+      'Use a Go type…',
+      'Write a short type in .cellens…',
+      'Examples in the workspace',
+    ]);
+  });
+
+  it.each([
+    'Pick one, and cel-lens works out an OpenAPI schema from it',
+    "writes it as the entry's `schema:` and opens `.cellens` beside the rule at the entry",
+    'shows once as an information problem at its key in `.cellens`',
+    '**Paste an example…**',
+    '**Use this example as the type** above it, or the check in its editor title',
+    'and closing it yourself writes nothing',
+    'the reason shows once and the editor stays open',
+    'an example over 1 MiB, the most the engine reads, is refused at once',
+    'or a whole resource of its kind that holds it',
+    'a resource of another kind, such as an object reference, is the value itself',
+    "which the engine tells from the value's kinds and says in a note",
+    "a paste with `apiVersion` and `kind` at its root is read as a resource, and as the value itself when it has no value at the value's path",
+    'named after the value, such as **Example of params.yaml**',
+    'closing its editor never asks to save',
+    'After a window reload, the examples of the window before are closed',
+    'with its workspace folder in a multi-root workspace',
+  ])('says how to give a type from an example: %s', (text) => {
+    const example = (readmeSection(README, 'Give a value a type') ?? '').split('### An example')[1];
+    expect(example?.split('### A kind')[0]).toContain(text);
+  });
+
+  it('says where the palette shows the commands, as their when clauses in package.json do', () => {
+    const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as {
+      contributes: {
+        commands: { command: string; title: string; category: string }[];
+        menus: { commandPalette: { command: string; when: string }[] };
+      };
+    };
+    const anyFile = manifest.contributes.menus.commandPalette
+      .filter((entry) => entry.when === 'true')
+      .map((entry) => manifest.contributes.commands.find((c) => c.command === entry.command));
+    const intro = (readmeSection(README, 'Commands') ?? '').trim().split('\n')[0] ?? '';
+
+    expect(anyFile.length).toBeGreaterThan(0);
+    for (const command of anyFile) {
+      expect(intro).toContain(
+        `**${command?.category ?? ''}: ${command?.title ?? ''}** on any file`,
+      );
+    }
+    expect(intro).toContain('the others on YAML files');
+    expect(intro).not.toMatch(/Every command .* on YAML files/);
+  });
+
+  it('lists every command of the Command Palette in the Commands table, by its palette name', () => {
+    const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as {
+      contributes: {
+        commands: { command: string; title: string; category: string }[];
+        menus: { commandPalette: { command: string; when: string }[] };
+      };
+    };
+    const hidden = manifest.contributes.menus.commandPalette
+      .filter((entry) => entry.when === 'false')
+      .map((entry) => entry.command);
+    const rows = (readmeSection(README, 'Commands') ?? '')
+      .split('\n')
+      .filter((row) => row.startsWith('| **'));
+    const shown = manifest.contributes.commands.filter(({ command }) => !hidden.includes(command));
+
+    expect(shown.length).toBeGreaterThan(0);
+    expect(rows).toHaveLength(shown.length);
+    for (const { category, title } of shown) {
+      expect(rows.some((row) => row.startsWith(`| **${category}: ${title}**`))).toBe(true);
+    }
   });
 
   it('only links images over https from the public repository', () => {

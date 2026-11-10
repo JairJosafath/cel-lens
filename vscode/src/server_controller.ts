@@ -10,6 +10,7 @@ import { platform } from 'node:process';
 
 import * as vscode from 'vscode';
 import {
+  type CancellationToken,
   CloseAction,
   type CloseHandlerResult,
   ErrorAction,
@@ -36,6 +37,8 @@ import {
   type ServerState,
   type VersionInfo,
 } from './kubernetes_version';
+import { engineInlineInfo, readInlineInfo } from './inline_info_setting';
+import { LIST_VALUES_COMMAND, listValuesArguments } from './rule_parts';
 import { SERVER_PATH_SETTING, openServerPathSetting } from './open_server_setting';
 import { StartTrace, startFailureMessage } from './server_failure';
 import { spawnEngine } from './spawn_engine';
@@ -68,6 +71,12 @@ async function ensureExecutable(path: string): Promise<void> {
   }
 }
 
+/** The files the engine reads the types of `dyn` values from, whatever language they open as. */
+const CELLENS_PATTERN = '**/.cellens';
+
+/** The LSP request that runs a command of the engine. */
+const EXECUTE_COMMAND = 'workspace/executeCommand';
+
 /**
  * A client that stays quiet until it has started: when `start()` fails, the base class always
  * pops up its own "couldn't create connection" notification, and the controller already
@@ -79,6 +88,55 @@ class CelLensClient extends LanguageClient {
   override error(message: string, data?: unknown, showNotification?: boolean | 'force'): void {
     super.error(message, data, this.quietUntilStarted ? false : showNotification);
   }
+
+  /**
+   * Leaves out the client's own handling of `workspace/executeCommand`, which registers each
+   * command the engine runs as a VS Code command. The engine's `cel-lens.removeType` has the
+   * name of the line's part, the extension's own command, and a second registration of a
+   * command throws, which would fail the start. The extension runs the engine's commands itself
+   * (`runEngineCommand`), so it can cancel a check and say once why one failed.
+   */
+  override registerFeature(feature: Parameters<LanguageClient['registerFeature']>[0]): void {
+    if ('registrationType' in feature && feature.registrationType.method === EXECUTE_COMMAND) {
+      return;
+    }
+    super.registerFeature(feature);
+  }
+}
+
+/** A cancellation token of the language client that fires when `signal` does. */
+function cancellationToken(signal: AbortSignal): CancellationToken {
+  return {
+    get isCancellationRequested() {
+      return signal.aborted;
+    },
+    onCancellationRequested: (listener) => {
+      const fire = (): void => {
+        listener(undefined);
+      };
+      signal.addEventListener('abort', fire, { once: true });
+      return {
+        dispose: () => {
+          signal.removeEventListener('abort', fire);
+        },
+      };
+    },
+  };
+}
+
+/**
+ * Gives the `+N more` lens's command the line it is on, which a command never learns from VS
+ * Code, so the list it opens can name the rule: `cel-lens.listValues` takes one argument, the
+ * line and the engine's parts. A lens with no command, or another command, stays as it is.
+ */
+function withRuleLine(lens: vscode.CodeLens): vscode.CodeLens {
+  if (lens.command?.command === LIST_VALUES_COMMAND) {
+    lens.command = {
+      ...lens.command,
+      arguments: listValuesArguments(lens.range.start.line, lens.command.arguments),
+    };
+  }
+  return lens;
 }
 
 export const END_WAIT_MS = 2000;
@@ -105,12 +163,58 @@ export class ServerController implements vscode.Disposable {
   ) {}
 
   /**
-   * Tells the running server the `cel-lens.kubernetesVersion` and `cel-lens.experimental`
-   * settings, without restarting it. Queued behind a start or restart in progress, so a change
-   * made while the server starts still arrives. Never rejects.
+   * Tells the running server the `cel-lens.kubernetesVersion`, `cel-lens.experimental` and
+   * `cel-lens.inlineInfo` settings, without restarting it. Queued behind a start or restart in
+   * progress, so a change made while the server starts still arrives. Never rejects.
    */
   sendSettings(): Promise<void> {
     return this.enqueue(() => this.sendSettingsNow());
+  }
+
+  /**
+   * Tells the running server the settings, then has VS Code ask for the lines above the rules
+   * again: the engine asks for them itself when its switch flips, but a workspace folder's own
+   * `cel-lens.inlineInfo` shows or hides its lines in the client alone. Never rejects.
+   */
+  sendInlineInfo(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.sendSettingsNow();
+      this.refreshCodeLenses();
+    });
+  }
+
+  /**
+   * Runs one of the engine's commands, such as `cel-lens.setType`, with `workspace/executeCommand`
+   * and its one argument; `signal` cancels it. Resolves to the engine's answer, and rejects with
+   * the client's ResponseError when the engine refuses, or when no engine is running.
+   */
+  runEngineCommand(command: string, argument?: unknown, signal?: AbortSignal): Promise<unknown> {
+    const client = this.client;
+    if (client === undefined) {
+      return Promise.reject(new Error('the cel-lens engine is not running'));
+    }
+    const params = { command, arguments: argument === undefined ? [] : [argument] };
+    return signal === undefined
+      ? client.sendRequest<unknown>(EXECUTE_COMMAND, params)
+      : client.sendRequest<unknown>(EXECUTE_COMMAND, params, cancellationToken(signal));
+  }
+
+  /** Fires the change event of the code lens provider of each visible editor, once per provider. */
+  private refreshCodeLenses(): void {
+    const feature = this.client?.getFeature('textDocument/codeLens');
+    if (feature === undefined) {
+      return;
+    }
+    const emitters = new Set<vscode.EventEmitter<void>>();
+    for (const editor of vscode.window.visibleTextEditors) {
+      const provider = feature.getProvider(editor.document);
+      if (provider !== undefined) {
+        emitters.add(provider.onDidChangeCodeLensEmitter);
+      }
+    }
+    for (const emitter of emitters) {
+      emitter.fire();
+    }
   }
 
   private async sendSettingsNow(): Promise<void> {
@@ -134,10 +238,10 @@ export class ServerController implements vscode.Disposable {
         }
         return;
       }
-      await this.client.sendNotification(
-        'workspace/didChangeConfiguration',
-        configurationParams(readVersionSetting(), info, experimental),
-      );
+      const params = configurationParams(readVersionSetting(), info, experimental);
+      await this.client.sendNotification('workspace/didChangeConfiguration', {
+        settings: { ...params.settings, inlineInfo: engineInlineInfo() },
+      });
       this.sentVersion = options.kubernetesVersion;
       this.sentExperimental = experimentalKey;
       this.onState({ kind: 'running', info });
@@ -290,10 +394,26 @@ export class ServerController implements vscode.Disposable {
       // Spawned here, not by the client, to keep the server's stderr for the failure message.
       () => Promise.resolve(this.spawnServer(server.command, server.args, trace)),
       {
-        // Files on disk only: untitled YAML buffers are not analysed.
-        documentSelector: [{ scheme: 'file', language: 'yaml' }],
+        // Files on disk only: untitled YAML buffers are not analysed. A .cellens opens as plain
+        // text, but the engine reads it with the editor's text, so the type it wrote is used,
+        // and its next edit made on that text, before the file is saved.
+        documentSelector: [
+          { scheme: 'file', language: 'yaml' },
+          { scheme: 'file', pattern: CELLENS_PATTERN },
+        ],
         outputChannel: this.log,
-        initializationOptions: sentOptions,
+        initializationOptions: { ...sentOptions, inlineInfo: engineInlineInfo() },
+        middleware: {
+          // The engine has one switch for the window; a workspace folder that turns the lines
+          // off loses them here. The +N more lens learns its line.
+          provideCodeLenses: async (document, token, next) =>
+            readInlineInfo(document.uri) ? (await next(document, token))?.map(withRuleLine) : [],
+          // A lens the engine fills in later gets its line too.
+          resolveCodeLens: async (lens, token, next) => {
+            const resolved = await next(lens, token);
+            return resolved === null || resolved === undefined ? resolved : withRuleLine(resolved);
+          },
+        },
         // A server that dies while starting is reported once below, never restarted until the
         // client gives up; one that dies later gets the client's usual restarts.
         errorHandler: {

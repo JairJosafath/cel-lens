@@ -3,9 +3,22 @@ import * as vscode from 'vscode';
 import { SHOW_ACTIONS_COMMAND, SHOW_LOGS_COMMAND } from './actions_menu';
 import { ColorPainter, chooseColorStyle } from './color_painter';
 import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
+import { ExampleEditors, ExampleNotes } from './example_editor';
+import { INLINE_INFO_SETTING_NAME, TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
+import { toggleInlineInfo } from './inline_info_setting';
 import { offerLegacyColorStyleMove } from './legacy_color_style';
 import { PICK_VERSION_COMMAND, RESTART_SERVER_COMMAND } from './kubernetes_version';
+import { listValues, showRule } from './rule_commands';
+import { LIST_VALUES_COMMAND, SHOW_RULE_COMMAND } from './rule_parts';
 import { ServerController } from './server_controller';
+import { giveValueType, typeUi } from './type_commands';
+import { TypeFlow } from './type_flow';
+import {
+  EDIT_TYPE_COMMAND,
+  GIVE_TYPE_COMMAND,
+  GIVE_VALUE_TYPE_COMMAND,
+  REMOVE_TYPE_COMMAND,
+} from './value_types';
 import { VersionStatus } from './version_status';
 
 let controller: ServerController | undefined;
@@ -27,13 +40,25 @@ export function activate(
     status.setState(state);
   });
   controller = server;
+  const examples = new ExampleEditors(log);
+  const notes = new ExampleNotes();
+  const ui = typeUi(log, examples, notes);
+  const types = new TypeFlow(
+    (command, argument, signal) => server.runEngineCommand(command, argument, signal),
+    ui,
+    log,
+  );
   context.subscriptions.push(
     log,
     server,
     status,
+    examples,
+    notes,
     new ColorPainter(),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (
+      if (event.affectsConfiguration(INLINE_INFO_SETTING_NAME)) {
+        void server.sendInlineInfo();
+      } else if (
         event.affectsConfiguration('cel-lens.kubernetesVersion') ||
         event.affectsConfiguration('cel-lens.experimental')
       ) {
@@ -54,6 +79,29 @@ export function activate(
     }),
     vscode.commands.registerCommand(RESTART_SERVER_COMMAND, async () => {
       await server.restart();
+    }),
+    vscode.commands.registerCommand(TOGGLE_INLINE_INFO_COMMAND, async () => {
+      await toggleInlineInfo(log);
+    }),
+    // The parts of the line above each rule; the engine names them, so they have no palette entry.
+    vscode.commands.registerCommand(SHOW_RULE_COMMAND, async (location: unknown) => {
+      await showRule(location, log);
+    }),
+    vscode.commands.registerCommand(LIST_VALUES_COMMAND, async (more: unknown) => {
+      await listValues(more, log);
+    }),
+    vscode.commands.registerCommand(GIVE_TYPE_COMMAND, async (value: unknown) => {
+      await types.giveType(value);
+    }),
+    vscode.commands.registerCommand(EDIT_TYPE_COMMAND, async (value: unknown) => {
+      await types.editType(value);
+    }),
+    vscode.commands.registerCommand(REMOVE_TYPE_COMMAND, async (value: unknown) => {
+      await types.removeType(value);
+    }),
+    // The palette's way to the same steps, for the values of the open file.
+    vscode.commands.registerCommand(GIVE_VALUE_TYPE_COMMAND, async () => {
+      await giveValueType(types, ui, log);
     }),
   );
   void server.start();

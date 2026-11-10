@@ -11,7 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OPEN_EXPERIMENTAL_SETTING_LABEL, REPLACE_EXPERIMENTAL_LABEL } from './button_labels';
 import {
   ConfigurationTarget,
+  FakeEditor,
   type LogChannel,
+  Uri,
+  addWorkspaceFolder,
   channels,
   errorChoice,
   executedCommands,
@@ -23,6 +26,7 @@ import {
   shownWarnings,
   updateFailure,
   notificationChoices,
+  visibleEditors,
   warningChoice,
   window,
   workspaceSettings,
@@ -55,9 +59,19 @@ const client = vi.hoisted(() => ({
   startError: undefined as Error | undefined,
   initializeResult: undefined as Record<string, unknown> | undefined,
   notifications: [] as { method: string; params: unknown }[],
+  /** The requests sent, with the cancellation token of each, if any. */
+  requests: [] as { method: string; params: unknown; token: unknown }[],
+  /** What the engine answers a request, by method, or the error it rejects it with. */
+  answers: new Map<string, unknown>(),
+  requestError: undefined as Error | undefined,
+  /** The methods of the features the client kept, in the order the client registered them. */
+  features: [] as string[],
   handlers: new Map<string, (params: never) => void>(),
   startGate: undefined as Promise<void> | undefined,
   onStart: undefined as (() => void) | undefined,
+  lensRefreshes: 0,
+  /** The code lens provider every YAML file gets; undefined when the engine registers none. */
+  lensProvider: undefined as { onDidChangeCodeLensEmitter: { fire(): void } } | undefined,
 }));
 
 const fsFault = vi.hoisted(() => ({ chmodError: undefined as Error | undefined }));
@@ -95,6 +109,21 @@ vi.mock('vscode-languageclient/node', async () => {
     LanguageClient: class {
       constructor(id: string, _name: string, server: unknown, options: unknown) {
         client.created.push({ id, server, options });
+        // Like the real client, which registers its built-in features as it is made.
+        for (const method of ['textDocument/codeLens', 'workspace/executeCommand']) {
+          this.registerFeature({ registrationType: { method } });
+        }
+      }
+
+      registerFeature(feature: { registrationType: { method: string } }): void {
+        client.features.push(feature.registrationType.method);
+      }
+
+      sendRequest(method: string, params: unknown, token?: unknown): Promise<unknown> {
+        client.requests.push({ method, params, token });
+        return client.requestError === undefined
+          ? Promise.resolve(client.answers.get(method))
+          : Promise.reject(client.requestError);
       }
 
       get initializeResult(): Record<string, unknown> | undefined {
@@ -103,6 +132,12 @@ vi.mock('vscode-languageclient/node', async () => {
 
       onNotification(method: string, handler: (params: never) => void): void {
         client.handlers.set(method, handler);
+      }
+
+      getFeature(method: string): unknown {
+        return method === 'textDocument/codeLens'
+          ? { getProvider: () => client.lensProvider }
+          : undefined;
       }
 
       sendNotification(method: string, params: unknown): Promise<void> {
@@ -189,6 +224,34 @@ function newController(onState?: (state: ServerState) => void): ServerController
   return new ServerController(window.createOutputChannel('cel-lens'), EXTENSION_PATH, onState);
 }
 
+type ProvideCodeLenses = (
+  document: { uri: ReturnType<typeof Uri.parse> },
+  token: unknown,
+  next: (document: unknown, token: unknown) => unknown,
+) => Promise<unknown>;
+
+type ResolveCodeLens = (
+  lens: unknown,
+  token: unknown,
+  next: (lens: unknown, token: unknown) => unknown,
+) => Promise<unknown>;
+
+interface LensMiddleware {
+  provideCodeLenses: ProvideCodeLenses;
+  resolveCodeLens: ResolveCodeLens;
+}
+
+/** The code lens middleware of the last client created. */
+function lensMiddleware(): LensMiddleware {
+  const options = client.created.at(-1)?.options as { middleware: LensMiddleware };
+  return options.middleware;
+}
+
+/** The provideCodeLenses middleware of the last client created. */
+function provideCodeLenses(): ProvideCodeLenses {
+  return lensMiddleware().provideCodeLenses;
+}
+
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
@@ -207,9 +270,21 @@ describe('ServerController', () => {
     client.startError = undefined;
     client.initializeResult = undefined;
     client.notifications.length = 0;
+    client.requests.length = 0;
+    client.answers.clear();
+    client.requestError = undefined;
+    client.features.length = 0;
     client.handlers.clear();
     client.startGate = undefined;
     client.onStart = undefined;
+    client.lensRefreshes = 0;
+    client.lensProvider = {
+      onDidChangeCodeLensEmitter: {
+        fire: () => {
+          client.lensRefreshes += 1;
+        },
+      },
+    };
     spawned.calls.length = 0;
     fsFault.chmodError = undefined;
     engine.hung = undefined;
@@ -224,16 +299,23 @@ describe('ServerController', () => {
     }
   });
 
-  it('starts cel-lens-core lsp over stdio for YAML files on disk', async () => {
+  it('starts cel-lens-core lsp over stdio for YAML files and .cellens files on disk', async () => {
     settings.set('cel-lens.serverPath', execPath);
 
     await newController().start();
 
+    // #1: a .cellens opens as plain text; without it the engine never had the editor's text, so
+    // an entry it had just written was dyn until saved, and a second pick wrote it twice.
     expect(client.created).toMatchObject([
       {
         id: 'cel-lens',
         server: expect.any(Function) as unknown,
-        options: { documentSelector: [{ scheme: 'file', language: 'yaml' }] },
+        options: {
+          documentSelector: [
+            { scheme: 'file', language: 'yaml' },
+            { scheme: 'file', pattern: '**/.cellens' },
+          ],
+        },
       },
     ]);
     expect(client.started).toBe(1);
@@ -679,7 +761,9 @@ describe('ServerController', () => {
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '', experimental: ['kyverno'] } },
+        params: {
+          settings: { kubernetesVersion: '', experimental: ['kyverno'], inlineInfo: true },
+        },
       },
     ]);
     expect(client.created).toHaveLength(1);
@@ -688,6 +772,285 @@ describe('ServerController', () => {
   const FEATURES_RESULT = {
     capabilities: { experimental: { celLens: { experimentalFeatures: ['kyverno'] } } },
   };
+
+  it.each([
+    [undefined, true],
+    [false, false],
+    [true, true],
+  ])('passes cel-lens.inlineInfo %j in initializationOptions as %j', async (setting, expected) => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.inlineInfo', setting);
+
+    await newController().start();
+
+    expect(client.created).toMatchObject([
+      { options: { initializationOptions: { inlineInfo: expected } } },
+    ]);
+  });
+
+  it('passes inlineInfo on when the user turns it off but a workspace folder turns it on', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.inlineInfo', false);
+    addWorkspaceFolder('a');
+    addWorkspaceFolder('b', { 'cel-lens.inlineInfo': true });
+
+    await newController().start();
+
+    expect(client.created).toMatchObject([
+      { options: { initializationOptions: { inlineInfo: true } } },
+    ]);
+  });
+
+  it('sends an inline info change with didChangeConfiguration, then has VS Code ask for the lines once, without a restart', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    await controller.start();
+    const crd = { languageId: 'yaml', getText: () => '' };
+    visibleEditors.push(new FakeEditor(crd), new FakeEditor(crd));
+    settings.set('cel-lens.inlineInfo', false);
+
+    await controller.sendInlineInfo();
+
+    expect(client.notifications).toEqual([
+      {
+        method: 'workspace/didChangeConfiguration',
+        params: { settings: { kubernetesVersion: '', experimental: [], inlineInfo: false } },
+      },
+    ]);
+    expect(client.lensRefreshes).toBe(1);
+    expect(client.created).toHaveLength(1);
+  });
+
+  it.each([
+    ['no editor is visible', true],
+    ['the engine registered no code lens provider', false],
+  ])('asks VS Code for no lines when %s', async (_name, registered) => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    await controller.start();
+    if (!registered) {
+      client.lensProvider = undefined;
+      visibleEditors.push(new FakeEditor({ languageId: 'yaml', getText: () => '' }));
+    }
+
+    await controller.sendInlineInfo();
+
+    expect(client.lensRefreshes).toBe(0);
+  });
+
+  it('hides the lines of a file whose workspace folder turns them off, and asks the engine for the others', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    addWorkspaceFolder('a', { 'cel-lens.inlineInfo': false });
+    addWorkspaceFolder('b');
+    await newController().start();
+    const lenses = [
+      { range: { start: { line: 15 } }, command: { title: 'self: Widget.spec · compiles' } },
+    ];
+    const next = vi.fn(() => lenses);
+
+    const hidden = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/a/crd.yaml') },
+      {},
+      next,
+    );
+    const shown = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/b/crd.yaml') },
+      {},
+      next,
+    );
+
+    expect(hidden).toEqual([]);
+    expect(shown).toEqual(lenses);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the +N more lens its line, from 1, beside the parts, and leaves the other lenses as they are', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    await newController().start();
+    const give = { title: 'self.spec.port: dyn · Give it a type', command: 'cel-lens.giveType' };
+    const summary = {
+      range: { start: { line: 15 } },
+      command: {
+        title: 'self: Widget.spec · compiles',
+        command: 'cel-lens.showRule',
+        arguments: [
+          {
+            uri: 'file:///workspace/crd.yaml',
+            range: { start: { line: 15, character: 10 }, end: { line: 15, character: 44 } },
+          },
+        ],
+      },
+    };
+    const more = {
+      range: { start: { line: 15 } },
+      command: { title: '+1 more', command: 'cel-lens.listValues', arguments: [give] },
+    };
+
+    const lenses = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/crd.yaml') },
+      {},
+      () => Promise.resolve([summary, more]),
+    );
+
+    expect(lenses).toEqual([
+      summary,
+      {
+        range: { start: { line: 15 } },
+        command: {
+          title: '+1 more',
+          command: 'cel-lens.listValues',
+          arguments: [{ line: 16, parts: [give] }],
+        },
+      },
+    ]);
+  });
+
+  it('leaves a lens with no command as it is', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    await newController().start();
+    const bare = { range: { start: { line: 15 } } };
+
+    const lenses = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/crd.yaml') },
+      {},
+      () => [bare],
+    );
+
+    expect(lenses).toEqual([{ range: { start: { line: 15 } } }]);
+  });
+
+  it('gives a +N more lens the engine resolves later its line, once, and passes on the rest', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    await newController().start();
+    const give = { title: 'self.spec.port: dyn · Give it a type', command: 'cel-lens.giveType' };
+    const more = {
+      range: { start: { line: 15 } },
+      command: { title: '+1 more', command: 'cel-lens.listValues', arguments: [give] },
+    };
+    const { resolveCodeLens } = lensMiddleware();
+
+    const resolved = await resolveCodeLens({}, {}, () => Promise.resolve(more));
+    const again = await resolveCodeLens({}, {}, () => resolved);
+    const bare = await resolveCodeLens({}, {}, () => ({ range: { start: { line: 3 } } }));
+    const none = await resolveCodeLens({}, {}, () => null);
+
+    const wrapped = {
+      range: { start: { line: 15 } },
+      command: {
+        title: '+1 more',
+        command: 'cel-lens.listValues',
+        arguments: [{ line: 16, parts: [give] }],
+      },
+    };
+    expect(resolved).toEqual(wrapped);
+    expect(again).toEqual(wrapped);
+    expect(bare).toEqual({ range: { start: { line: 3 } } });
+    expect(none).toBeNull();
+  });
+
+  it("keeps the client from registering the engine's commands, so the engine's cel-lens.removeType cannot clash with the line's", async () => {
+    settings.set('cel-lens.serverPath', execPath);
+
+    await newController().start();
+
+    expect(client.created).toHaveLength(1);
+    expect(client.features).toEqual(['textDocument/codeLens']);
+  });
+
+  it("runs an engine command with workspace/executeCommand and its one argument, and resolves to the engine's answer", async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    await controller.start();
+    client.answers.set('workspace/executeCommand', {
+      cellens: 'file:///ws/.cellens',
+      change: 'added',
+    });
+    const argument = { cellens: 'file:///ws/.cellens', type: 'int' };
+
+    const answer = await controller.runEngineCommand('cel-lens.setType', argument);
+    await controller.runEngineCommand('cel-lens.typeChoices');
+
+    expect(answer).toEqual({ cellens: 'file:///ws/.cellens', change: 'added' });
+    expect(client.requests).toEqual([
+      {
+        method: 'workspace/executeCommand',
+        params: { command: 'cel-lens.setType', arguments: [argument] },
+        token: undefined,
+      },
+      {
+        method: 'workspace/executeCommand',
+        params: { command: 'cel-lens.typeChoices', arguments: [] },
+        token: undefined,
+      },
+    ]);
+  });
+
+  it('cancels an engine command when its signal fires, through the cancellation token the client sends', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    await controller.start();
+    const signal = new AbortController();
+
+    await controller.runEngineCommand('cel-lens.checkType', { type: 'int' }, signal.signal);
+    const token = client.requests[0]?.token as {
+      isCancellationRequested: boolean;
+      onCancellationRequested: (listener: () => void) => { dispose(): void };
+    };
+    let fired = 0;
+    const kept = token.onCancellationRequested(() => (fired += 1));
+    const dropped = token.onCancellationRequested(() => (fired += 10));
+    dropped.dispose();
+    expect(token.isCancellationRequested).toBe(false);
+
+    signal.abort();
+
+    expect(token.isCancellationRequested).toBe(true);
+    expect(fired).toBe(1);
+    kept.dispose();
+  });
+
+  it("rejects with the engine's error, and when no engine is running", async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const stopped = newController();
+    const running = newController();
+    await running.start();
+    client.requestError = Object.assign(new Error('waiting'), { code: -32803 });
+
+    await expect(running.runEngineCommand('cel-lens.removeType', {})).rejects.toMatchObject({
+      code: -32803,
+      message: 'waiting',
+    });
+    await expect(stopped.runEngineCommand('cel-lens.removeType', {})).rejects.toThrow(
+      'the cel-lens engine is not running',
+    );
+  });
+
+  it('asks the engine for the lenses of a .cellens, which has none, as for any file it reads', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    await newController().start();
+    const asked: unknown[] = [];
+
+    const lenses = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/.cellens') },
+      {},
+      (document) => {
+        asked.push(document);
+        return [];
+      },
+    );
+
+    expect(asked).toHaveLength(1);
+    expect(lenses).toEqual([]);
+  });
+
+  it('passes on an engine answer of no lenses', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    await newController().start();
+
+    expect(
+      await provideCodeLenses()({ uri: Uri.parse('file:///workspace/crd.yaml') }, {}, () => null),
+    ).toBeUndefined();
+  });
 
   it('warns once, naming the unknown experimental names, with a button to the setting', async () => {
     settings.set('cel-lens.serverPath', execPath);
@@ -853,7 +1216,7 @@ describe('ServerController', () => {
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '1.36', experimental: [] } },
+        params: { settings: { kubernetesVersion: '1.36', experimental: [], inlineInfo: true } },
       },
     ]);
     expect(client.created).toHaveLength(1);
@@ -887,7 +1250,7 @@ describe('ServerController', () => {
       ]);
       expect(client.notifications.at(-1)).toEqual({
         method: 'workspace/didChangeConfiguration',
-        params: { settings: options },
+        params: { settings: { ...options, inlineInfo: true } },
       });
     },
   );
@@ -898,7 +1261,7 @@ describe('ServerController', () => {
       [
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '', experimental: [] } },
+          params: { settings: { kubernetesVersion: '', experimental: [], inlineInfo: true } },
         },
       ],
     ],
@@ -939,7 +1302,7 @@ describe('ServerController', () => {
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '1.36', experimental: [] } },
+        params: { settings: { kubernetesVersion: '1.36', experimental: [], inlineInfo: true } },
       },
     ]);
   });

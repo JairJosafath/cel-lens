@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
@@ -24,6 +27,9 @@ const (
 	maxWorkspaceFileSize = 1 << 20
 
 	registerWatchersID = "cel-lens-watch-yaml"
+	// registerCompletionID registers completion for YAML files and .cellens
+	// files, each with its trigger characters (see registerCompletion).
+	registerCompletionID = "cel-lens-completion"
 )
 
 // File change types of workspace/didChangeWatchedFiles, and the watch kinds
@@ -69,12 +75,41 @@ type initializeParams struct {
 		URI string `json:"uri"`
 	} `json:"workspaceFolders"`
 	Capabilities struct {
+		TextDocument struct {
+			Completion struct {
+				DynamicRegistration bool `json:"dynamicRegistration"`
+				CompletionItem      struct {
+					SnippetSupport        bool `json:"snippetSupport"`
+					InsertTextModeSupport struct {
+						ValueSet []int `json:"valueSet"`
+					} `json:"insertTextModeSupport"`
+				} `json:"completionItem"`
+			} `json:"completion"`
+		} `json:"textDocument"`
 		Workspace struct {
 			DidChangeWatchedFiles struct {
 				DynamicRegistration bool `json:"dynamicRegistration"`
 			} `json:"didChangeWatchedFiles"`
+			CodeLens struct {
+				RefreshSupport bool `json:"refreshSupport"`
+			} `json:"codeLens"`
+			ApplyEdit     bool `json:"applyEdit"`
+			WorkspaceEdit struct {
+				DocumentChanges    bool     `json:"documentChanges"`
+				ResourceOperations []string `json:"resourceOperations"`
+			} `json:"workspaceEdit"`
 		} `json:"workspace"`
 	} `json:"capabilities"`
+}
+
+// editCaps are what the client says it can do with a workspace/applyEdit.
+func (p initializeParams) editCaps() editCaps {
+	w := p.Capabilities.Workspace
+	ops := w.WorkspaceEdit.ResourceOperations
+	return editCaps{
+		apply: w.ApplyEdit, documentChanges: w.WorkspaceEdit.DocumentChanges,
+		create: slices.Contains(ops, "create"), delete: slices.Contains(ops, "delete"),
+	}
 }
 
 // folders returns the folders of the workspace as paths.
@@ -104,23 +139,26 @@ type scan struct {
 	done chan *check.CRDs
 	// notes are what the scan has to tell the user; set before done delivers.
 	notes []message
+	// batches are the batches it scans for (see session.batch).
+	batches []int
 }
 
-// startScan scans the workspace folders in a goroutine, unless a scan is
-// already running. The message loop receives its result on ss.scan.done, and
-// stopScan stops it.
+// startScan scans the workspace folders in a goroutine, for the batch in
+// hand, unless a scan is already running. The message loop receives its
+// result on ss.scan.done, and stopScan stops it.
 func (ss *session) startScan(ctx context.Context) {
 	if ss.scan != nil {
 		return
 	}
-	ss.runScan(ctx, slices.Clone(ss.folders))
+	ss.runScan(ctx, slices.Clone(ss.folders), []int{ss.batch})
 }
 
-// runScan starts the scan of folders in a goroutine; no scan may be running.
-func (ss *session) runScan(ctx context.Context, folders []string) {
+// runScan starts the scan of folders in a goroutine, for batches; no scan may
+// be running.
+func (ss *session) runScan(ctx context.Context, folders []string, batches []int) {
 	run := ss.scanFunc()
 	ctx, cancel := context.WithCancel(ctx)
-	sc := &scan{cancel: cancel, folders: folders, done: make(chan *check.CRDs, 1)}
+	sc := &scan{cancel: cancel, folders: folders, batches: batches, done: make(chan *check.CRDs, 1)}
 	ss.scan = sc
 	ss.crds.Track()
 	for uri := range ss.docs {
@@ -166,19 +204,89 @@ func (ss *session) scanFunc() func(ctx context.Context, folders []string, dst *c
 func (ss *session) scanFolders(ctx context.Context, folders []string) {
 	if ss.scan != nil {
 		ss.queued = outermost(append(ss.queued, folders...))
+		if !slices.Contains(ss.queuedBatches, ss.batch) {
+			ss.queuedBatches = append(ss.queuedBatches, ss.batch)
+		}
 		return
 	}
-	ss.runScan(ctx, outermost(folders))
+	ss.runScan(ctx, outermost(folders), []int{ss.batch})
 }
 
 // scanQueued starts the scan of the folders that were created during the scan
-// that just ended and still exist, if there are any and crd-typed-policies is still on.
+// that just ended and still exist, if there are any and crd-typed-policies is
+// still on, for the batches that queued them.
 func (ss *session) scanQueued(ctx context.Context) {
 	folders := slices.DeleteFunc(ss.queued, func(f string) bool { return !isDir(f) })
-	ss.queued = nil
+	batches := ss.queuedBatches
+	ss.queued, ss.queuedBatches = nil, nil
 	if len(folders) > 0 && ss.features.Has(feature.CRDTypedPolicies) {
-		ss.runScan(ctx, folders)
+		ss.runScan(ctx, folders, batches)
 	}
+}
+
+// endScan handles the end of the scan in progress, which found found: it
+// tells the user what the scan has to say, records the CRDs (see finishScan)
+// and starts the scan of the folders queued meanwhile. When those are gone,
+// it settles the batches that queued them.
+func (ss *session) endScan(ctx context.Context, found *check.CRDs) error {
+	sc := ss.scan
+	ss.scan = nil
+	if err := ss.warn(sc.notes); err != nil {
+		return err
+	}
+	if err := ss.finishScan(ctx, found, sc.batches); err != nil {
+		return err
+	}
+	queued := ss.queuedBatches
+	ss.scanQueued(ctx)
+	if ss.scan == nil && len(queued) > 0 {
+		return ss.settle(ctx, queued, false, false)
+	}
+	return nil
+}
+
+// busy reports whether a scan or search for batch b runs or waits.
+func (ss *session) busy(b int) bool {
+	return ss.scan != nil && slices.Contains(ss.scan.batches, b) || slices.Contains(ss.queuedBatches, b) ||
+		ss.lensSearch != nil && slices.Contains(ss.lensSearch.batches, b) || slices.Contains(ss.lensQueuedBatches, b)
+}
+
+// owe records that batch b owes a check of the open documents.
+func (ss *session) owe(b int) {
+	if ss.owed == nil {
+		ss.owed = map[int]bool{}
+	}
+	ss.owed[b] = true
+}
+
+// settle checks the open documents again after a scan or search for batches
+// ended: at once when own, what the ended work changed itself, is true, and
+// for what a batch owes once none of its work is left. With hold, own waits
+// instead for the batches whose work is left, so a batch checks once, after
+// its scan and its search; a scan does not hold, so what it found is checked
+// when it ends, whatever other batches wait for. Any check pays what all
+// batches owe until then (see publishAll).
+func (ss *session) settle(ctx context.Context, batches []int, own, hold bool) error {
+	publish := false
+	var busy []int
+	for _, b := range batches {
+		if ss.busy(b) {
+			busy = append(busy, b)
+			continue
+		}
+		publish = publish || ss.owed[b]
+		delete(ss.owed, b)
+	}
+	if own && hold && len(busy) > 0 {
+		for _, b := range busy {
+			ss.owe(b)
+		}
+		own = false
+	}
+	if !own && !publish {
+		return ctx.Err()
+	}
+	return ss.publishAll(ctx, "")
 }
 
 // outermost returns the folders without those below another of them and
@@ -205,28 +313,25 @@ func (ss *session) stopScan() {
 	ss.scan.cancel()
 	<-ss.scan.done
 	ss.scan = nil
-	ss.queued = nil
+	ss.queued, ss.queuedBatches = nil, nil
 	ss.crds.Untrack()
 }
 
-// finishScan records the CRDs the scan found, replacing those it had for the
-// same files, except those of open documents and of files that changed during
-// the scan, which win, and checks the open documents again when that changed anything,
-// or when the batch that started the scan changed the CRDs, and
-// crd-typed-policies is still on. A file the session read, changed or forgot
-// during the scan is not taken from the scan. It also reads again the known
-// CRD files under the folders the scan skips, which it never read.
-func (ss *session) finishScan(ctx context.Context, found *check.CRDs) error {
+// finishScan records the CRDs the scan for batches found, replacing those it
+// had for the same files, except those of open documents and of files that
+// changed during the scan, which win, and settles the batches (see settle):
+// it checks the open documents again when that changed anything and
+// crd-typed-policies is still on, and for what a batch owes. A file the
+// session read, changed or forgot during the scan is not taken from the scan.
+// It also reads again the known CRD files under the folders the scan skips,
+// which it never read.
+func (ss *session) finishScan(ctx context.Context, found *check.CRDs, batches []int) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	reread := ss.rereadSkipped(ctx, found)
-	pending := ss.scanChanged
-	ss.scanChanged = false
-	if !ss.crds.Fill(found) && !reread && !pending || !ss.features.Has(feature.CRDTypedPolicies) {
-		return ctx.Err()
-	}
-	return ss.publishAll(ctx, "")
+	own := ss.crds.Fill(found) || reread
+	return ss.settle(ctx, batches, own && ss.features.Has(feature.CRDTypedPolicies), false)
 }
 
 // rereadSkipped reads again the known CRD files under the folders the scan
@@ -261,8 +366,7 @@ func (ss *session) rereadSkipped(ctx context.Context, found *check.CRDs) bool {
 func scanWorkspace(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, limit int, dst *check.CRDs) []message {
 	var notes []message
 	capped := false
-	capAt := -1 // where the file cap warning sits in notes, -1 when none
-	seen := 0
+	capAt := -1              // where the file cap warning sits in notes, -1 when none
 	var oversized []string   // files skipped for their size, in scan order
 	var oversizedBytes int64 // the size of the last one, for the one-file message
 	roots := make([]string, len(folders))
@@ -270,22 +374,95 @@ func scanWorkspace(ctx context.Context, dirFS func(dir string) fs.FS, folders []
 		roots[i] = crdKey(pathURI(dir))
 	}
 	dst.ScanRoots(roots)
+	walkYAML(ctx, dirFS, folders, limit, yamlWalk{
+		unreadable: func(path string, err error) {
+			dst.Incomplete(crdKey(pathURI(path)))
+			notes = append(notes, message{typ: messageWarning, log: true, text: fmt.Sprintf(
+				"cel-lens left the scan of %s incomplete: it could not be read (%v); the CRDs known below it are kept as they were, those below the other folders are rescanned", path, err)})
+		},
+		skipped: func(path string) { dst.SkipDir(crdKey(pathURI(path)), fileExists) },
+		capped: func() {
+			for _, r := range roots {
+				dst.Incomplete(r)
+			}
+			if !capped {
+				capped = true
+				capAt = len(notes)
+				notes = append(notes, message{typ: messageWarning, text: fmt.Sprintf(
+					"cel-lens stopped scanning the workspace for CustomResourceDefinitions after %d YAML files; CRDs in the files left out are not known, so a params type may stay dyn", limit)})
+			}
+		},
+		file: func(dir, rel string, d fs.DirEntry) bool {
+			path := filepath.Join(dir, filepath.FromSlash(rel))
+			dst.List(crdKey(pathURI(path)))
+			info, err := d.Info()
+			if err == nil && info.Size() > maxWorkspaceFileSize {
+				oversized = append(oversized, path)
+				oversizedBytes = info.Size()
+				return true
+			}
+			if err != nil {
+				return true // a file that cannot be read is skipped
+			}
+			// readIn refuses what a symbolic link leads to outside dir, a
+			// device or pipe, and more than the size limit.
+			if data, err := readIn(dir, filepath.FromSlash(rel)); err == nil {
+				dst.Set(ctx, crdKey(pathURI(path)), data)
+			}
+			return true
+		},
+	})
+	// The size note goes before the cap warning, which ends the client's wait.
+	if capAt < 0 {
+		capAt = len(notes)
+	}
+	return slices.Insert(notes, capAt, oversizeNote(oversized, oversizedBytes)...)
+}
+
+// yamlWalk is what walkYAML calls as it walks; a nil function is not called.
+type yamlWalk struct {
+	// unreadable is called for a folder or file that cannot be read, which
+	// the walk skips.
+	unreadable func(path string, err error)
+	// skipped is called for a folder the walk skips by its name (see
+	// skippedFolder).
+	skipped func(path string)
+	// capped is called, in each folder, at the first YAML file past the
+	// limit, where the walk of the folder stops.
+	capped func()
+	// file is called for each YAML file, with the folder of folders it is
+	// below and its slash-separated path relative to it. It returns false to
+	// stop the walk.
+	file func(dir, rel string, d fs.DirEntry) bool
+}
+
+// walkYAML walks the YAML files below folders as the workspace scan reads
+// them, in the order of folders and then of their paths: it skips hidden
+// folders and node_modules, and stops after limit files. dirFS gives the
+// file system of a folder; os.DirFS reads the disk. It stops when ctx is
+// cancelled.
+func walkYAML(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, limit int, w yamlWalk) {
+	seen := 0
+	stopped := false
 	for _, dir := range folders {
-		root := dirFS(dir)
-		_ = fs.WalkDir(root, ".", func(rel string, d fs.DirEntry, err error) error {
+		if stopped {
+			return
+		}
+		_ = fs.WalkDir(dirFS(dir), ".", func(rel string, d fs.DirEntry, err error) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if err != nil {
-				path := filepath.Join(dir, filepath.FromSlash(rel))
-				dst.Incomplete(crdKey(pathURI(path)))
-				notes = append(notes, message{typ: messageWarning, log: true, text: fmt.Sprintf(
-					"cel-lens left the scan of %s incomplete: it could not be read (%v); the CRDs known below it are kept as they were, those below the other folders are rescanned", path, err)})
+				if w.unreadable != nil {
+					w.unreadable(filepath.Join(dir, filepath.FromSlash(rel)), err)
+				}
 				return fs.SkipDir // skip what cannot be read
 			}
 			if d.IsDir() {
 				if rel != "." && skippedFolder(d.Name()) {
-					dst.SkipDir(crdKey(pathURI(filepath.Join(dir, filepath.FromSlash(rel)))), fileExists)
+					if w.skipped != nil {
+						w.skipped(filepath.Join(dir, filepath.FromSlash(rel)))
+					}
 					return fs.SkipDir
 				}
 				return nil
@@ -295,39 +472,18 @@ func scanWorkspace(ctx context.Context, dirFS func(dir string) fs.FS, folders []
 			}
 			seen++
 			if seen > limit {
-				for _, r := range roots {
-					dst.Incomplete(r)
-				}
-				if !capped {
-					capped = true
-					capAt = len(notes)
-					notes = append(notes, message{typ: messageWarning, text: fmt.Sprintf(
-						"cel-lens stopped scanning the workspace for CustomResourceDefinitions after %d YAML files; CRDs in the files left out are not known, so a params type may stay dyn", limit)})
+				if w.capped != nil {
+					w.capped()
 				}
 				return fs.SkipAll
 			}
-			path := filepath.Join(dir, filepath.FromSlash(rel))
-			dst.List(crdKey(pathURI(path)))
-			info, err := d.Info()
-			if err == nil && info.Size() > maxWorkspaceFileSize {
-				oversized = append(oversized, path)
-				oversizedBytes = info.Size()
-				return nil
-			}
-			if err != nil {
-				return nil //nolint:nilerr // a file that cannot be read is skipped
-			}
-			if data, err := os.ReadFile(path); err == nil {
-				dst.Set(ctx, crdKey(pathURI(path)), data)
+			if w.file != nil && !w.file(dir, rel, d) {
+				stopped = true
+				return fs.SkipAll
 			}
 			return nil
 		})
 	}
-	// The size note goes before the cap warning, which ends the client's wait.
-	if capAt < 0 {
-		capAt = len(notes)
-	}
-	return slices.Insert(notes, capAt, oversizeNote(oversized, oversizedBytes)...)
 }
 
 // maxNamedOversized is how many skipped file names the summary line gives.
@@ -374,10 +530,11 @@ func pathURI(path string) string {
 }
 
 // registerWatchers asks the client, if it can, to send
-// workspace/didChangeWatchedFiles for YAML files, and for every deletion, so
-// CRDs that change on disk without being open are followed. A client reports a
-// removed folder, and a renamed one as a deletion and a creation of the folder,
-// which only a pattern that matches folders sees.
+// workspace/didChangeWatchedFiles for YAML, .cellens and .go files, and for
+// every creation and deletion, so CRDs, .cellens files and the Go types a
+// go: entry can name that change on disk without being open are followed. A client reports a removed folder, and a
+// renamed one as a deletion and a creation of the folder, which only a
+// pattern that matches folders sees.
 func (ss *session) registerWatchers() error {
 	if !ss.watchFiles {
 		return nil
@@ -389,6 +546,8 @@ func (ss *session) registerWatchers() error {
 			"registerOptions": map[string]any{
 				"watchers": []map[string]any{
 					{"globPattern": "**/*.{yaml,yml}"},
+					{"globPattern": "**/" + cellens.FileName},
+					{"globPattern": "**/*.go"},
 					{"globPattern": "**", "kind": watchCreate | watchDelete},
 				},
 			},
@@ -396,13 +555,76 @@ func (ss *session) registerWatchers() error {
 	})
 }
 
+// completionSelectors are the document selectors of the completion the
+// server registers (see registerCompletion): the YAML files, as isYAML and
+// the watchers take them, by their extension, and the .cellens files. No file
+// matches both, even a .cellens the editor opens as YAML, as VS Code does:
+// a client asks every provider whose selector matches a document and shows
+// the items of each, so such a file would show every item twice.
+var completionSelectors = map[string][]map[string]any{
+	"yaml": {
+		{"scheme": "file", "language": "yaml", "pattern": "**/*.yaml"},
+		{"scheme": "file", "language": "yaml", "pattern": "**/*.yml"},
+	},
+	"cellens": {{"scheme": "file", "pattern": "**/" + cellens.FileName}},
+}
+
+// registerCompletion asks the client, if it can, for completion as two
+// providers with their own trigger characters: one for YAML files, with
+// triggerCharacters, and one for .cellens files, with lensTriggerCharacters,
+// which add the space, so a space typed in a YAML file, in a comment or a CEL
+// string, asks for nothing. initialize then declares no completionProvider,
+// so no document has two providers. It asks once, however often the client
+// says initialized; a client that refuses gets a line in its log
+// (registrationRefused).
+func (ss *session) registerCompletion() error {
+	if !ss.completionRegistration || ss.completionRegistered {
+		return nil
+	}
+	ss.completionRegistered = true
+	return ss.conn.Request(registerCompletionID, "client/registerCapability", map[string]any{
+		"registrations": []map[string]any{
+			{
+				"id": registerCompletionID + "-yaml", "method": "textDocument/completion",
+				"registerOptions": map[string]any{"documentSelector": completionSelectors["yaml"], "triggerCharacters": triggerCharacters},
+			},
+			{
+				"id": registerCompletionID + "-cellens", "method": "textDocument/completion",
+				"registerOptions": map[string]any{"documentSelector": completionSelectors["cellens"], "triggerCharacters": lensTriggerCharacters},
+			},
+		},
+	})
+}
+
+// completionRefused writes to the client's log that it refused the
+// registration of completion, with why: initialize declared none, and the
+// protocol has no way to declare one later, so the session has no
+// completion.
+func (ss *session) completionRefused(why string) error {
+	return ss.warn([]message{{
+		typ: messageError, log: true,
+		text: "cel-lens could not register completion: the editor refused it (" + why + "). This session has no completion, as initialize declared none for an editor that registers it; restart the server to try again.",
+	}})
+}
+
 // didChangeWatchedFiles reads the changed files again, or forgets the deleted
 // ones, starts a background scan of the YAML files below the created folders, and checks the open documents again when the CRDs changed. A file that
 // is open keeps the text of the editor. While crd-typed-policies is off it reads
-// nothing and publishes nothing: the CRDs are not used, and turning the feature
+// no CRD: the CRDs are not used, and turning the feature
 // on scans the whole workspace, which finds what changed meanwhile. It still
 // forgets deleted files and every file below a deleted folder, a cheap step, so
 // the scan never sees a CRD whose file is gone.
+//
+// .cellens files are followed whatever the features: a changed or created one
+// is read, a deleted one, and those below a deleted folder, forgotten, and a
+// created folder is searched for them in the background; the open documents
+// are checked again when one changed. A change of a .cellens that changes
+// nothing, as of an open one or to the text the session has, asks for the
+// code lenses again while they are owed (see refreshOwed). The diagnostics
+// of the .cellens files are sent again when they changed, as a YAML file an
+// entry names may have come or gone. A .go file, or a folder created or
+// deleted, makes the listing of the Go types out of date, so the next
+// completion of a go: lists them again.
 func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMessage) error {
 	on := ss.features.Has(feature.CRDTypedPolicies)
 	var p struct {
@@ -414,10 +636,34 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 	if !decode(params, &p) {
 		return nil
 	}
+	lensChanged, aboutLens := false, false
+	var lensFolders []string
+	for _, c := range p.Changes {
+		aboutLens = aboutLens || isLens(c.URI)
+		// A .go file, or a folder that may hold some, makes the listing of
+		// the Go types out of date (see goFresh).
+		if strings.HasSuffix(crdKey(c.URI), ".go") || c.Type != fileChanged && !isYAML(crdKey(c.URI)) && !isLens(c.URI) {
+			ss.goGen++
+		}
+		key := crdKey(c.URI)
+		switch l := ss.lenses[key]; {
+		case isLens(c.URI) && l != nil && l.open:
+		case isLens(c.URI) && c.Type == fileDeleted:
+			lensChanged = ss.dropLens(key) || lensChanged
+		case isLens(c.URI):
+			lensChanged = ss.readLens(ctx, c.URI) || lensChanged
+		case c.Type == fileDeleted:
+			lensChanged = ss.dropLensesUnder(key) || lensChanged
+		case c.Type == fileCreated:
+			if path, ok := diskPath(c.URI); ok && !ss.skippedCreated(path) && isDir(path) {
+				lensFolders = append(lensFolders, path)
+			}
+		}
+	}
 	changed := false
 	var created []string
 	for _, c := range p.Changes {
-		if _, open := ss.docs[c.URI]; open {
+		if _, open := ss.docs[c.URI]; open || isLens(c.URI) {
 			continue
 		}
 		switch {
@@ -438,17 +684,32 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 			}
 		}
 	}
+	if len(created) == 0 && len(lensFolders) == 0 {
+		if lensChanged || changed && on {
+			return ss.publishAll(ctx, "")
+		}
+		// A YAML file an entry of a .cellens names may have come or gone.
+		ss.lensGen++
+		if err := ss.publishLenses(ctx, ""); err != nil || !aboutLens {
+			return err
+		}
+		return ss.refreshOwed()
+	}
+	// The batch starts or queues a scan of the created folders, a search of
+	// them for .cellens files, or both; the end of its last one checks the
+	// open documents for it once, so no state without what they find is
+	// published in between, not even at the end of a scan or search in
+	// progress, behind which they wait. The diagnostics of the .cellens files
+	// may change with any file.
+	ss.batch++
+	if changed && on || lensChanged || len(ss.lenses) > 0 {
+		ss.owe(ss.batch)
+	}
+	ss.searchLenses(ctx, lensFolders)
 	if len(created) > 0 {
-		// The scan's end checks the open documents once, so no state
-		// without the scan's CRDs is published in between.
-		ss.scanChanged = ss.scanChanged || changed
 		ss.scanFolders(ctx, created)
-		return nil
 	}
-	if !changed || !on {
-		return nil
-	}
-	return ss.publishAll(ctx, "")
+	return nil
 }
 
 // skippedFolder reports whether the workspace scan skips a folder of that
@@ -499,10 +760,7 @@ func (ss *session) readFromDisk(ctx context.Context, uri string) bool {
 	if !ok {
 		return ss.crds.Forget(crdKey(uri))
 	}
-	if info, err := os.Stat(path); err != nil || info.Size() > maxWorkspaceFileSize {
-		return ss.crds.Forget(crdKey(uri))
-	}
-	data, err := os.ReadFile(path)
+	data, err := ss.readFile(path)
 	if err != nil {
 		return ss.crds.Forget(crdKey(uri))
 	}
@@ -510,8 +768,14 @@ func (ss *session) readFromDisk(ctx context.Context, uri string) bool {
 }
 
 // publishAll checks the open documents again and sends their diagnostics,
-// except the one at skip, in the order of their URIs.
+// except the one at skip, in the order of their URIs, and then those of the
+// .cellens files that changed. That pays what every batch owes (see settle):
+// what a batch's scan or search still finds, it publishes itself.
+// It then asks the client to request the code lenses again, whose lines
+// may have changed with the documents' types.
 func (ss *session) publishAll(ctx context.Context, skip string) error {
+	clear(ss.owed)
+	ss.lensGen++
 	uris := make([]string, 0, len(ss.docs))
 	for uri := range ss.docs {
 		if uri != skip {
@@ -523,6 +787,39 @@ func (ss *session) publishAll(ctx context.Context, skip string) error {
 		if err := ss.publish(ctx, uri); err != nil {
 			return err
 		}
+	}
+	if err := ss.publishLenses(ctx, ""); err != nil {
+		return err
+	}
+	return ss.refreshCodeLenses()
+}
+
+// publishTyped follows a change to a .cellens file the editor made: it
+// checks again and sends the diagnostics of the open documents whose assumed
+// types changed, in the order of their URIs, then those of the .cellens
+// files that changed, and asks the client to request the code lenses again
+// when a document was checked again, the entries changed (see putLens) or,
+// with again, for the editor opening or closing the .cellens, the client
+// has not asked for lenses that changed (see refreshOwed). The other
+// documents keep their checks, as nothing else they depend on changed.
+func (ss *session) publishTyped(ctx context.Context, again bool) error {
+	refresh := ss.lensChanges != ss.refreshedAt
+	for _, uri := range slices.Sorted(maps.Keys(ss.docs)) {
+		if assumed := ss.assumedFor(ctx, uri); !reflect.DeepEqual(assumed, ss.docs[uri].assumed) {
+			if err := ss.publishAssumed(ctx, uri, assumed); err != nil {
+				return err
+			}
+			refresh = true
+		}
+	}
+	if err := ss.publishLenses(ctx, ""); err != nil {
+		return err
+	}
+	switch {
+	case refresh:
+		return ss.refreshCodeLenses()
+	case again:
+		return ss.refreshOwed()
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 
 import {
+  ConfigurationTarget,
   changeActiveEditor,
   changeConfiguration,
   FakeEditor,
@@ -12,6 +13,8 @@ import {
   decorationTypes,
   quickPicks,
   settingUpdates,
+  executedCommands,
+  shownDocuments,
   visibleEditors,
   reset,
   runCommand,
@@ -21,9 +24,15 @@ import {
 } from '../test/vscode';
 import { activate, deactivate } from './extension';
 import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
+import { TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
+import { LIST_VALUES_COMMAND, SHOW_RULE_COMMAND } from './rule_parts';
+import { GIVE_TYPE_COMMAND, GIVE_VALUE_TYPE_COMMAND, REMOVE_TYPE_COMMAND } from './value_types';
 import { PICK_VERSION_COMMAND, RESTART_SERVER_COMMAND } from './kubernetes_version';
 
-const client = vi.hoisted(() => ({ notifications: [] as { method: string; params: unknown }[] }));
+const client = vi.hoisted(() => ({
+  notifications: [] as { method: string; params: unknown }[],
+  requests: [] as { method: string; params: unknown }[],
+}));
 
 vi.mock('vscode-languageclient/node', () => ({
   TransportKind: { stdio: 0 },
@@ -42,9 +51,19 @@ vi.mock('vscode-languageclient/node', () => ({
       return undefined;
     }
 
+    getFeature(): undefined {
+      return undefined;
+    }
+
     sendNotification(method: string, params: unknown): Promise<void> {
       client.notifications.push({ method, params });
       return Promise.resolve();
+    }
+
+    /** The engine applies every edit it is asked for. */
+    sendRequest(method: string, params: unknown): Promise<unknown> {
+      client.requests.push({ method, params });
+      return Promise.resolve({ cellens: 'file:///workspace/.cellens', change: 'added' });
     }
 
     start(): Promise<void> {
@@ -64,6 +83,7 @@ interface Manifest {
   activationEvents: string[];
   contributes: {
     commands: { command: string; title: string; category: string }[];
+    menus: { commandPalette: { command: string; when: string }[] };
     configuration: {
       properties: Record<
         string,
@@ -82,6 +102,7 @@ const CRD = 'x-kubernetes-validations:\n  - rule: "self.a < 3"\n';
 describe('activate', () => {
   beforeEach(() => {
     client.notifications.length = 0;
+    client.requests.length = 0;
     vi.stubEnv('PATH', '/nowhere');
   });
   afterEach(async () => {
@@ -118,8 +139,8 @@ describe('activate', () => {
     expect(shownErrors).toHaveLength(before + 1);
   });
 
-  it('activates on YAML files only', () => {
-    expect(manifest.activationEvents).toEqual(['onLanguage:yaml']);
+  it('activates on YAML files, and on the in-memory files of pasted examples a reload restores (#14)', () => {
+    expect(manifest.activationEvents).toEqual(['onLanguage:yaml', 'onFileSystem:cel-lens-example']);
   });
 
   it('registers the pick version command', async () => {
@@ -143,7 +164,7 @@ describe('activate', () => {
       expect(client.notifications).toEqual([
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '1.36', experimental: [] } },
+          params: { settings: { kubernetesVersion: '1.36', experimental: [], inlineInfo: true } },
         },
       ]);
     });
@@ -165,10 +186,62 @@ describe('activate', () => {
       expect(client.notifications).toEqual([
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '', experimental: ['kyverno'] } },
+          params: {
+            settings: { kubernetesVersion: '', experimental: ['kyverno'], inlineInfo: true },
+          },
         },
       ]);
     });
+  });
+
+  it('sends the inline info setting to the running server when it changes', async () => {
+    settings.set('cel-lens.serverPath', process.execPath);
+    changeActiveEditor('yaml');
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    await vi.waitFor(() => {
+      expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
+    });
+
+    settings.set('cel-lens.inlineInfo', false);
+    changeConfiguration('cel-lens.inlineInfo');
+
+    await vi.waitFor(() => {
+      expect(client.notifications).toEqual([
+        {
+          method: 'workspace/didChangeConfiguration',
+          params: { settings: { kubernetesVersion: '', experimental: [], inlineInfo: false } },
+        },
+      ]);
+    });
+  });
+
+  it('contributes the inline info setting as a boolean, on by default, with resource scope', () => {
+    const setting = manifest.contributes.configuration.properties['cel-lens.inlineInfo'];
+
+    expect(setting).toMatchObject({ type: 'boolean', default: true, scope: 'resource' });
+    expect(setting?.markdownDescription).toContain('cel-lens: Toggle Inline Info');
+  });
+
+  it('contributes the toggle inline info command under the cel-lens category, in the palette in YAML', () => {
+    const command = manifest.contributes.commands.find(
+      (c) => c.command === TOGGLE_INLINE_INFO_COMMAND,
+    );
+    const palette = manifest.contributes.menus.commandPalette.find(
+      (entry) => entry.command === TOGGLE_INLINE_INFO_COMMAND,
+    );
+
+    expect(command).toMatchObject({ title: 'Toggle Inline Info', category: 'cel-lens' });
+    expect(palette?.when).toBe('editorLangId == yaml');
+  });
+
+  it('turns the lines off in the user settings from the toggle command', async () => {
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+
+    await runCommand(TOGGLE_INLINE_INFO_COMMAND);
+
+    expect(settingUpdates).toEqual([
+      { name: 'cel-lens.inlineInfo', value: false, target: ConfigurationTarget.Global },
+    ]);
   });
 
   it('contributes the experimental setting as an empty list of the three known names', () => {
@@ -272,6 +345,100 @@ describe('activate', () => {
     }
 
     expect(await commands.getCommands()).toEqual([]);
+  });
+
+  it('registers the commands of the parts of the line once, and frees them on dispose for the next activation', async () => {
+    const subscriptions: vscode.Disposable[] = [];
+    activate({ subscriptions, extensionPath: '/ext', globalState: memento() });
+    expect(await commands.getCommands()).toEqual(
+      expect.arrayContaining([SHOW_RULE_COMMAND, LIST_VALUES_COMMAND]),
+    );
+
+    for (const subscription of subscriptions) {
+      subscription.dispose();
+    }
+    await deactivate();
+
+    expect(() => {
+      activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    }).not.toThrow();
+  });
+
+  it('shows the hover of a rule with no problem when its summary part runs', async () => {
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    const range = { start: { line: 1, character: 10 }, end: { line: 1, character: 20 } };
+
+    await runCommand(SHOW_RULE_COMMAND, { uri: 'file:///workspace/crd.yaml', range });
+
+    expect(shownDocuments).toMatchObject([{ uri: 'file:///workspace/crd.yaml' }]);
+    expect(executedCommands).toEqual([
+      { command: 'closeMarkersNavigation', args: [] },
+      { command: 'editor.action.showHover', args: [] },
+    ]);
+  });
+
+  it('lists the values a line leaves out when its +N more part runs, and runs the one picked', async () => {
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    const target = { path: 'spec.port' };
+    quickPicks.next = 'self.spec.port: dyn';
+
+    await runCommand(LIST_VALUES_COMMAND, {
+      line: 16,
+      parts: [
+        {
+          title: 'self.spec.port: dyn · Give it a type',
+          command: 'cel-lens.giveType',
+          arguments: [target],
+        },
+      ],
+    });
+
+    expect(executedCommands).toEqual([{ command: 'cel-lens.giveType', args: [target] }]);
+  });
+
+  it('gives a value of a CRD a type from its Give it a type part, through the engine', async () => {
+    settings.set('cel-lens.serverPath', process.execPath);
+    changeActiveEditor('yaml');
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    await vi.waitFor(() => {
+      expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
+    });
+    const surge = {
+      cellens: 'file:///workspace/.cellens',
+      file: 'crd.yaml',
+      document: 'CustomResourceDefinition widgets.example.com',
+      version: 'v1',
+      path: 'spec.maxSurge',
+      value: 'self.spec.maxSurge',
+    };
+    quickPicks.next = '$(symbol-string) string';
+
+    await runCommand(GIVE_TYPE_COMMAND, surge);
+    await runCommand(REMOVE_TYPE_COMMAND, { ...surge, type: 'string' });
+
+    expect(client.requests).toEqual([
+      {
+        method: 'workspace/executeCommand',
+        params: { command: 'cel-lens.setType', arguments: [{ ...surge, type: 'string' }] },
+      },
+      {
+        method: 'workspace/executeCommand',
+        params: { command: 'cel-lens.removeType', arguments: [{ ...surge, type: 'string' }] },
+      },
+    ]);
+    expect(shownErrors).toEqual([]);
+  });
+
+  it('contributes Give a Value a Type… under the cel-lens category, in the palette in YAML only', () => {
+    const command = manifest.contributes.commands.find(
+      (c) => c.command === GIVE_VALUE_TYPE_COMMAND,
+    );
+    const palette = manifest.contributes.menus.commandPalette.find(
+      (entry) => entry.command === GIVE_VALUE_TYPE_COMMAND,
+    );
+
+    expect(command).toMatchObject({ title: 'Give a Value a Type…', category: 'cel-lens' });
+    expect(palette?.when).toBe('editorLangId == yaml');
   });
 
   it('registers no command that package.json does not contribute', async () => {

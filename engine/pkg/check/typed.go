@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	celgo "github.com/google/cel-go/cel"
@@ -52,11 +53,75 @@ func (r *reporter) typeCheck(ctx context.Context, p *admissionregistrationv1.Val
 
 // compileValidations stores the variables of p in composite, compiles each
 // expression of the validations that is in clean, and calls fail with the
-// issues of each one that does not compile.
-func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, fail func(e extract.Expression, issues []string)) error {
-	for _, v := range p.Spec.Variables {
-		composite.CompileAndStoreVariable(accessor{name: v.Name, expression: v.Expression, returns: anyTypes}, decls, environment.NewExpressions)
+// issues of each one that does not compile. A variable in clean that does
+// not compile is reported by storeChecked.
+func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, kind matchkind.Kind, fail func(e extract.Expression, issues []string)) error {
+	r.storeChecked(composite, decls, p.Spec.Variables, exprs, clean, kind)
+	return eachValidation(ctx, p, exprs, clean, func(text string) *apiservercel.Error {
+		return composite.CompileCELExpression(accessor{expression: text}, decls, environment.NewExpressions).Error
+	}, fail)
+}
+
+// ownCheckNote is what a problem of a variable that only cel-lens's own
+// check of it finds adds to its message.
+const ownCheckNote = " (cel-lens checks a variable with the type of the kind matched, which the API server's type check skips: the API server would not report this)"
+
+// storeChecked stores variables, in order, in composite, the compiler of the
+// type checker for kind, and reports, as a warning that names kind, each
+// issue of a variable in clean that does not compile there: the API
+// server's type checker skips variables, but the variable is dyn then, and
+// nothing else would say why.
+func (r *reporter) storeChecked(composite *plugincel.CompositedCompiler, decls plugincel.OptionalVariableDeclarations, variables []admissionregistrationv1.Variable, exprs map[string]extract.Expression, clean map[string]bool, kind matchkind.Kind) {
+	for i, v := range variables {
+		res := composite.CompileAndStoreVariable(accessor{name: v.Name, expression: v.Expression, returns: anyTypes}, decls, environment.NewExpressions)
+		field := fmt.Sprintf("spec.variables[%d].expression", i)
+		e, ok := exprs[field]
+		if res.Error == nil || res.Error.Type != apiservercel.ErrorTypeInvalid || !ok || !clean[field] {
+			continue
+		}
+		from := len(r.diags)
+		r.reportAs(e, SeverityWarning, kind.String()+": ", strings.Join(issuesOf(res.Error.Detail), "\n"))
+		for j := from; j < len(r.diags); j++ {
+			r.diags[j].Message += ownCheckNote
+		}
 	}
+}
+
+// checkVariables does storeChecked for each kind the policy p matches, as
+// typeCheck does with its validations, for a policy whose validations are
+// not type checked, a MutatingAdmissionPolicy: its variables are typed with
+// the kinds all the same (see VariableTypes).
+func (r *reporter) checkVariables(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool) error {
+	if p.Spec.MatchConstraints == nil || len(p.Spec.Variables) == 0 {
+		return nil
+	}
+	rules := make([]matchkind.Rule, len(p.Spec.MatchConstraints.ResourceRules))
+	for i, rule := range p.Spec.MatchConstraints.ResourceRules {
+		rules[i] = matchkind.Rule{Groups: rule.APIGroups, Versions: rule.APIVersions, Resources: rule.Resources}
+	}
+	kinds, ok := r.crds.Resolve(rules)
+	if !ok {
+		return nil
+	}
+	for _, kind := range kinds {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		composite, decls, err := r.typedComposite(p, kind)
+		if err != nil {
+			return err
+		}
+		if composite != nil {
+			r.storeChecked(composite, decls, p.Spec.Variables, exprs, clean, kind)
+		}
+	}
+	return nil
+}
+
+// eachValidation compiles each expression of the validations of p that is in
+// clean with compile, and calls fail with the issues of each one that does not
+// compile.
+func eachValidation(ctx context.Context, p *admissionregistrationv1.ValidatingAdmissionPolicy, exprs map[string]extract.Expression, clean map[string]bool, compile func(text string) *apiservercel.Error, fail func(e extract.Expression, issues []string)) error {
 	for i := range p.Spec.Validations {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -67,18 +132,23 @@ func (r *reporter) compileValidations(ctx context.Context, composite *plugincel.
 			if !ok || !clean[field] {
 				continue
 			}
-			res := composite.CompileCELExpression(accessor{expression: e.Text}, decls, environment.NewExpressions)
-			if res.Error == nil || res.Error.Type != apiservercel.ErrorTypeInvalid {
+			cerr := compile(e.Text)
+			if cerr == nil || cerr.Type != apiservercel.ErrorTypeInvalid {
 				continue
 			}
-			issues := issuePattern.FindAllString(res.Error.Detail, -1)
-			if len(issues) == 0 {
-				issues = []string{res.Error.Detail}
-			}
-			fail(e, issues)
+			fail(e, issuesOf(cerr.Detail))
 		}
 	}
 	return nil
+}
+
+// issuesOf splits detail, the issues of a compile as cel-go writes them, into
+// one issue each, or gives detail whole when it has none of their form.
+func issuesOf(detail string) []string {
+	if issues := issuePattern.FindAllString(detail, -1); len(issues) > 0 {
+		return issues
+	}
+	return []string{detail}
 }
 
 // typeCheckKind is typeCheck for one kind.
@@ -87,7 +157,7 @@ func (r *reporter) typeCheckKind(ctx context.Context, p *admissionregistrationv1
 	if err != nil || composite == nil {
 		return err
 	}
-	return r.compileValidations(ctx, composite, decls, p, exprs, clean, func(e extract.Expression, issues []string) {
+	return r.compileValidations(ctx, composite, decls, p, exprs, clean, kind, func(e extract.Expression, issues []string) {
 		r.reportAs(e, SeverityWarning, kind.String()+": ", strings.Join(issues, "\n"))
 	})
 }
@@ -106,7 +176,7 @@ func (r *reporter) typedComposite(p *admissionregistrationv1.ValidatingAdmission
 	}
 	declType = declType.MaybeAssignTypeName(kind.GVK.Kind)
 	hasParams := p.Spec.ParamKind != nil
-	envSet, err := typedEnvSet(r.version.EnvSet(), declType, r.paramsType(p.Spec.ParamKind), hasParams)
+	envSet, err := typedEnvSet(r.version.EnvSet(), declType, declType, r.paramsType(p.Spec.ParamKind), hasParams)
 	if err != nil {
 		return nil, decls, fmt.Errorf("build CEL environment for %s: %w", kind, err)
 	}
@@ -149,10 +219,11 @@ func (r *reporter) paramsType(pk *admissionregistrationv1.ParamKind) *apiserverc
 }
 
 // typedEnvSet extends base with the variables of the admission CEL environment
-// as the API server's type checker declares them: object and oldObject of
-// objectType (dyn when that is nil), params of paramsType (dyn when that is nil), and request,
-// namespaceObject and authorizer.
-func typedEnvSet(base *environment.EnvSet, objectType, paramsType *apiservercel.DeclType, hasParams bool) (*environment.EnvSet, error) {
+// as the API server's type checker declares them: object of objectType and
+// oldObject of oldObjectType (each dyn when nil; the API server gives both
+// the matched kind's type), params of paramsType (dyn when that is nil), and
+// request, namespaceObject and authorizer.
+func typedEnvSet(base *environment.EnvSet, objectType, oldObjectType, paramsType *apiservercel.DeclType, hasParams bool) (*environment.EnvSet, error) {
 	request, namespace := plugincel.BuildRequestType(), plugincel.BuildNamespaceType()
 	opts := []celgo.EnvOption{
 		celgo.Variable(plugincel.NamespaceVarName, namespace.CelType()),
@@ -160,15 +231,18 @@ func typedEnvSet(base *environment.EnvSet, objectType, paramsType *apiservercel.
 		celgo.Variable("authorizer", library.AuthorizerType),
 	}
 	declTypes := []*apiservercel.DeclType{namespace, request}
-	if objectType != nil {
-		opts = append(opts,
-			celgo.Variable(plugincel.ObjectVarName, objectType.CelType()),
-			celgo.Variable(plugincel.OldObjectVarName, objectType.CelType()))
-		declTypes = append(declTypes, objectType)
-	} else {
-		opts = append(opts,
-			celgo.Variable(plugincel.ObjectVarName, celgo.DynType),
-			celgo.Variable(plugincel.OldObjectVarName, celgo.DynType))
+	for _, v := range []struct {
+		name string
+		typ  *apiservercel.DeclType
+	}{{plugincel.ObjectVarName, objectType}, {plugincel.OldObjectVarName, oldObjectType}} {
+		if v.typ == nil {
+			opts = append(opts, celgo.Variable(v.name, celgo.DynType))
+			continue
+		}
+		opts = append(opts, celgo.Variable(v.name, v.typ.CelType()))
+		if !slices.Contains(declTypes, v.typ) {
+			declTypes = append(declTypes, v.typ)
+		}
 	}
 	switch {
 	case paramsType != nil:

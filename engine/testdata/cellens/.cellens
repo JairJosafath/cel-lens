@@ -1,0 +1,15 @@
+# The types cel-lens assumes where Kubernetes gives dyn, for the e2e test.
+types:
+  - file: crd.yaml
+    document: CustomResourceDefinition widgets.example.com
+    version: v1
+    path: spec.config
+    type: int
+  - file: policy.yaml
+    document: ValidatingAdmissionPolicy limits
+    variable: params
+    type: "{spec: {max: int}}"
+  - file: policy.yaml
+    document: ValidatingAdmissionPolicy limits
+    variable: object
+    kind: apps/v1 Deployment

@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -249,6 +250,28 @@ func TestCRDsSet(t *testing.T) {
 	var nilSet *check.CRDs
 	if _, ok := nilSet.Schema("example.com/v1", "Widget"); ok {
 		t.Error("nil set has Widget")
+	}
+}
+
+// TestCRDsKinds checks that Kinds lists each version of each kind the CRDs
+// define once, sorted, with the schema's description (#4).
+func TestCRDsKinds(t *testing.T) {
+	t.Parallel()
+	described := strings.Replace(widgetCRD, "        openAPIV3Schema:\n          type: object\n", "        openAPIV3Schema:\n          description: A widget of the shop.\n          type: object\n", 1)
+	gadget := strings.NewReplacer("widgets.example.com", "gadgets.other.io", "group: example.com", "group: other.io", "Widget", "Gadget", "widget", "gadget").Replace(widgetCRD)
+	c := loadCRDs(t, map[string]string{"a.yaml": described, "b.yaml": widgetCRD, "c.yaml": gadget})
+	want := []check.CRDKind{
+		{Group: "example.com", Version: "v1", Kind: "Widget", CRD: "widgets.example.com", Description: "A widget of the shop."},
+		{Group: "example.com", Version: "v2", Kind: "Widget", CRD: "widgets.example.com"},
+		{Group: "other.io", Version: "v1", Kind: "Gadget", CRD: "gadgets.other.io"},
+		{Group: "other.io", Version: "v2", Kind: "Gadget", CRD: "gadgets.other.io"},
+	}
+	if got := c.Kinds(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Kinds() = %+v, want %+v", got, want)
+	}
+	var none *check.CRDs
+	if got := none.Kinds(); got != nil {
+		t.Errorf("nil Kinds() = %+v, want none", got)
 	}
 }
 

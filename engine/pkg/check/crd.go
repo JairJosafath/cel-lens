@@ -23,6 +23,10 @@ import (
 // its fieldPath, reason or message are placed on that value, the others on the
 // rule or messageExpression. The cost errors are replaced by one explained
 // problem per expression and one for the total; see costs.
+//
+// With assumed types for the CustomResourceDefinition (WithAssumedTypes), the
+// validation runs a second time on a copy with the types placed, and what only
+// that run finds in an expression is added as a warning (see addAssumed).
 func (r *reporter) crd(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression) error {
 	var versioned apiextensionsv1.CustomResourceDefinition
 	partial, err := r.read(ctx, node, &versioned)
@@ -30,8 +34,29 @@ func (r *reporter) crd(ctx context.Context, node *yaml.Node, exprs map[string]ex
 		return fmt.Errorf("read CustomResourceDefinition: %w", err)
 	}
 	apiextensionsv1.SetObjectDefaults_CustomResourceDefinition(&versioned)
+	base := len(r.diags)
+	if err := r.validateCRD(ctx, node, exprs, &versioned, partial); err != nil {
+		return err
+	}
+	types := r.assumedIn(node)
+	if len(types) == 0 {
+		return nil
+	}
+	placed, _ := placeCRD(crdSchemas(&versioned), types)
+	typed, ok := withAssumed(&versioned, placed)
+	if len(placed) == 0 || !ok {
+		return nil
+	}
+	return r.addAssumed(ctx, base, exprs, typesOfVersion(&versioned, types), func() error {
+		return r.validateCRD(ctx, node, exprs, typed, partial)
+	})
+}
+
+// validateCRD runs the API server's validation of versioned, read from node,
+// partial when read left wrong-typed fields out, and reports its errors.
+func (r *reporter) validateCRD(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression, versioned *apiextensionsv1.CustomResourceDefinition, partial bool) error {
 	var internal apiextensions.CustomResourceDefinition
-	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(&versioned, &internal, nil); err != nil {
+	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(versioned, &internal, nil); err != nil {
 		return fmt.Errorf("convert CustomResourceDefinition: %w", err)
 	}
 	var costErrs []*kfield.Error

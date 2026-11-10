@@ -1,0 +1,13 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: limits
+spec:
+  paramKind: {apiVersion: example.com/v1, kind: Limit}
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: ["*"], apiVersions: ["*"], resources: ["*"]}
+  validations:
+    - expression: "object.spec.replicas <= params.spec.max"
+    - expression: "params.spec.nosuch == 1"
+    - expression: "object.spec.nosuch == 1"

@@ -20,6 +20,8 @@ type Document struct {
 	roots []map[string]any
 	// crds are the custom resources a policy's params may be typed from.
 	crds *check.CRDs
+	// assumed are the types to assume where values are dyn (WithAssumedTypes).
+	assumed []check.AssumedType
 }
 
 // Option changes how Parse reads a file.
@@ -53,6 +55,9 @@ func Parse(ctx context.Context, file string, data []byte, opts ...Option) *Docum
 		}
 		var root map[string]any
 		if err := doc.Node.Decode(&root); err == nil {
+			if root["apiVersion"] == "apiextensions.k8s.io/v1" && root["kind"] == "CustomResourceDefinition" {
+				assumeInCRD(root, d.assumedFor(root))
+			}
 			d.roots[doc.Index] = root
 		}
 	}

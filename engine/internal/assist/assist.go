@@ -14,7 +14,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/ext"
 
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
@@ -36,6 +38,8 @@ type Assistant struct {
 	version kubeversion.Version
 	// features are the experimental features that are on.
 	features feature.Set
+	// parser parses expressions for Summaries; it has no declarations.
+	parser *cel.Env
 }
 
 // NewOption changes how New builds an Assistant.
@@ -56,7 +60,13 @@ func New(v kubeversion.Version, opts ...NewOption) (*Assistant, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Assistant{funcs: funcs, macros: macros, byName: make(map[string]function, len(funcs)), version: v}
+	// The macros of the Kubernetes CEL environment, so that an iteration
+	// variable stands for the items it ranges over.
+	parser, err := cel.NewEnv(cel.OptionalTypes(), ext.TwoVarComprehensions())
+	if err != nil {
+		return nil, fmt.Errorf("build the parser: %w", err)
+	}
+	a := &Assistant{funcs: funcs, macros: macros, byName: make(map[string]function, len(funcs)), version: v, parser: parser}
 	for _, o := range opts {
 		o(a)
 	}
@@ -387,14 +397,14 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 			return hover(declaration("field", word, resourceCheckType, requestResourceDesc))
 		}
 		if f := recv.known.field(word); isChain && recv.found && f != nil {
-			return hover(a.withDynReason(declaration("field", word, f.name(), withKinds(f.str("description"), f.kinds())), f))
+			return hover(a.withDynReason(declaration("field", word, assumedType(f), withAssumed(withKinds(f.str("description"), f.kinds()), f)), f))
 		}
 	case called:
 		return a.hoverFunction(word, false, a.argTypes(s.line, end, vars), hover)
 	default:
 		for _, v := range vars {
 			if v.name == word {
-				md := declaration("variable", word, v.typ(), v.desc)
+				md := declaration("variable", word, v.typ(), withAssumed(v.desc, v.schema))
 				if v.typeName == "" {
 					md = a.withDynReason(md, v.schema)
 				}

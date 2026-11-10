@@ -117,6 +117,88 @@ describe('CHANGELOG.md', () => {
     expect(sections.length).toBeGreaterThan(1);
   });
 
+  /** The part of the Unreleased section under the heading of `kind`. */
+  function unreleasedPart(kind: string): string | undefined {
+    const unreleased = CHANGELOG.split(/^(?=## \[)/m)[1] ?? '';
+    return unreleased.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
+  }
+
+  it.each([
+    '`cel-lens.inlineInfo`',
+    '**cel-lens: Toggle Inline Info**',
+    '**Give it a type**',
+    '**Write a schema in .cellens…** (OpenAPI), **Use a Go type…** and **Write a short type in .cellens…** first',
+    'open `.cellens` beside the rule',
+    'in the editor group that already shows it',
+    "with the engine's completion, hover and problems",
+    'each with its folder and doc comment',
+    'A Go type or a kind is written at once',
+    'the Go struct types of the workspace folder of the `.cellens`',
+    'has a **Back** button to it',
+    'A value of a CRD is offered `int` and `string` only',
+    'says so once, with a button to `cel-lens.serverPath`',
+    'where the two lines that write in `.cellens` open it at the entry',
+    '**Remove** removes the entry at once',
+    '**cel-lens: Give a Value a Type…**',
+    'how to give a type in each form',
+    '**Give it a type** can take an example',
+    'Under **Examples in the workspace**',
+    '`config/samples/limit.yaml` with `rules.example.com/v1 ReplicaLimit` and the line it starts at',
+    '**Paste an example…** opens an editor beside the rule, named after the value (such as **Example of params.yaml**) and kept in memory, so closing it never asks to save',
+    '**Use this example as the type** above it and in its editor title',
+    '**cel-lens: Use This Example as the Type** in the Command Palette, on that editor only',
+    "writes it as the value's `schema:`, and `.cellens` opens beside the rule at the entry",
+    'shows once as an information problem at its key in `.cellens`',
+    'Using a pasted example closes its editor; closing it writes nothing, even while the engine works on it, and a window reload closes the examples of the window before',
+    "A whole resource of the value's kind pasted for a value inside it, such as a ReplicaLimit for `params.spec.config`, gives the schema of that value, also from a YAML list of resources",
+    'a resource of another kind, such as an object reference, is the value itself',
+    "which the engine tells from the value's kinds and says in a note; when it does not know them, a paste with `apiVersion` and `kind` at its root is read as a resource",
+    'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; nothing is saved when the engine writes another `.cellens`',
+    'An engine too old to work out a type from an example says so, whenever the example is used',
+    'An example over 1 MiB, the most the engine reads, is refused before anything reads it',
+    'A part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule, selected',
+  ])('names %s under Added in the Unreleased section', (text) => {
+    expect(unreleasedPart('Added')).toContain(text);
+  });
+
+  it.each(['input box', 'Write a struct…', 'Pick a kind…', 'untitled', 'Use the whole'])(
+    'names no %s, which no release had, in the Unreleased section',
+    (text) => {
+      expect(unreleasedPart('Added')).not.toContain(text);
+    },
+  );
+
+  it.each([
+    'Vite 8.3.7 replaces 8.3.2',
+    'qs 6.17.1 replaces 6.16.0',
+    '`@azure/msal-node` 7.2.1 (with `@azure/identity` 4.14.1) replaces 6.0.1',
+    '`overrides` in `package.json` give `eslint`, `@eslint/config-array`, `@typescript-eslint/typescript-estree` and `@vscode/vsce` minimatch 11.0.5 in place of 10.2.6',
+    'GHSA-587h-7wmj-h5pm',
+    'GHSA-698v-4r3x-3vcv',
+    'GHSA-9jrq-w75r-8gcw',
+    'GHSA-r825-w8mm-5pxw',
+    'GHSA-rq7h-c2jc-7f22',
+    'GHSA-vfpm-58rq-9qcg',
+    'GHSA-6pq8-jhm2-2vcw (qs)',
+    'GHSA-xcx6-jx8p-x3h5 (`@azure/msal-node`)',
+    'GHSA-g3hv-75wg-m249 (minimatch)',
+    'One advisory stays, and does not apply',
+    '`vscode-languageclient`, which is part of the extension, keeps minimatch 10.2.6, as it calls `Minimatch.makeRe()`, which minimatch 11 removed, and has no release without it',
+    "a denial of service through a glob pattern an attacker chooses, and the client matches only the extension's own patterns and the ones the engine registers",
+    '`osv-scanner.toml` ignores it for that copy until 2027-03-01',
+    '`npm audit` still reports it, as 2 moderate vulnerabilities',
+    'The front page of JairJosafath/cel-lens (`public-repo/`) gains a CodeQL workflow',
+    "analyses the engine's Go, the extension's JavaScript and TypeScript, and the workflows on every push to `main`, on every pull request and every week",
+    "a Dependabot configuration, which proposes updates every week for the engine's Go modules, the extension's npm packages and the GitHub Actions",
+    'the minor and patch updates of each in one pull request and each major update in its own',
+    'a `govulncheck` job in CI, with the Go version of `engine/go.mod`, which fails on a call into code with a known vulnerability that `engine/osv-scanner.toml` does not leave aside',
+    'govulncheck has no ignore list, and an advisory without symbols marks every call into its module, so a script reads its JSON output against that file',
+    "the bump is made in the maintainers' source, the next published release carries it, and the pull request is not merged on GitHub",
+    'Its `SECURITY.md` says how the code and its dependencies are watched',
+  ])('names %s under Security in the Unreleased section', (text) => {
+    expect(unreleasedPart('Security')).toContain(text);
+  });
+
   it.each(
     sections.slice(0, sections.findIndex(({ version }) => version === OLDEST_PUBLIC_VERSION) + 1),
   )('ends with one link reference for $version', ({ version }) => {

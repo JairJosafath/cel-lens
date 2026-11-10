@@ -31,6 +31,13 @@ export function readmeImages(readme: string): ReadmeImage[] {
   }));
 }
 
+/** The files of the pictures still to take, each named in a `<!-- Picture to take: images/<file>, ... -->` placeholder, in order. */
+export function readmePicturePlaceholders(readme: string): string[] {
+  return [...readme.matchAll(/<!-- Picture to take: (images\/[^\s,]+)/g)].map(
+    (found) => found[1] ?? '',
+  );
+}
+
 /** The distinct Kubernetes versions such as `1.37` written in backticks, in order. */
 export function readmeKubernetesVersions(section: string): string[] {
   return [...new Set([...section.matchAll(/`(1\.\d+)`/g)].map((found) => found[1] ?? ''))];

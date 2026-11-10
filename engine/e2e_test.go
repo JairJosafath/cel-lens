@@ -281,3 +281,183 @@ func TestFallbackBuildLeavesNoDirectory(t *testing.T) {
 		t.Errorf("go test left %q in %s, want none", left, tmp)
 	}
 }
+
+// lspProcess is the built program serving the language server over stdio,
+// driven as an editor's language client drives it.
+type lspProcess struct {
+	t     *testing.T
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	r     *bufio.Reader
+}
+
+// startLSP starts the built program's language server; ctx ends it.
+func startLSP(ctx context.Context, t *testing.T) *lspProcess {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, buildBinary(t), "lsp", "--stdio", "--clientProcessId="+strconv.Itoa(os.Getpid())) //nolint:gosec // the binary make test built
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return &lspProcess{t: t, cmd: cmd, stdin: stdin, r: bufio.NewReader(stdout)}
+}
+
+func (p *lspProcess) send(msg map[string]any) {
+	p.t.Helper()
+	msg["jsonrpc"] = "2.0"
+	body, err := json.Marshal(msg)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(p.stdin, "Content-Length: %d\r\n\r\n%s", len(body), body); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
+// next reads messages until one satisfies match, and returns it.
+func (p *lspProcess) next(what string, match func(map[string]any) bool) map[string]any {
+	p.t.Helper()
+	for {
+		hdr, err := textproto.NewReader(p.r).ReadMIMEHeader()
+		if err != nil {
+			p.t.Fatalf("waiting for %s: %v", what, err)
+		}
+		n, err := strconv.Atoi(hdr.Get("Content-Length"))
+		if err != nil {
+			p.t.Fatalf("Content-Length %q: %v", hdr.Get("Content-Length"), err)
+		}
+		body := make([]byte, n)
+		if _, err := io.ReadFull(p.r, body); err != nil {
+			p.t.Fatal(err)
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(body, &msg); err != nil {
+			p.t.Fatal(err)
+		}
+		if match(msg) {
+			return msg
+		}
+	}
+}
+
+// call sends a request and returns its result.
+func (p *lspProcess) call(id int, method string, params map[string]any) any {
+	p.t.Helper()
+	p.send(map[string]any{"id": id, "method": method, "params": params})
+	return p.next("the response to "+method, func(m map[string]any) bool { return m["id"] == float64(id) })["result"]
+}
+
+// positionOf is the protocol position of the end of needle's first n
+// characters in text, which is ASCII.
+func positionOf(t *testing.T, text, needle string, n int) map[string]any {
+	t.Helper()
+	i := strings.Index(text, needle)
+	if i < 0 {
+		t.Fatalf("%q not in the text", needle)
+	}
+	before := text[:i+n]
+	return map[string]any{"line": strings.Count(before, "\n"), "character": len(before) - strings.LastIndex(before, "\n") - 1}
+}
+
+// TestBinaryLSPCellens runs the built program on the workspace
+// testdata/cellens, whose .cellens types values Kubernetes leaves dyn, and
+// checks the warnings, completion and hover those types bring (#2).
+func TestBinaryLSPCellens(t *testing.T) {
+	dir, err := filepath.Abs(filepath.Join("testdata", "cellens"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri := func(name string) string {
+		p := filepath.ToSlash(filepath.Join(dir, name))
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p // a Windows drive
+		}
+		return "file://" + p
+	}
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), sessionDeadline)
+	defer cancel()
+	p := startLSP(ctx, t)
+	p.call(1, "initialize", map[string]any{
+		"processId": os.Getpid(), "capabilities": map[string]any{},
+		"workspaceFolders": []map[string]any{{"uri": uri(""), "name": "cellens"}},
+	})
+	p.send(map[string]any{"method": "initialized", "params": map[string]any{}})
+	crd, policy := read("crd.yaml"), read("policy.yaml")
+	for name, text := range map[string]string{"crd.yaml": crd, "policy.yaml": policy} {
+		p.send(map[string]any{"method": "textDocument/didOpen", "params": map[string]any{
+			"textDocument": map[string]any{"uri": uri(name), "languageId": "yaml", "version": 1, "text": text},
+		}})
+	}
+	const note = ": the API server would not report this)"
+	want := map[string][]string{
+		uri("crd.yaml"): {"found no matching overload for 'startsWith' applied to 'int.(string)' (the type comes from .cellens:3" + note},
+		uri("policy.yaml"): {
+			"undefined field 'nosuch' (the type comes from .cellens:8" + note,
+			"undefined field 'nosuch' (the type comes from .cellens:12" + note,
+		},
+	}
+	// The search for .cellens files runs in the background, so the first
+	// diagnostics may come before it ends; the check when it ends follows.
+	got := map[string][]string{}
+	p.next("the diagnostics that use .cellens", func(m map[string]any) bool {
+		if m["method"] != "textDocument/publishDiagnostics" {
+			return false
+		}
+		params, _ := m["params"].(map[string]any)
+		list, _ := params["diagnostics"].([]any)
+		var messages []string
+		for _, d := range list {
+			d, _ := d.(map[string]any)
+			if d["severity"] != float64(2) {
+				t.Errorf("diagnostic %v is no warning", d)
+			}
+			messages = append(messages, fmt.Sprint(d["message"]))
+		}
+		got[fmt.Sprint(params["uri"])] = messages
+		for u, w := range want {
+			if !slices.Equal(got[u], w) {
+				return false
+			}
+		}
+		return true
+	})
+
+	items, _ := p.call(2, "textDocument/completion", map[string]any{
+		"textDocument": map[string]any{"uri": uri("policy.yaml")}, "position": positionOf(t, policy, "params.spec.max", len("params.spec.")),
+	}).([]any)
+	var labels []string
+	for _, it := range items {
+		it, _ := it.(map[string]any)
+		labels = append(labels, fmt.Sprint(it["label"]))
+	}
+	if !slices.Contains(labels, "max") {
+		t.Errorf("completion after params.spec. = %v, want max", labels)
+	}
+	hover, _ := p.call(3, "textDocument/hover", map[string]any{
+		"textDocument": map[string]any{"uri": uri("policy.yaml")}, "position": positionOf(t, policy, "params.spec.max", 2),
+	}).(map[string]any)
+	contents, _ := hover["contents"].(map[string]any)
+	if md := fmt.Sprint(contents["value"]); !strings.Contains(md, "(variable) params: {spec: {max: int}}") || !strings.Contains(md, "from .cellens, line 8") {
+		t.Errorf("hover on params = %q, want its type and that it is from .cellens, line 8", md)
+	}
+	p.call(4, "shutdown", nil)
+	p.send(map[string]any{"method": "exit"})
+	if err := p.cmd.Wait(); err != nil {
+		t.Errorf("%s lsp exited with %v, want exit code 0", name, err)
+	}
+}

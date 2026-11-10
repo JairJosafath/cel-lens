@@ -75,12 +75,16 @@ walked for `.yaml` and `.yml` files).
 | `--kube-version 1.34` | `kubernetesVersion` | The Kubernetes version the results match; the default is 1.37 |
 | `--format text\|json` | | `json` prints an array of `{file, start, end, severity, message}` instead of lines; the default is text |
 | `--experimental name,name` | `experimental` | Turns on experimental features (below) |
+| | `inlineInfo` | The line above each CEL expression (code lenses): its subject, whether it compiles, and `Give it a type` for a `dyn` value; `false` turns it off; the default is `true` |
 
 Exit code 0 means no errors (warnings do not count), 1 that errors were found,
 2 a usage or read error, 130 that the run was interrupted. Results go to
 stdout, diagnostics about the run to stderr. The language server takes its
 settings in `initializationOptions` and in the `settings` of
-`workspace/didChangeConfiguration`; a change re-checks every open document.
+`workspace/didChangeConfiguration`; a change of `kubernetesVersion` or
+`experimental` re-checks every open document, and one of `inlineInfo` shows or
+hides the lines: at once in a client that refreshes code lenses when asked
+(`workspace/codeLens/refresh`, as VS Code does), else when it next asks for them.
 
 ## Supported Kubernetes versions
 
@@ -102,11 +106,12 @@ Stable:
 | Feature | What it does |
 |---|---|
 | Checks of CEL | Compiles the CEL of `x-kubernetes-validations`, ValidatingAdmissionPolicy and MutatingAdmissionPolicy in the Kubernetes CEL environment, with the API server's messages and cost rules |
-| Language server | Diagnostics, hover, completion and quick fixes |
+| Language server | Diagnostics, hover, completion, quick fixes and inline info (a line above each CEL expression) |
 | Command-line check | `cel-lens-core check` on files and folders |
 | Kubernetes version | Results match the version picked with `--kube-version` or `kubernetesVersion` |
 | Typed `object`, `oldObject` and policy variables | Typed from the built-in kinds a policy matches |
 | Typed `params` of a built-in kind | Typed from `spec.paramKind` when it names a built-in kind |
+| Types from `.cellens` | The language server types the `dyn` values a `.cellens` file names, writes its entries for the editor through `workspace/applyEdit`, and guides its editing with completion, hover and problems as it is typed ([docs/cellens.md](docs/cellens.md)) |
 
 Experimental:
 
@@ -119,12 +124,17 @@ Experimental:
 How the types of `object`, `params` and the policy variables are found is in
 [docs/type-sources.md](docs/type-sources.md), which also reports how many
 expressions of real policies still get `dyn`, and why.
+Where a value stays `dyn`, a `.cellens` file can say what it looks like, as a
+CEL type, a Kubernetes kind, an OpenAPI schema written as a CRD's, or a Go type
+of the repository ([docs/cellens.md](docs/cellens.md)); the language server then
+checks, completes and explains it with that type, and what only that type shows
+is a warning that names the `.cellens` line.
 
 ## Other editors
 
 `cel-lens-core lsp` serves the Language Server Protocol over stdio, for any
-editor with a language client: diagnostics, hover, completion and quick fixes for
-the CEL in Kubernetes YAML. It takes `--stdio` (the default and only transport)
+editor with a language client: diagnostics, hover, completion, quick fixes and
+inline info (code lenses) for the CEL in Kubernetes YAML. It takes `--stdio` (the default and only transport)
 and `--clientProcessId=<pid>`; `--socket`, `--pipe` and `--node-ipc` are
 refused with exit code 2. VS Code users install the cel-lens extension, which
 ships the engine. See [docs/engine.md](docs/engine.md) for what the server does.
@@ -138,6 +148,7 @@ ships the engine. See [docs/engine.md](docs/engine.md) for what the server does.
 - Schemas for `object` that follow `--kube-version`: they are those of the
   bundled `k8s.io/api`.
 - Transports other than stdio for the language server.
+- `.cellens` types in `cel-lens-core check`: only the language server reads them.
 
 ## Contributing
 

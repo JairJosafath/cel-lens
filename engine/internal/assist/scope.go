@@ -36,7 +36,7 @@ func (v variable) typ() string {
 	if v.typeName != "" {
 		return v.typeName
 	}
-	return v.schema.name()
+	return assumedType(v.schema)
 }
 
 // scope returns the variables the expression e of doc can use, with the
@@ -51,7 +51,10 @@ func scope(doc *Document, e extract.Expression, v kubeversion.Version, on featur
 	case "CustomResourceDefinition":
 		return crdScope(root, e, on.Has(feature.FittingCompletion))
 	case "ValidatingAdmissionPolicy", "MutatingAdmissionPolicy":
-		return policyScope(root, e, v, doc.crds, on.Has(feature.CRDTypedPolicies))
+		assumed := doc.assumedFor(root)
+		vars := newPolicyTypes(root, v, doc.crds, on.Has(feature.CRDTypedPolicies), nil, assumed).scope(e, true)
+		assumeInPolicy(vars, assumed)
+		return vars
 	}
 	return nil
 }
@@ -109,32 +112,87 @@ func hasSegment(path, name string) bool {
 	return ok && (rest == "" || rest[0] == '.' || rest[0] == '[')
 }
 
-// policyScope declares the variables of the admission CEL environment:
-// params only when the policy has a paramKind, variables only for the
-// expressions that may use them.
-func policyScope(root map[string]any, e extract.Expression, v kubeversion.Version, crds *check.CRDs, typeFromCRDs bool) []variable {
+// policyTypes are what the variables of a policy's expressions are made of
+// that is the same for every expression: the kinds it matches, its params and
+// the types of all its variables. Working them out is most of the cost of a
+// scope, so Summaries does it once per policy. The zero value is not ready;
+// newPolicyTypes makes one.
+type policyTypes struct {
+	root, spec map[string]any
+	kinds      kindsSchema
+	params     *variable // nil without spec.paramKind
+	version    kubeversion.Version
+	crds       *check.CRDs // nil unless crd-typed-policies is on
+	// assumed are the types .cellens assumes for the policy, which type its
+	// variables too (see variables).
+	assumed []check.AssumedType
+	// typed are the variables of spec.variables as check.VariableTypes types
+	// them, worked out when first needed (see variables); typedErr is set
+	// when it cannot type them, and they are then dyn.
+	typed    *[]check.Variable
+	typedErr error
+}
+
+// newPolicyTypes works out the policyTypes of root, a policy, for Kubernetes
+// version v, typing from the CustomResourceDefinitions in crds when
+// typeFromCRDs, and its variables with the types assumed for it. kinds, when
+// not nil, keeps the matched kinds by the match rules that give them, for the
+// other policies of the same call. scope declares the variables of the
+// admission CEL environment: params only when the policy has a paramKind,
+// variables only for the expressions that may use them.
+func newPolicyTypes(root map[string]any, v kubeversion.Version, crds *check.CRDs, typeFromCRDs bool, kinds map[string]kindsSchema, assumed []check.AssumedType) *policyTypes {
 	policySpec, _ := root["spec"].(map[string]any)
-	kinds := matchedKinds(policySpec, crds, typeFromCRDs)
-	if !typeFromCRDs {
-		crds = nil
+	p := &policyTypes{root: root, spec: policySpec, kinds: cachedKinds(kinds, policySpec, crds, typeFromCRDs), version: v, assumed: assumed}
+	if typeFromCRDs {
+		p.crds = crds
 	}
-	object := variable{name: "object", desc: "The object being admitted; null on DELETE.", typeName: kinds.name, schema: kinds.schema}
-	oldObject := variable{name: "oldObject", desc: "The existing object; null on CREATE.", typeName: kinds.name, schema: kinds.schema}
+	if policySpec["paramKind"] != nil {
+		params := paramsVariable(policySpec["paramKind"], p.crds, typeFromCRDs)
+		p.params = &params
+	}
+	return p
+}
+
+// cachedKinds is matchedKinds, kept in cache by the match rules and
+// typeFromCRDs when cache is not nil.
+func cachedKinds(cache map[string]kindsSchema, policySpec map[string]any, crds *check.CRDs, typeFromCRDs bool) kindsSchema {
+	if cache == nil {
+		return matchedKinds(policySpec, crds, typeFromCRDs)
+	}
+	constraints, _ := policySpec["matchConstraints"].(map[string]any)
+	key, err := json.Marshal([]any{constraints["resourceRules"], typeFromCRDs})
+	if err != nil {
+		return matchedKinds(policySpec, crds, typeFromCRDs)
+	}
+	if k, ok := cache[string(key)]; ok {
+		return k
+	}
+	k := matchedKinds(policySpec, crds, typeFromCRDs)
+	cache[string(key)] = k
+	return k
+}
+
+// scope declares the variables the expression e of the policy can use; all
+// of them unless withVariables is false, which leaves out variables, the one
+// whose types cost most to work out.
+func (p *policyTypes) scope(e extract.Expression, withVariables bool) []variable {
+	object := variable{name: "object", desc: "The object being admitted; null on DELETE.", typeName: p.kinds.name, schema: p.kinds.schema}
+	oldObject := variable{name: "oldObject", desc: "The existing object; null on CREATE.", typeName: p.kinds.name, schema: p.kinds.schema}
 	vars := []variable{
 		object, oldObject,
 		{name: "request", desc: "The attributes of the admission request.", typeName: "kubernetes.AdmissionRequest", schema: requestType(false)},
 		{name: "namespaceObject", desc: "The namespace the object belongs to; null for cluster-scoped objects.", typeName: "kubernetes.Namespace", schema: namespaceType()},
 		{name: "authorizer", desc: "Checks what the requesting user may do; start with authorizer.group(...), authorizer.path(...) or authorizer.serviceAccount(...). authorizer.requestResource checks the resource of the request.", typeName: authorizerType, celType: authorizerType},
 	}
-	if policySpec["paramKind"] != nil {
-		vars = append(vars, paramsVariable(policySpec["paramKind"], crds, typeFromCRDs))
+	if p.params != nil {
+		vars = append(vars, *p.params)
 	}
-	if strings.HasPrefix(e.FieldPath, "spec.matchConditions[") {
+	if !withVariables || strings.HasPrefix(e.FieldPath, "spec.matchConditions[") {
 		return vars
 	}
 	return append(vars, variable{
 		name: "variables", desc: "The policy variables of spec.variables, by name.", typeName: "kubernetes.variables",
-		schema: policyVariables(root, e, v, crds), sources: variableSources(policySpec, e),
+		schema: p.variables(e), sources: variableSources(p.spec, e),
 	})
 }
 
@@ -157,18 +215,23 @@ func variableSources(policySpec map[string]any, e extract.Expression) map[string
 	return out
 }
 
-// policyVariables returns the schema of variables for e: a property for each
+// variables returns the schema of variables for e: a property for each
 // variable of spec.variables that e may use, each typed by its expression as
-// the API server types it (see check.VariableTypes). When the policy cannot be
+// the API server types it with the types assumed for the policy (see
+// check.VariableTypes). A variable whose type follows from those types is
+// marked as inferred from them (see inferred). When the policy cannot be
 // compiled to types, the properties are dyn.
-func policyVariables(root map[string]any, e extract.Expression, v kubeversion.Version, crds *check.CRDs) schema {
-	policySpec, _ := root["spec"].(map[string]any)
-	typed, err := check.VariableTypes(context.Background(), root, check.WithVersion(v), check.WithCRDs(crds), check.WithFeatures(feature.Of(feature.CRDTypedPolicies)))
-	if err != nil {
-		return variablesType(policySpec, e)
+func (p *policyTypes) variables(e extract.Expression) schema {
+	if p.typed == nil {
+		typed, err := check.VariableTypes(context.Background(), p.root, check.WithVersion(p.version), check.WithCRDs(p.crds),
+			check.WithFeatures(feature.Of(feature.CRDTypedPolicies)), check.WithAssumedTypes(p.assumed))
+		p.typed, p.typedErr = &typed, err
+	}
+	if p.typedErr != nil {
+		return variablesType(p.spec, e)
 	}
 	props := map[string]any{}
-	for i, tv := range typed {
+	for i, tv := range *p.typed {
 		if limit := variableLimit(e); limit >= 0 && i >= limit {
 			break
 		}
@@ -182,8 +245,14 @@ func policyVariables(root map[string]any, e extract.Expression, v kubeversion.Ve
 			s[dynKey] = string(reasonVarUncompiled)
 		case check.DynKindsDiffer:
 			s[dynKey] = string(reasonVarKinds)
+		case check.DynAssumedUncompiled:
+			s[dynKey] = string(reasonVarAssumed)
+			failsWith(s, tv)
 		}
 		s["description"] = fmt.Sprintf("Policy variable %s, defined in spec.variables by %#q.", tv.Name, tv.Expression)
+		if len(tv.Assumed) > 0 && tv.Dyn == "" {
+			s = inferred(s, tv)
+		}
 		props[tv.Name] = s
 	}
 	return schema{"type": "object", "properties": props}

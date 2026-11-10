@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { EXAMPLE_SCHEME, USE_EXAMPLE_COMMAND } from './example_editor';
+
 interface Command {
   command: string;
   title: string;
@@ -15,17 +17,38 @@ interface Setting {
 interface Manifest {
   contributes: {
     commands: Command[];
-    menus: { commandPalette: { command: string; when: string }[] };
+    menus: {
+      commandPalette: { command: string; when: string }[];
+      'editor/title'?: { command: string; when: string; group?: string }[];
+    };
     configuration: { properties: Record<string, Setting> };
   };
 }
 
 const MANIFEST = JSON.parse(readFileSync('package.json', 'utf8')) as Manifest;
 const { commands, menus, configuration } = MANIFEST.contributes;
-const INTERNAL_COMMANDS: string[] = [];
+const INTERNAL_COMMANDS = [
+  'cel-lens.showRule',
+  'cel-lens.listValues',
+  'cel-lens.giveType',
+  'cel-lens.editType',
+  'cel-lens.removeType',
+];
 const SHOWN_WITHOUT_YAML = ['cel-lens.showLogs'];
+/** Shown only on the editor of a pasted example, whatever its language. */
+const SHOWN_ON_EXAMPLES = ['cel-lens.useExample'];
 const SETTINGS = Object.entries(configuration.properties);
-const TITLE_VERBS = ['Choose', 'Pick', 'Restart', 'Show'];
+const TITLE_VERBS = [
+  'Choose',
+  'Edit',
+  'Give',
+  'Pick',
+  'Remove',
+  'Restart',
+  'Show',
+  'Toggle',
+  'Use',
+];
 
 function startsWithVerb(title: string): boolean {
   return TITLE_VERBS.includes(title.split(' ')[0] ?? '');
@@ -62,6 +85,8 @@ describe('commands in package.json', () => {
         expect(entry?.when).toBe('false');
       } else if (SHOWN_WITHOUT_YAML.includes(name)) {
         expect(entry?.when).toBe('true');
+      } else if (SHOWN_ON_EXAMPLES.includes(name)) {
+        expect(entry?.when).toBe('resourceScheme == cel-lens-example');
       } else {
         expect(entry?.when).toContain('editorLangId == yaml');
       }
@@ -69,11 +94,32 @@ describe('commands in package.json', () => {
   );
 });
 
+describe('Use This Example as the Type', () => {
+  const where = `resourceScheme == ${EXAMPLE_SCHEME}`;
+
+  it('shows in the Command Palette only on the editor of a pasted example, by its scheme (#14)', () => {
+    expect(menus.commandPalette.find((e) => e.command === USE_EXAMPLE_COMMAND)?.when).toBe(where);
+  });
+
+  it('is the one icon of the editor title, shown only on the editor of a pasted example, by its scheme (#14)', () => {
+    expect(menus['editor/title']).toEqual([
+      { command: USE_EXAMPLE_COMMAND, when: where, group: 'navigation' },
+    ]);
+    expect(commands.find((c) => c.command === USE_EXAMPLE_COMMAND)).toEqual({
+      command: USE_EXAMPLE_COMMAND,
+      title: 'Use This Example as the Type',
+      category: 'cel-lens',
+      icon: '$(check)',
+    });
+  });
+});
+
 describe('settings in package.json', () => {
-  it('puts the color style first and the Kubernetes version second', () => {
+  it('puts the color style first, the inline info second and the Kubernetes version third', () => {
     const ordered = [...SETTINGS].sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0));
-    expect(ordered.slice(0, 2).map(([key]) => key)).toEqual([
+    expect(ordered.slice(0, 3).map(([key]) => key)).toEqual([
       'cel-lens.colorStyle',
+      'cel-lens.inlineInfo',
       'cel-lens.kubernetesVersion',
     ]);
   });

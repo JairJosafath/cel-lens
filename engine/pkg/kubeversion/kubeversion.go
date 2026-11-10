@@ -58,6 +58,9 @@ func Parse(s string) (Version, error) {
 // String returns the version as 1.<minor>.
 func (v Version) String() string { return "1." + strconv.Itoa(v.get().minor) }
 
+// Minor returns the minor version: 37 for 1.37.
+func (v Version) Minor() int { return v.get().minor }
+
 func (v Version) get() Version {
 	if v.minor == 0 {
 		return Default()
