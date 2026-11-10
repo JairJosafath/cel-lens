@@ -149,6 +149,7 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
   const initialized = await Promise.race([
     connection.sendRequest(InitializeRequest.type, {
       processId: process.pid,
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- LSP still requires rootUri, deprecated as it is: the type has no way to leave it out, and the extension's client sends it too
       rootUri: null,
       workspaceFolders:
         options.folder === undefined
