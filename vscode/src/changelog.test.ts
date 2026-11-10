@@ -195,6 +195,13 @@ describe('CHANGELOG.md', () => {
     'govulncheck has no ignore list, and an advisory without symbols marks every call into its module, so a script reads its JSON output against that file',
     "the bump is made in the maintainers' source, the next published release carries it, and the pull request is not merged on GitHub",
     'Its `SECURITY.md` says how the code and its dependencies are watched',
+    'The files of each release of JairJosafath/cel-lens get a signature',
+    'gains a `sign-release.yml` workflow, which runs when a release is published, and by hand with a `tag` for the releases already out',
+    "signs each with Sigstore under the workflow's own identity, so there is no key to keep, verifies each signature it made, and uploads them beside the files, each named after its file with `.sigstore.json` after it",
+    'A second run replaces the signatures and signs none of them, and a release without a file to sign fails the run',
+    'Its `SECURITY.md` gains "Verifying a release": the `cosign verify-blob` command for a downloaded file',
+    "the file is the one the repository's workflow saw when it signed it, not how the file was built",
+    'Its README points there from Install',
   ])('names %s under Security in the Unreleased section', (text) => {
     expect(unreleasedPart('Security')).toContain(text);
   });
