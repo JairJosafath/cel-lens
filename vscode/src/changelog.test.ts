@@ -169,6 +169,18 @@ describe('CHANGELOG.md', () => {
   );
 
   it.each([
+    'take the minor and patch updates Dependabot proposed',
+    '`@vscode/vsce` 4.1.0, eslint 10.14.0, playwright 1.65.0, prettier 3.9.10, tinybench 6.2.3, typescript-eslint 8.72.1, vitest 5.1.0 and `vscode-languageserver-protocol` 3.18.5',
+    '`@types/vscode` stays 1.100.0, the VS Code that `engines.vscode` asks for',
+    'None of them is part of the extension',
+    'pin `github/codeql-action` v4.39.3, `actions/checkout` v7.0.1, `actions/setup-go` v7.0.0 and `actions/setup-node` v7.1.0, each at the commit of its release',
+    'Its Dependabot configuration no longer proposes `@types/vscode`, which moves by hand with `engines.vscode`',
+    "nor a major of `@types/node`, which moves by hand with the Node of VS Code's extension host",
+  ])('names %s under Changed in the Unreleased section', (text) => {
+    expect(unreleasedPart('Changed')).toContain(text);
+  });
+
+  it.each([
     'Vite 8.3.7 replaces 8.3.2',
     'qs 6.17.1 replaces 6.16.0',
     '`@azure/msal-node` 7.2.1 (with `@azure/identity` 4.14.1) replaces 6.0.1',

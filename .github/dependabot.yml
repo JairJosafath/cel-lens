@@ -26,6 +26,15 @@ updates:
       vscode-minor-and-patch:
         patterns: ['*']
         update-types: [minor, patch]
+    ignore:
+      # @types/vscode may not be newer than engines.vscode in package.json, or
+      # the extension does not package. The two move together, by hand, when
+      # the extension asks for a newer VS Code.
+      - dependency-name: '@types/vscode'
+      # The major of @types/node names a Node version. It moves by hand, with
+      # the Node of VS Code's extension host; its other updates are proposed.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /

@@ -35,6 +35,17 @@ const WORKFLOW_PATHS = HAS_FOLDER
       .map((name) => `${WORKFLOWS}/${name}`)
   : [];
 const SHA_PINNED = /^[^@\s]+@[0-9a-f]{40}$/;
+// The commit of the release each action is pinned at, with the release in its comment: one pin per
+// action, whichever workflow uses it.
+const PINS: Record<string, string> = {
+  'actions/checkout': '3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+  'actions/setup-go': 'b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0',
+  'actions/setup-node': '949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0',
+  'github/codeql-action': '33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3',
+  'golang/govulncheck-action': '032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0',
+  'ossf/scorecard-action': 'fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0',
+  'sigstore/cosign-installer': '756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3',
+};
 const REPOSITORY = 'JairJosafath/cel-lens';
 const SIGNING_WORKFLOW = `${REPOSITORY}/.github/workflows/sign-release.yml`;
 // The identity in the certificate Sigstore gives a run of the signing workflow, up to the ref the
@@ -484,6 +495,32 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
   });
 
   it.each(WORKFLOW_PATHS)(
+    'pins each action of %s at the commit and release every workflow pins it at',
+    (path) => {
+      const pins = readFileSync(path, 'utf8')
+        .split('\n')
+        .filter((line) => line.includes('uses:'))
+        .map((line) => line.replace(/^.*uses: /, ''));
+
+      // An action is the repository, also when the step names a folder of it.
+      expect(pins).toEqual(
+        pins.map((pin) => {
+          const path = pin.split('@')[0] ?? '';
+          return `${path}@${PINS[path.split('/').slice(0, 2).join('/')] ?? 'an action the table lacks'}`;
+        }),
+      );
+    },
+  );
+
+  it.each(Object.keys(PINS))('uses %s in a workflow, so its pin is one that is read', (action) => {
+    const used = WORKFLOW_PATHS.flatMap((path) => usesOf(readWorkflow(path)));
+
+    expect(used.some((use) => use.startsWith(`${action}@`) || use.startsWith(`${action}/`))).toBe(
+      true,
+    );
+  });
+
+  it.each(WORKFLOW_PATHS)(
     'has no expression inside a script of %s: what a script needs comes through env',
     (path) => {
       expect(scriptsOf(readWorkflow(path)).filter((script) => script.includes('${{'))).toEqual([]);
@@ -566,16 +603,16 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
 
   it('pins checkout, setup-go and the two CodeQL actions at the commits of their releases', () => {
     expect(usesOf(readWorkflow(CODEQL_PATH))).toEqual([
-      'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803',
-      'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16',
-      'github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370',
-      'github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370',
+      'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e',
+      'github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066',
+      'github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066',
     ]);
     expect(readFileSync(CODEQL_PATH, 'utf8').match(/# v[\d.]+$/gm)).toEqual([
-      '# v6.1.0',
-      '# v6.5.0',
-      '# v4.39.1',
-      '# v4.39.1',
+      '# v7.0.1',
+      '# v7.0.0',
+      '# v4.39.3',
+      '# v4.39.3',
     ]);
   });
 
@@ -590,6 +627,20 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       expect.stringMatching(/^[1-5]?[1-9] \d\d? \* \* [0-6]$/),
     );
     expect(codeql.concurrency).toEqual(NEWER_RUNS_CANCEL_OLDER);
+  });
+
+  it('uploads the Scorecard results with the CodeQL action of the CodeQL workflow, after a checkout that keeps no credentials', () => {
+    const steps = readWorkflow(SCORECARD_PATH).jobs?.['scorecard']?.steps ?? [];
+
+    expect(steps.map((step) => step.uses)).toEqual([
+      'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e',
+      'github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066',
+    ]);
+    expect(steps[0]?.with).toEqual({ 'persist-credentials': false });
+    expect(readFileSync(SCORECARD_PATH, 'utf8')).toContain(
+      'github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3',
+    );
   });
 
   it('runs the Scorecard action weekly and on demand, not on push', () => {
@@ -855,6 +906,49 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       'build(vscode)',
       'ci',
     ]);
+  });
+
+  it('has Dependabot propose no @types/vscode and no major of @types/node for the extension, and ignore nothing else', () => {
+    const config = parse(readFileSync(DEPENDABOT_PATH, 'utf8')) as {
+      updates: { ignore?: unknown }[];
+    };
+
+    expect(config.updates.map((update) => update.ignore)).toEqual([
+      undefined,
+      [
+        { 'dependency-name': '@types/vscode' },
+        { 'dependency-name': '@types/node', 'update-types': ['version-update:semver-major'] },
+      ],
+      undefined,
+    ]);
+  });
+
+  it.each([
+    ['@types/vscode', /engines\.vscode/, /by hand/],
+    ['@types/node', /the Node of VS Code's extension host/, /by hand/],
+  ])('says above the entry of %s in dependabot.yml why it is ignored', (name, ...reasons) => {
+    const text = readFileSync(DEPENDABOT_PATH, 'utf8');
+    const entry = text.indexOf(`- dependency-name: '${name}'`);
+    const before = text.slice(0, entry).split('\n').slice(0, -1);
+    // The comment lines right above the entry.
+    const comment = before
+      .slice(before.findLastIndex((line) => !line.trim().startsWith('#')) + 1)
+      .map((line) => line.trim().replace(/^# ?/, ''))
+      .join(' ');
+
+    expect(entry).toBeGreaterThan(-1);
+    for (const reason of reasons) {
+      expect(comment).toMatch(reason);
+    }
+  });
+
+  it('keeps @types/vscode at the VS Code that engines.vscode asks for, which is why it moves by hand', () => {
+    const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as {
+      engines: { vscode: string };
+      devDependencies: Record<string, string>;
+    };
+
+    expect(manifest.engines.vscode).toBe(`^${manifest.devDependencies['@types/vscode'] ?? ''}`);
   });
 
   it('groups the minor and patch updates of each ecosystem in one pull request, and leaves majors on their own', () => {
