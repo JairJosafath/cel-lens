@@ -46,43 +46,83 @@ const TAG = 'core-v0.27.0';
 // A run for a published release starts from the release's tag, a run by hand from main.
 const TAG_REF = `refs/tags/${TAG}`;
 const MAIN_REF = 'refs/heads/main';
-// What the runner makes of the expressions in the env of the signing step.
-const EXPRESSIONS: Record<string, string> = {
-  '${{ github.token }}': 'a-token',
-  '${{ github.event.release.tag_name || inputs.tag }}': TAG,
-};
+// The expression that gives the signing step its tag.
+const TAG_EXPRESSION = '${{ github.event.release.tag_name || inputs.tag }}';
 // The files of a release, in the order the shell lists them.
 const RELEASE_FILES = {
   'cel-lens-core_v0.27.0_linux_amd64': 'the engine',
   'checksums.txt': 'the sums',
 };
-// A stand-in for gh, where a release is the folder $RELEASE. As gh does, it fails to download a
-// release without files, and to upload over a file of the release unless --clobber says so.
+// A stand-in for gh, where the release of a tag is the folder $RELEASES/<tag>. It reads its
+// arguments as gh does: up to a --, one that starts with a dash is a flag, and the others are the
+// tag, then the files. As gh does, it downloads from the latest release when it gets no tag, the
+// source in place of the files with --archive, fails on a tag without a release and on a release
+// without files, and uploads over a file of the release only with --clobber.
 const GH = [
   '#!/bin/bash',
   'set -eu',
   'echo "gh $*" >>"$CALLS"',
-  'case "$1 $2" in',
+  'command="$1 $2"',
+  'shift 2',
+  'dir=.',
+  'clobber=false',
+  'archive=false',
+  'names=()',
+  'while [ $# -gt 0 ]; do',
+  '  case "$1" in',
+  '  --repo) shift ;;',
+  '  --dir)',
+  '    dir=$2',
+  '    shift',
+  '    ;;',
+  '  --clobber) clobber=true ;;',
+  '  --archive=*) archive=true ;;',
+  '  --)',
+  '    shift',
+  '    names+=("$@")',
+  '    break',
+  '    ;;',
+  '  -*)',
+  '    echo "unknown flag: $1" >&2',
+  '    exit 1',
+  '    ;;',
+  '  *) names+=("$1") ;;',
+  '  esac',
+  '  shift',
+  'done',
+  'case "$command" in',
   "'release download')",
-  '  if [ -z "$(ls "$RELEASE")" ]; then',
-  "    echo 'no assets to download' >&2",
+  '  release="$RELEASES/${names[0]:-$(ls "$RELEASES" | tail -n 1)}"',
+  '  if [ ! -d "$release" ]; then',
+  "    echo 'release not found' >&2",
   '    exit 1',
   '  fi',
-  '  while [ "$1" != --dir ]; do',
-  '    shift',
-  '  done',
-  '  mkdir "$2"',
-  '  cp "$RELEASE"/* "$2/"',
+  '  mkdir "$dir"',
+  '  if $archive; then',
+  '    echo "the source of ${release##*/}" >"$dir/source.zip"',
+  '  elif [ -z "$(ls "$release")" ]; then',
+  "    echo 'no assets to download' >&2",
+  '    exit 1',
+  '  else',
+  '    cp "$release"/* "$dir/"',
+  '  fi',
   '  ;;',
   "'release upload')",
-  '  for file in "$@"; do',
-  '    if [ -f "$file" ]; then',
-  '      if [ -e "$RELEASE/${file##*/}" ] && [[ " $* " != *" --clobber "* ]]; then',
-  '        echo "asset under the same name already exists: ${file##*/}" >&2',
-  '        exit 1',
-  '      fi',
-  '      cp "$file" "$RELEASE/"',
+  '  if [ ${#names[@]} -lt 2 ]; then',
+  "    echo 'requires at least 2 arg(s)' >&2",
+  '    exit 1',
+  '  fi',
+  '  release="$RELEASES/${names[0]}"',
+  '  if [ -z "${names[0]}" ] || [ ! -d "$release" ]; then',
+  "    echo 'release not found' >&2",
+  '    exit 1',
+  '  fi',
+  '  for file in "${names[@]:1}"; do',
+  '    if [ -e "$release/${file##*/}" ] && ! $clobber; then',
+  '      echo "asset under the same name already exists: ${file##*/}" >&2',
+  '      exit 1',
   '    fi',
+  '    cp "$file" "$release/"',
   '  done',
   '  ;;',
   'esac',
@@ -227,16 +267,25 @@ function badges(readme: string): string[] {
   );
 }
 
+// Whether the command SECURITY.md gives to verify a release accepts a signature made under the
+// identity.
+function verifies(identity: string): boolean {
+  const section = sectionOf(readFileSync(`${FOLDER}/SECURITY.md`, 'utf8'), 'Verifying a release');
+  const pattern = /--certificate-identity-regexp '([^']+)'/.exec(section)?.[1];
+  return pattern !== undefined && new RegExp(pattern).test(identity);
+}
+
 let layout: string | undefined;
 let sandbox: string | undefined;
 
-// A release with these files, and the stand-ins for gh and cosign that work on it.
-function publish(files: Record<string, string>): string {
+// A repository whose one release has these files, and the stand-ins for gh and cosign that work
+// on it.
+function publish(files: Record<string, string>, tag = TAG): string {
   const root = mkdtempSync(join(tmpdir(), 'sign-release-'));
   sandbox = root;
-  mkdirSync(join(root, 'release'));
+  mkdirSync(join(root, 'releases', tag), { recursive: true });
   for (const [name, text] of Object.entries(files)) {
-    writeFileSync(join(root, 'release', name), text);
+    writeFileSync(join(root, 'releases', tag, name), text);
   }
   mkdirSync(join(root, 'bin'));
   for (const [name, text] of Object.entries({ gh: GH, cosign: COSIGN })) {
@@ -251,18 +300,27 @@ interface Signing {
   stderr: string;
   // Every call of gh and cosign, as it was typed.
   calls: string[];
-  // The files of the release after the run, each with its text.
+  // The files of the repository's release after the run, each with its text.
   release: Record<string, string>;
 }
 
-// One run of the signing step's script on the release, as the runner runs it: bash -e in an empty
-// folder, with the step's env, the runner's own variables and nothing else the script could read.
-// The workflow ran from the ref; cosign's verify-blob answers the status.
-function sign(root: string, ref: string, verifyStatus = 0): Signing {
+// One run of the signing step's script, as the runner runs it: bash -e in an empty folder, with the
+// step's env, the runner's own variables and nothing else the script could read. The workflow ran
+// from the ref, for the tag; cosign's verify-blob answers the status.
+function sign(
+  root: string,
+  ref: string,
+  { tag = TAG, verifyStatus = 0 }: { tag?: string; verifyStatus?: number } = {},
+): Signing {
   const step = readWorkflow(SIGN_RELEASE_PATH).jobs?.['sign']?.steps?.at(-1);
   const script = join(root, 'step.sh');
   const calls = join(root, 'calls');
-  const release = join(root, 'release');
+  const releases = join(root, 'releases');
+  const release = join(releases, readdirSync(releases)[0] ?? '');
+  const expressions: Record<string, string> = {
+    '${{ github.token }}': 'a-token',
+    [TAG_EXPRESSION]: tag,
+  };
   writeFileSync(script, step?.run ?? 'exit 64');
   writeFileSync(calls, '');
   const run = spawnSync('/bin/bash', ['-e', script], {
@@ -270,14 +328,15 @@ function sign(root: string, ref: string, verifyStatus = 0): Signing {
     encoding: 'utf8',
     env: {
       ...Object.fromEntries(
-        Object.entries(step?.env ?? {}).map(([name, value]) => [name, EXPRESSIONS[value] ?? value]),
+        Object.entries(step?.env ?? {}).map(([name, value]) => [name, expressions[value] ?? value]),
       ),
       PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
       LC_ALL: 'C',
       GITHUB_REPOSITORY: REPOSITORY,
+      GITHUB_REF: ref,
       GITHUB_WORKFLOW_REF: `${SIGNING_WORKFLOW}@${ref}`,
       CALLS: calls,
-      RELEASE: release,
+      RELEASES: releases,
       VERIFY_STATUS: String(verifyStatus),
     },
   });
@@ -581,31 +640,30 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(readFileSync(SIGN_RELEASE_PATH, 'utf8')).toContain(
       'sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3',
     );
-    expect(steps[1]?.env).toEqual({
-      GH_TOKEN: '${{ github.token }}',
-      TAG: '${{ github.event.release.tag_name || inputs.tag }}',
-    });
+    expect(steps[1]?.env).toEqual({ GH_TOKEN: '${{ github.token }}', TAG: TAG_EXPRESSION });
     expect(steps[1]?.run?.split('\n')[0]).toBe('set -euo pipefail');
   });
 
   it.each([
     ['a release is published', TAG_REF],
     ['it is run by hand from main', MAIN_REF],
+    ['it is run by hand from another tag', 'refs/tags/vscode-v0.36.0'],
   ])(
     'signs each file of the release when %s, checks each signature against the identity of its own run, then uploads the signatures',
     (_when, ref) => {
       const names = Object.keys(RELEASE_FILES);
       const signing = sign(publish(RELEASE_FILES), ref);
 
+      expect(verifies(`${SIGNER}@${ref}`)).toBe(true);
       expect(signing.stderr).toBe('');
       expect(signing.status).toBe(0);
       expect(signing.calls).toEqual([
-        `gh release download ${TAG} --repo ${REPOSITORY} --dir assets`,
+        `gh release download --repo ${REPOSITORY} --dir assets -- ${TAG}`,
         ...names.flatMap((name) => [
           `cosign sign-blob --yes --bundle assets/${name}.sigstore.json assets/${name}`,
           `cosign verify-blob --bundle assets/${name}.sigstore.json --certificate-identity ${SIGNER}@${ref} --certificate-oidc-issuer ${ISSUER} assets/${name}`,
         ]),
-        `gh release upload ${TAG} --repo ${REPOSITORY} --clobber ${names.map((name) => `assets/${name}.sigstore.json`).join(' ')}`,
+        `gh release upload --repo ${REPOSITORY} --clobber -- ${TAG} ${names.map((name) => `assets/${name}.sigstore.json`).join(' ')}`,
       ]);
       expect(signing.release).toEqual({
         ...RELEASE_FILES,
@@ -645,12 +703,72 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
 
     expect(signing.status).toBe(1);
     expect(signing.stderr).toContain(message);
-    expect(signing.calls).toEqual([`gh release download ${TAG} --repo ${REPOSITORY} --dir assets`]);
+    expect(signing.calls).toEqual([
+      `gh release download --repo ${REPOSITORY} --dir assets -- ${TAG}`,
+    ]);
     expect(signing.release).toEqual(files);
   });
 
+  it.each([
+    'refs/heads/sign-anything',
+    `${MAIN_REF}-2`,
+    `refs/heads/tags/${TAG}`,
+    'refs/pull/7/merge',
+    'refs/tags/',
+  ])(
+    'stops a run from %s, whose signatures the command in SECURITY.md refuses, before it asks gh for anything: the signatures of the release stay, and it says to run from main',
+    (ref) => {
+      const files = {
+        ...RELEASE_FILES,
+        'checksums.txt.sigstore.json': 'a signature made from main',
+      };
+      const signing = sign(publish(files), ref);
+
+      expect(verifies(`${SIGNER}@${ref}`)).toBe(false);
+      expect(signing.stderr).toBe(
+        `Run this workflow from main, not from ${ref}: the command in SECURITY.md refuses a signature made from another branch.\n`,
+      );
+      expect(signing.status).toBe(1);
+      expect(signing.calls).toEqual([]);
+      expect(signing.release).toEqual(files);
+    },
+  );
+
+  it('stops a run without a tag before it asks gh for anything, where gh would take the latest release, and says to give the tag', () => {
+    const signing = sign(publish(RELEASE_FILES), MAIN_REF, { tag: '' });
+
+    expect(signing.stderr).toBe(
+      'No tag was given. Run this workflow again with the tag of the release to sign.\n',
+    );
+    expect(signing.status).toBe(1);
+    expect(signing.calls).toEqual([]);
+    expect(signing.release).toEqual(RELEASE_FILES);
+  });
+
+  it('asks gh for the release of a tag that looks like a flag, where gh would read a flag and take the latest release: none has that tag, and nothing is signed', () => {
+    const signing = sign(publish(RELEASE_FILES), MAIN_REF, { tag: '--archive=zip' });
+
+    expect(signing.stderr).toContain('release not found');
+    expect(signing.status).toBe(1);
+    expect(signing.calls.filter((call) => !call.startsWith('gh release download'))).toEqual([]);
+    expect(signing.release).toEqual(RELEASE_FILES);
+  });
+
+  it('signs the release of a tag that looks like a flag: its files, and the signatures go to that release', () => {
+    const tag = '--archive=zip';
+    const signing = sign(publish(RELEASE_FILES, tag), MAIN_REF, { tag });
+
+    expect(signing.stderr).toBe('');
+    expect(signing.status).toBe(0);
+    expect(signing.release).toEqual({
+      ...RELEASE_FILES,
+      'cel-lens-core_v0.27.0_linux_amd64.sigstore.json': `the engine, signed by ${SIGNER}@${MAIN_REF}\n`,
+      'checksums.txt.sigstore.json': `the sums, signed by ${SIGNER}@${MAIN_REF}\n`,
+    });
+  });
+
   it('fails and uploads no signature when one it made does not verify', () => {
-    const signing = sign(publish(RELEASE_FILES), MAIN_REF, 1);
+    const signing = sign(publish(RELEASE_FILES), MAIN_REF, { verifyStatus: 1 });
 
     expect(signing.status).toBe(1);
     expect(signing.calls.map((call) => call.split(' ').slice(0, 2).join(' '))).toEqual([
@@ -779,7 +897,8 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     '[sign-release.yml](.github/workflows/sign-release.yml)',
     '`.sigstore.json`',
     'cosign verify-blob',
-    "--certificate-identity-regexp '^https://github\\.com/JairJosafath/cel-lens/\\.github/workflows/sign-release\\.yml@'",
+    "--certificate-identity-regexp '^https://github\\.com/JairJosafath/cel-lens/\\.github/workflows/sign-release\\.yml@refs/(heads/main|tags/.+)$'",
+    'a signature made from any other branch is refused',
     `--certificate-oidc-issuer ${ISSUER}`,
     "the file is the one this repository's workflow saw when it signed it",
     'It is not a statement about how the file was built',
@@ -793,35 +912,41 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
   it.each([
     ['accepts a release signed when it was published', `${SIGNER}@${TAG_REF}`, true],
     ['accepts a release signed by hand from main', `${SIGNER}@${MAIN_REF}`, true],
+    ['refuses the workflow at another branch', `${SIGNER}@refs/heads/sign-anything`, false],
+    ['refuses a branch whose name starts with main', `${SIGNER}@${MAIN_REF}-2`, false],
+    ['refuses a branch named as the tags are', `${SIGNER}@refs/heads/tags/${TAG}`, false],
+    ['refuses a pull request', `${SIGNER}@refs/pull/7/merge`, false],
+    ['refuses a tag without a name', `${SIGNER}@refs/tags/`, false],
     [
       'refuses another workflow of the repository',
-      `${SIGNER.replace('sign-release', 'ci')}@x`,
+      `${SIGNER.replace('sign-release', 'ci')}@${MAIN_REF}`,
       false,
     ],
-    ['refuses the workflow of a fork', `${SIGNER.replace('JairJosafath', 'someone')}@x`, false],
+    [
+      'refuses the workflow of a fork',
+      `${SIGNER.replace('JairJosafath', 'someone')}@${MAIN_REF}`,
+      false,
+    ],
     [
       'refuses a repository whose name starts the same',
-      `${SIGNER.replace('lens/', 'lens-2/')}@x`,
+      `${SIGNER.replace('lens/', 'lens-2/')}@${MAIN_REF}`,
       false,
     ],
-    ['refuses a file whose name starts the same', `${SIGNER}.disabled@x`, false],
+    ['refuses a file whose name starts the same', `${SIGNER}.disabled@${MAIN_REF}`, false],
     [
       'refuses a host with another character for a dot',
-      `${SIGNER.replace('github.com', 'githubxcom')}@x`,
+      `${SIGNER.replace('github.com', 'githubxcom')}@${MAIN_REF}`,
       false,
     ],
-    ['refuses the identity inside a longer address', `https://example.com/?${SIGNER}@x`, false],
+    [
+      'refuses the identity inside a longer address',
+      `https://example.com/?${SIGNER}@${MAIN_REF}`,
+      false,
+    ],
   ])(
-    'verifies in SECURITY.md against the identity of the signing workflow at any ref: %s',
+    'verifies in SECURITY.md against the identity of the signing workflow at main or at a tag: %s',
     (_name, identity, accepted) => {
-      const section = sectionOf(
-        readFileSync(`${FOLDER}/SECURITY.md`, 'utf8'),
-        'Verifying a release',
-      );
-      const pattern = /--certificate-identity-regexp '([^']+)'/.exec(section)?.[1];
-
-      expect(pattern).toBeDefined();
-      expect(new RegExp(pattern ?? '').test(identity)).toBe(accepted);
+      expect(verifies(identity)).toBe(accepted);
     },
   );
 
@@ -865,7 +990,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     '(vscode/)',
     '(CONTRIBUTING.md)',
     '(SECURITY.md)',
-    '(SECURITY.md#verifying-a-release)',
+    "Release files are signed by this repository's own workflow; [Verifying a release](SECURITY.md#verifying-a-release) says how to check one.",
   ])('has %s in the README', (text) => {
     expect(readme).toContain(text);
   });

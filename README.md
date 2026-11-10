@@ -17,7 +17,7 @@ Language support for CEL in Kubernetes YAML: errors, hover, completion and quick
 - **VS Code:** download the `.vsix` for your platform from the [releases](https://github.com/JairJosafath/cel-lens/releases), then run **Extensions: Install from VSIX...** or `code --install-extension <file>.vsix`. The extension carries the engine; nothing else to set up.
 - **Command line:** `go install github.com/JairJosafath/cel-lens/engine@<version>` installs the engine; see [engine/](engine/) for the details.
 
-Every release file has a signature beside it; [Verifying a release](SECURITY.md#verifying-a-release) says how to check it.
+Release files are signed by this repository's own workflow; [Verifying a release](SECURITY.md#verifying-a-release) says how to check one.
 
 ## Features
 
