@@ -201,6 +201,9 @@ type session struct {
 	// asked about did to their examples; its jobs use it, under its own
 	// lock.
 	results examples.Cache
+	// policyResults keeps what each admission policy did to its examples,
+	// as results does for the rules of CRDs.
+	policyResults examples.PolicyCache
 }
 
 // document is an open file. Only the message loop uses it, so the cached

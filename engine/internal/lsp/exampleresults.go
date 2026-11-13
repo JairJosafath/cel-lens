@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"path/filepath"
 	"slices"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/examples"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
-	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -31,10 +29,17 @@ type resultsAnswer struct {
 // ruleResults are the results of a rule, named as the line above it and a
 // .cellens entry name it: its document, version and path, its index there,
 // its text, and its location as cel-lens.showRule takes it.
+//
+// An admission policy's expression has no version and path, which are
+// left out, as a rule always has them, "" for the root path: its field
+// says which it is (validation, matchCondition or auditAnnotation), and
+// name a match condition's name or an annotation's key.
 type ruleResults struct {
 	Document string          `json:"document"`
-	Version  string          `json:"version"`
-	Path     string          `json:"path"`
+	Version  *string         `json:"version,omitempty"`
+	Path     *string         `json:"path,omitempty"`
+	Field    string          `json:"field,omitempty"`
+	Name     string          `json:"name,omitempty"`
 	Index    int             `json:"index"`
 	Rule     string          `json:"rule"`
 	Location map[string]any  `json:"location"`
@@ -42,16 +47,34 @@ type ruleResults struct {
 }
 
 // ruleOnExample is what a rule does to an example (see examples.Result).
+//
+// For an admission policy's expression it also gives the binding it was
+// admitted under, left out when no binding binds the policy, the param,
+// the message of a validation that fails, or an annotation's value, and
+// the API server's answer to the example under that binding.
 type ruleOnExample struct {
-	Example  exampleRef      `json:"example"`
-	Result   string          `json:"result"`
-	Refusals []resultRefusal `json:"refusals,omitempty"`
-	Ignored  []string        `json:"ignored,omitempty"`
-	Ran      []string        `json:"ran,omitempty"`
-	Reason   string          `json:"reason,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	Expected bool            `json:"expected"`
-	Wrong    string          `json:"wrong,omitempty"`
+	Example   exampleRef      `json:"example"`
+	Binding   string          `json:"binding,omitempty"`
+	Param     *exampleRef     `json:"param,omitempty"`
+	Result    string          `json:"result"`
+	Message   string          `json:"message,omitempty"`
+	Refusals  []resultRefusal `json:"refusals,omitempty"`
+	Ignored   []string        `json:"ignored,omitempty"`
+	Ran       []string        `json:"ran,omitempty"`
+	Reason    string          `json:"reason,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	Admission *admissionRef   `json:"admission,omitempty"`
+	Expected  bool            `json:"expected"`
+	Wrong     string          `json:"wrong,omitempty"`
+}
+
+// admissionRef is the API server's answer to an example under a binding
+// of an admission policy: the error it refuses it with, its warnings and
+// its audit annotations.
+type admissionRef struct {
+	Denied      string            `json:"denied,omitempty"`
+	Warnings    []string          `json:"warnings,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // resultRefusal is a refusal of a rule, as the API server returns it.
@@ -110,19 +133,12 @@ func (ss *session) answerExampleResults(ctx context.Context, msg jsonrpc.Message
 		limit = maxWorkspaceFiles
 	}
 	key := crdKey(a.URI)
-	// The check of an open CRD is the message loop's, made for its text
-	// and the Kubernetes version, so the job does not check it again.
-	var checked []check.Diagnostic
-	for _, uri := range slices.Sorted(maps.Keys(ss.docs)) {
-		if crdKey(uri) != key {
-			continue
-		}
-		diags, err := ss.diagnostics(ctx, uri, ss.docs[uri])
-		if err != nil {
-			return err
-		}
-		checked = append([]check.Diagnostic{}, diags...)
-		break
+	// The checks of the open files of CRDs and policies are the message
+	// loop's, made for their texts and the Kubernetes version, so the job
+	// does not check them again.
+	checks, err := ss.loopChecks(ctx)
+	if err != nil {
+		return err
 	}
 	crdFiles := ss.crds.Files()
 	if !slices.Contains(crdFiles, key) {
@@ -140,8 +156,11 @@ func (ss *session) answerExampleResults(ctx context.Context, msg jsonrpc.Message
 	}
 	ss.exampleMemo = nil
 	c := resultsCheck{
-		exampleCheck: exampleCheck{crdFiles: crdFiles, open: open, folders: outermost(ss.folders), dirFS: ss.dirFS(), limit: limit, kube: ss.kube, memo: memo, loop: &ss.loopBusy},
-		uri:          a.URI, key: key, at: a.Range, cache: &ss.results, checked: checked,
+		exampleCheck: exampleCheck{
+			crdFiles: crdFiles, policyFiles: []string{key}, open: open, folders: outermost(ss.folders), dirFS: ss.dirFS(), limit: limit, kube: ss.kube, memo: memo, loop: &ss.loopBusy,
+			results: &ss.results, checks: checks, policies: &ss.policyResults,
+		},
+		uri: a.URI, key: key, at: a.Range,
 	}
 	where := ""
 	if a.Range != nil {
@@ -171,10 +190,6 @@ type resultsCheck struct {
 	// nil for every rule of the file.
 	uri, key string
 	at       *lspRange
-	cache    *examples.Cache
-	// checked is the message loop's check of the file when the editor has
-	// it open, nil when it does not.
-	checked []check.Diagnostic
 }
 
 // run reads the CRDs of the file, finds their examples, runs the rules on
@@ -191,35 +206,34 @@ func (c *resultsCheck) run(ctx context.Context) (any, error) {
 			return nil, failed(fmt.Sprintf("%s: read %s: %v", commandExampleResults, path, err))
 		}
 	}
-	rels := map[string]string{}
-	var objs []*examples.Object
-	crds, err := c.examples(ctx, func(f walked, _ []byte, found []*examples.Object) {
-		for _, o := range found {
-			if o.CRD.File == c.key {
-				rels[f.key] = f.rel
-				objs = append(objs, o)
-			}
-		}
+	var found []fileFound
+	crds, err := c.examples(ctx, func(f walked, text []byte, objs []*examples.Object) {
+		found = append(found, fileFound{f: f, text: text, objs: objs})
 	})
 	if err != nil {
 		return nil, err
 	}
-	var rules []*examples.Rule
-	for _, crd := range crds {
-		if crd.File != c.key {
-			continue
-		}
-		found, err := crd.Rules(ctx)
-		if err != nil {
-			return nil, err
-		}
-		rules = append(rules, found...)
-	}
-	results, err := c.cache.Run(ctx, c.key, rules, objs, examples.Options{Pause: c.wait, Checked: c.checked})
+	ev, err := c.evaluate(ctx, crds, found)
 	if err != nil {
 		return nil, err
 	}
-	return resultsDone{answer: c.answer(text, rules, results, rels), memo: c.memo}, nil
+	rules := ev.rules[c.key]
+	if _, ran := ev.rules[c.key]; !ran {
+		// A file of CRDs without examples has its rules, with no results.
+		for _, crd := range crds {
+			if crd.File != c.key {
+				continue
+			}
+			found, err := crd.Rules(ctx)
+			if err != nil {
+				return nil, err
+			}
+			rules = append(rules, found...)
+		}
+	}
+	answer := c.answer(text, rules, ev.crds[c.key], ev.rels)
+	c.answerPolicies(&answer, text, ev.policies[c.key], ev.rels)
+	return resultsDone{answer: answer, memo: c.memo}, nil
 }
 
 // answer is the answer for results, of rules, the rules of text, those of
@@ -236,7 +250,7 @@ func (c *resultsCheck) answer(text []byte, rules []*examples.Rule, results []exa
 		}
 		byRule[r] = len(out.Rules)
 		out.Rules = append(out.Rules, ruleResults{
-			Document: "CustomResourceDefinition " + r.CRD.Name, Version: r.Version, Path: r.Path, Index: r.Index, Rule: r.Text,
+			Document: "CustomResourceDefinition " + r.CRD.Name, Version: &r.Version, Path: &r.Path, Index: r.Index, Rule: r.Text,
 			Location: map[string]any{"uri": c.uri, "range": at}, Results: []ruleOnExample{},
 		})
 	}
@@ -274,4 +288,89 @@ func (c *resultsCheck) answer(text []byte, rules []*examples.Rule, results []exa
 func within(p position, r lspRange) bool {
 	after := func(a, b position) bool { return a.Line > b.Line || a.Line == b.Line && a.Character >= b.Character }
 	return after(p, r.Start) && after(r.End, p)
+}
+
+// answerPolicies adds to out the results of runs, the admission policies
+// of text, those of the location asked for alone; rels are the paths of
+// the files below their folders, by key.
+func (c *resultsCheck) answerPolicies(out *resultsAnswer, text []byte, runs []policyRan, rels map[string]string) {
+	lines := splitLines(text)
+	ref := func(o *examples.Object, update bool) exampleRef {
+		r := exampleRef{
+			URI: pathURI(filepath.FromSlash(o.File)), File: rels[o.File], Line: o.Line,
+			APIVersion: o.APIVersion, Kind: o.Kind, Namespace: o.Namespace, Name: o.Name,
+			Operation: "create", Expect: o.Expect.String(), Message: o.Message,
+		}
+		if update {
+			r.Operation = "update"
+		}
+		return r
+	}
+	for _, pr := range runs {
+		byRule := map[*examples.PolicyRule]int{}
+		for _, r := range pr.rules {
+			at := toRange(lines, r.Start, r.End)
+			if c.at != nil && !within(c.at.Start, at) && (r.MessageStart == (extract.Position{}) || !within(c.at.Start, toRange(lines, r.MessageStart, r.MessageEnd))) {
+				continue
+			}
+			byRule[r] = len(out.Rules)
+			out.Rules = append(out.Rules, ruleResults{
+				Document: "ValidatingAdmissionPolicy " + pr.policy.Name, Field: policyFieldName(r.Field), Name: r.Name, Index: r.Index, Rule: r.Text,
+				Location: map[string]any{"uri": c.uri, "range": at}, Results: []ruleOnExample{},
+			})
+		}
+		admissions := map[*examples.Object]map[*examples.Binding]examples.Admission{}
+		for _, a := range pr.run.Admissions {
+			if admissions[a.Example] == nil {
+				admissions[a.Example] = map[*examples.Binding]examples.Admission{}
+			}
+			admissions[a.Example][a.Binding] = a
+		}
+		for _, res := range pr.run.Results {
+			i, ok := byRule[res.Rule]
+			if !ok {
+				continue
+			}
+			one := ruleOnExample{Example: ref(res.Example, res.Update), Result: res.Verdict.String(), Expected: res.Expected}
+			if res.Binding != nil {
+				one.Binding = res.Binding.Name
+			}
+			if res.Param != nil {
+				p := ref(res.Param, false)
+				p.Operation, p.Expect, p.Message = "", "", ""
+				one.Param = &p
+			}
+			switch res.Verdict {
+			case examples.PolicyNotRun:
+				one.Reason = res.Message
+			case examples.PolicyError:
+				one.Error = res.Message
+			case examples.PolicyAllowed, examples.PolicyRefused, examples.PolicyWarned, examples.PolicyAudited, examples.PolicyAnnotated, examples.PolicyExcluded:
+				one.Message = res.Message
+			}
+			if a, ok := admissions[res.Example][res.Binding]; ok && a.NotRun == "" {
+				one.Admission = &admissionRef{Denied: a.Denied, Warnings: a.Warnings, Annotations: a.Annotations}
+			}
+			switch {
+			case res.Expected:
+			case res.OnExample:
+				one.Wrong = "example"
+			default:
+				one.Wrong = "rule"
+			}
+			out.Rules[i].Results = append(out.Rules[i].Results, one)
+		}
+	}
+}
+
+// policyFieldName names f as the answer of exampleResults does.
+func policyFieldName(f examples.PolicyField) string {
+	switch f {
+	case examples.FieldMatchCondition:
+		return "matchCondition"
+	case examples.FieldAuditAnnotation:
+		return "auditAnnotation"
+	case examples.FieldValidation:
+	}
+	return "validation"
 }

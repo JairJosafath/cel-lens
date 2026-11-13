@@ -56,9 +56,14 @@ import (
 type CRD struct {
 	// File is the name of the file it is in, as Read was given it.
 	File string
-	// Name is its metadata.name; Group and Kind name the kind it defines.
-	Name, Group, Kind string
-	namespaced        bool
+	// Name is its metadata.name; Group and Kind name the kind it defines,
+	// and Plural the resource it is served as.
+	Name, Group, Kind, Plural string
+	namespaced                bool
+	// converts reports whether the API server converts an object of one of
+	// its versions to another by setting its apiVersion alone (the
+	// conversion strategy None).
+	converts bool
 	// versions are the versions it serves, by name; names are the names of
 	// all its versions, by their index in spec.versions.
 	versions map[string]*servedVersion
@@ -157,8 +162,9 @@ func readCRD(ctx context.Context, doc *yaml.Node, v kubeversion.Version) (*CRD, 
 		return nil, false
 	}
 	c := &CRD{
-		Name: versioned.Name, Group: versioned.Spec.Group, Kind: versioned.Spec.Names.Kind,
+		Name: versioned.Name, Group: versioned.Spec.Group, Kind: versioned.Spec.Names.Kind, Plural: versioned.Spec.Names.Plural,
 		namespaced: versioned.Spec.Scope == apiextensionsv1.NamespaceScoped,
+		converts:   versioned.Spec.Conversion == nil || versioned.Spec.Conversion.Strategy == apiextensionsv1.NoneConverter,
 		versions:   map[string]*servedVersion{},
 	}
 	for _, ver := range versioned.Spec.Versions {
@@ -279,9 +285,11 @@ func (e Expectation) String() string {
 
 // Object is an example of a CustomResourceDefinition: a document of a file
 // whose apiVersion and kind are a version the CustomResourceDefinition
-// serves.
+// serves; or a document of a built-in kind an admission policy may run on
+// (see FindBuiltIn).
 type Object struct {
-	// CRD is the CustomResourceDefinition it is an example of.
+	// CRD is the CustomResourceDefinition it is an example of; nil for a
+	// built-in kind.
 	CRD *CRD
 	// File is the name of its file, as Find was given it; Line is the line
 	// its content starts at, from 1.
@@ -328,6 +336,9 @@ type Object struct {
 	// a create when prev is nil (see Object.old).
 	paired bool
 	prev   *Object
+	// clusterScoped is true for a document of a built-in kind that has no
+	// namespace.
+	clusterScoped bool
 	// comments are the problems of its # cel-lens: comments; said is true
 	// once one of them said what it expects.
 	comments []check.Diagnostic

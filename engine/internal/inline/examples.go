@@ -26,6 +26,18 @@ const (
 	// Failed is a rule whose run stopped with an error, which the API
 	// server answers with a refusal: a runtime error or a cost limit.
 	Failed
+	// Warned is an admission policy's validation that fails under a binding
+	// that warns: the API server allows the example, with a warning.
+	Warned
+	// Audited is an admission policy's validation that fails under a
+	// binding that only audits: the API server allows the example, and
+	// records the failure in its audit log.
+	Audited
+	// Annotated is an admission policy's audit annotation the example gets.
+	Annotated
+	// Excluded is an admission policy's match condition that is false on
+	// the example, so the policy does not run on it.
+	Excluded
 )
 
 // Skip is why a rule did not run on an example.
@@ -47,6 +59,24 @@ const (
 	SkipNoOldValue
 	// SkipAbsent: the example does not have the rule's field.
 	SkipAbsent
+	// SkipPolicy: the API server refuses the admission policy.
+	SkipPolicy
+	// SkipExcluded: a match condition of the policy excludes the example.
+	SkipExcluded
+	// SkipNoBinding: the expression reads params, and no binding binds the
+	// policy.
+	SkipNoBinding
+	// SkipNoParams: the binding has no params for the example.
+	SkipNoParams
+	// SkipBinding: the API server refuses the example for the binding
+	// before it runs the policy.
+	SkipBinding
+	// SkipAuthorizer: the expression, or a match condition, reads
+	// authorizer, which cel-lens does not run.
+	SkipAuthorizer
+	// SkipConversion: the API server would convert the example to another
+	// version first, which cel-lens does not.
+	SkipConversion
 )
 
 // Example is what a rule does to one example.
@@ -69,9 +99,19 @@ type Example struct {
 	Skip Skip
 	// Message is the API server's: its refusals, separated by "; ", for
 	// Refused; its error for Failed; why the rule did not run for NotRun;
-	// empty for Allowed.
+	// the validation's message for Warned and Audited; the annotation for
+	// Annotated; empty for Allowed and Excluded.
 	Message string
+	// Binding names the binding of an admission policy the example was
+	// admitted under, Unbound when no binding binds the policy, "" for a
+	// CustomResourceDefinition's rule; Param is the param it was evaluated
+	// with, as file:line, "" for none.
+	Binding, Param string
 }
+
+// Unbound is the Binding of an Example of an admission policy no binding
+// binds, which runs as if bound with the validationActions Deny.
+const Unbound = "\x00unbound"
 
 // The most examples the hover lists.
 const maxListed = 10
@@ -87,6 +127,10 @@ const (
 	// allowsWrongly: allowed, expected to be refused.
 	allowsWrongly
 	errs
+	warns
+	audits
+	excludes
+	annotates
 	passes
 	notRun
 )
@@ -100,6 +144,14 @@ func kindOf(e Example) kind {
 		return errs
 	case e.Verdict == NotRun:
 		return notRun
+	case e.Verdict == Warned && !e.Wrong:
+		return warns
+	case e.Verdict == Audited && !e.Wrong:
+		return audits
+	case e.Verdict == Excluded && !e.Wrong:
+		return excludes
+	case e.Verdict == Annotated && !e.Wrong:
+		return annotates
 	case !e.Wrong:
 		return passes
 	case e.Verdict == Refused && e.OnExample:
@@ -132,24 +184,64 @@ func count(n int) string { return strconv.Itoa(n) + " " + plural(n, "example", "
 // An example a rule refuses as expected passes; one it did not run on is
 // left out, but when it ran on none, which says why: "not run: needs an
 // update example".
+//
+// An example an admission policy ran on under several bindings or params
+// counts once, as the first of what they did in that order. The words end
+// with the binding when every result is of one: "under binding warn", or
+// "under 2 bindings", "under no binding".
 func examplesTitles(ex []Example) []string {
 	if len(ex) == 0 {
 		return nil
 	}
+	type at struct {
+		uri    string
+		line   int
+		update bool
+		// rule is the index of a CustomResourceDefinition's rule's result,
+		// each of which is its own example.
+		rule int
+	}
+	worst := map[at]Example{}
+	var order []at
+	bindings := map[string]bool{}
+	for i, e := range ex {
+		k := at{e.URI, e.Line, e.Update, -1}
+		if e.Binding == "" {
+			k.rule = i
+		}
+		if w, ok := worst[k]; !ok || kindOf(e) < kindOf(w) {
+			if !ok {
+				order = append(order, k)
+			}
+			worst[k] = e
+		}
+		bindings[e.Binding] = true
+	}
 	var n [notRun + 1]int
 	skips := map[Skip]int{}
-	for _, e := range ex {
-		k := kindOf(e)
-		n[k]++
-		if k == notRun {
-			skips[e.Skip]++
+	for _, k := range order {
+		kind := kindOf(worst[k])
+		n[kind]++
+		if kind == notRun {
+			skips[worst[k].Skip]++
 		}
 	}
-	if n[notRun] == len(ex) {
-		why := "not run on " + count(len(ex))
+	under := ""
+	switch {
+	case len(bindings) > 1:
+		under = "under " + strconv.Itoa(len(bindings)) + " bindings"
+	case bindings[Unbound]:
+		under = "under no binding"
+	case !bindings[""]:
+		for b := range bindings {
+			under = "under binding " + b
+		}
+	}
+	if n[notRun] == len(order) {
+		why := "not run on " + count(len(order))
 		if len(skips) == 1 {
 			for s := range skips {
-				why = "not run: " + skipPhrase(s, len(ex))
+				why = "not run: " + skipPhrase(s, len(order))
 			}
 		}
 		return dedupe(why, "not run")
@@ -177,6 +269,15 @@ func examplesTitles(ex []Example) []string {
 		}
 		short = append(short, strconv.Itoa(c)+plural(c, " error", " errors"))
 	}
+	for _, v := range []struct {
+		k    kind
+		verb string
+	}{{warns, "warns"}, {audits, "audits"}, {excludes, "excludes"}, {annotates, "annotates"}} {
+		if c := n[v.k]; c > 0 {
+			add(v.verb + " " + countIf(c, first()))
+			short = append(short, v.verb+" "+strconv.Itoa(c))
+		}
+	}
 	if c := n[passes]; c > 0 {
 		p := strconv.Itoa(c) + plural(c, " passes", " pass")
 		if first() {
@@ -185,7 +286,11 @@ func examplesTitles(ex []Example) []string {
 		add(p)
 		short = append(short, strconv.Itoa(c)+plural(c, " passes", " pass"))
 	}
-	return dedupe(strings.Join(words, dot), strings.Join(short, dot), short[0])
+	full := strings.Join(words, dot)
+	if under != "" {
+		full += dot + under
+	}
+	return dedupe(full, strings.Join(words, dot), strings.Join(short, dot), short[0])
 }
 
 // countIf writes c examples as "c examples" when they come first, as "c"
@@ -210,6 +315,20 @@ func skipPhrase(s Skip, n int) string {
 		return plural(n, "no old value in the update", "no old value in the updates")
 	case SkipAbsent:
 		return plural(n, "field absent from the example", "field absent from the examples")
+	case SkipPolicy:
+		return "policy refused"
+	case SkipExcluded:
+		return "excluded by matchConditions"
+	case SkipNoBinding:
+		return "no binding gives params"
+	case SkipNoParams:
+		return "no params"
+	case SkipBinding:
+		return "binding refuses the request"
+	case SkipAuthorizer:
+		return "reads authorizer"
+	case SkipConversion:
+		return "needs a conversion"
 	case SkipOther:
 	}
 	return count(n)
@@ -247,7 +366,7 @@ func ExamplesHover(ex []Example) string {
 			return 0
 		case errs:
 			return 1
-		case passes, notRun:
+		case warns, audits, excludes, annotates, passes, notRun:
 		}
 		return 2
 	}
@@ -278,9 +397,10 @@ func listed(e Example) string {
 	if e.Update {
 		verdict += " as an update"
 	}
-	if kindOf(e) != passes && kindOf(e) != notRun {
+	if k := kindOf(e); k != passes && k != notRun && k != annotates && k != excludes {
 		verdict = "**" + verdict + "**"
 	}
+	verdict += under(e)
 	switch {
 	case e.Wrong && e.OnExample:
 		verdict += ", expected to be refused"
@@ -305,9 +425,35 @@ func verdictWord(v Verdict) string {
 		return "refused"
 	case NotRun:
 		return "not run"
+	case Warned:
+		return "warned"
+	case Audited:
+		return "audited"
+	case Annotated:
+		return "annotated"
+	case Excluded:
+		return "excluded"
 	case Failed:
 	}
 	return "error"
+}
+
+// under says which binding and param e was evaluated under, as the hover
+// and the warnings say it: " under binding warn with param
+// params.yaml:3", "" for a CustomResourceDefinition's rule.
+func under(e Example) string {
+	out := ""
+	switch e.Binding {
+	case "":
+	case Unbound:
+		out = " under no binding"
+	default:
+		out = " under binding " + e.Binding
+	}
+	if e.Param != "" {
+		out += " with param " + e.Param
+	}
+	return out
 }
 
 // RuleWarning is the warning on a rule that refuses e, an example that
@@ -315,7 +461,7 @@ func verdictWord(v Verdict) string {
 // a refusal: "refuses config/samples/big.yaml:3, which expects to be
 // allowed: <message>".
 func RuleWarning(e Example) string {
-	return "refuses " + e.File + ":" + strconv.Itoa(e.Line) + ", which expects to be allowed: " + oneLine(e.Message)
+	return "refuses " + e.File + ":" + strconv.Itoa(e.Line) + under(e) + ", which expects to be allowed: " + oneLine(e.Message)
 }
 
 // ExampleWarning is the warning on e, an example that expects to be
@@ -323,7 +469,7 @@ func RuleWarning(e Example) string {
 // `expected to be allowed, but the rule "self.size <= 10" refuses it:
 // <message>`, the rule on one line and cut past 60 characters.
 func ExampleWarning(rule string, e Example) string {
-	return "expected to be allowed, but the rule " + strconv.Quote(cut(oneLine(rule), maxRule)) + " refuses it: " + oneLine(e.Message)
+	return "expected to be allowed, but the rule " + strconv.Quote(cut(oneLine(rule), maxRule)) + " refuses it" + under(e) + ": " + oneLine(e.Message)
 }
 
 // NothingRefuses is the warning on an example that expects to be refused,

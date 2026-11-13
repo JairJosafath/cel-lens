@@ -51,8 +51,10 @@ var compat compatGate
 // version calls them in fn: Check does. Calls for the same version run
 // together, as the setting is the same for all of them; a call for another
 // one waits until those running end, and the calls after it wait for it.
-// Code that reads the setting outside UnderVersion may see any version. The
-// error says the libraries' version cannot be set, and fn did not run.
+// Code that reads the setting outside UnderVersion may see any version. fn
+// must not call UnderVersion itself: once a call for another version waits,
+// that inner call waits behind it, for ever. The error says the libraries'
+// version cannot be set, and fn did not run.
 func UnderVersion(v kubeversion.Version, fn func()) error {
 	eff, ok := compatibility.DefaultComponentGlobalsRegistry.EffectiveVersionFor(basecompatibility.DefaultKubeComponent).(basecompatibility.MutableEffectiveVersion)
 	if !ok {

@@ -605,14 +605,16 @@ a check of 100 examples is in progress and while none is.
 `cel-lens.exampleResults` runs each `x-kubernetes-validations` rule of the
 CustomResourceDefinitions of a file on each of their examples, with the API
 server's own CEL validator, and answers what each rule does to each
-example. Its one argument is `{"uri": ...}`, the file, for every rule of
+example; for a file with ValidatingAdmissionPolicies, what each of their
+expressions does too (see [What an admission policy does to the
+examples](#what-an-admission-policy-does-to-the-examples)). Its one argument is `{"uri": ...}`, the file, for every rule of
 it, or `{"uri": ..., "range": ...}`, a rule's location as the line above
 the rule gives it to `cel-lens.showRule`, for that rule alone: the rule
 whose text, or whose `messageExpression`, has the range's start. The file
 is read as the editor has it, else from disk, and its CRDs count whatever
 the experimental features; the examples are found and checked as above. A
 CRD the API server would refuse for anything but its rules has none, and a
-file without a CRD answers `"rules": []`. Another argument is refused with
+file without a CRD or a policy answers `"rules": []`. Another argument is refused with
 `InvalidParams` (-32602), a file that cannot be read with `RequestFailed`
 (-32803).
 
@@ -852,6 +854,201 @@ as the check of the examples starts; it runs on a server without any of
 this too. `go test -bench ExampleRulesRunning ./internal/lsp/` measures the
 same requests while the check runs every rule on every example again, from
 an empty cache, and while no check runs.
+
+### What an admission policy does to the examples
+
+The check of the examples, and `cel-lens.exampleResults` given a file with a
+ValidatingAdmissionPolicy (`admissionregistration.k8s.io/v1`), run each
+policy of the workspace on its examples, and the editor shows what each of
+its validations, match conditions and audit annotations does to them, above
+the expression, in its hover and as warnings, with the words above and those
+below. A variable has no verdict of its own: the API server evaluates it
+when an expression reads it, and its error is that expression's.
+
+**Its examples** are the documents of the workspace, outside the policy's own
+file, that its `matchConstraints` match, as the API server's
+ValidatingAdmissionPolicy plugin matches a request, with its own matcher
+(`k8s.io/apiserver/pkg/admission/plugin/policy/matching`): the `resourceRules`
+(groups, versions, resources, operations, `scope`, `resourceNames`),
+`excludeResourceRules`, `matchPolicy` (with `Equivalent`, the API server's
+default, another version the API server serves of the same resource matches
+too), the `namespaceSelector` against the labels of the Namespace document
+of the workspace that names the example's namespace, and the
+`objectSelector` against the example's own labels. A namespace the
+workspace has no Namespace document for is taken as the API server has it
+with no label of its own: with the label `kubernetes.io/metadata.name`
+alone, which it gives every namespace. A document is one of a built-in kind
+the Kubernetes version picked serves, or an example of a
+CustomResourceDefinition of the workspace (see above); a policy or a
+binding is none, as the API server exempts them; another kind is none, as
+its resource and scope are not known. The walk is the check's, with its
+limits, and reads the files with the name of a kind a policy may match, its
+params' kind or `Namespace` (every file, for a rule with `*` in its groups
+or resources). At most 100 examples of a policy run, the first in the order
+of the files' paths. What an example expects, and when it is an update, are
+as for a CRD's examples, by path and `# cel-lens:` comments; an update is
+from the last example before it of the same object that the API server
+would have stored: one nothing refused before the policies and that no
+binding of the policy refuses.
+
+A document of a built-in kind is read as the API server reads it, into its
+Go type with the strict field validation kubectl asks for: a field the
+type does not have refuses it before any policy runs. Its defaults and its
+validation are the API server's own registry's (`k8s.io/kubernetes`), which
+the engine does not have: the policy sees the document as its type reads
+it, in its namespace (`default` when a namespaced one names none), named
+for its `generateName`. A custom resource is the object the schema check
+made, defaulted; one the schema, or a rule of its CRD, refuses is refused
+before the policies, as the API server validates a custom resource before
+its validating admission, and no expression runs on it (`not run: examples
+refused before the rules`).
+
+**The bindings.** The policy runs once under each
+ValidatingAdmissionPolicyBinding of the workspace that names it in
+`policyName`, on the examples the binding's `matchResources` also match,
+with its params: the documents of the policy's `paramKind` that its
+`paramRef` names (`name`, or `selector`, which may match several, in
+`namespace`, or the example's own for a namespaced kind), each a run of its
+own, in the order of their namespaces and names. The API server lists them
+in no fixed order, so when several params of a `selector` make a
+validation fail under `Deny`, the message the API server refuses the
+example with may be another param's than the first cel-lens gives; with none found, its
+`parameterNotFoundAction` (`Deny` refuses the example, `Allow` runs
+nothing). A param of another version of a custom resource whose CRD has
+the conversion strategy `None` counts, in the version `paramKind` names. With
+no binding of the workspace for the policy, it runs as if bound with
+`validationActions: [Deny]` and no params, and an expression that reads
+`params`, directly or through a variable, is `not run` (`no binding gives
+params`). When a match condition reads `params`, whether the policy runs
+at all is not known without them, and nothing of it runs, each expression
+`not run: no binding gives params`. Each result says which binding, and which param, it is from.
+
+**How it runs**, all with the API server's code for the Kubernetes version
+picked; nothing about what an expression means is the engine's own:
+
+1. A policy for which the engine's check of its file finds an error on a
+   variable, a validation, a match condition or an audit annotation (it
+   does not compile in the API server's environment for new expressions)
+   is refused by the API server, which then admits nothing with it: every
+   expression is `not run` (`policy refused`), with the check's messages.
+2. The policy is compiled as the ValidatingAdmissionPolicy plugin compiles
+   it (`compilePolicy` of
+   `k8s.io/apiserver/pkg/admission/plugin/policy/validating`, with its
+   CEL compiler, `k8s.io/apiserver/pkg/admission/plugin/cel`), in the
+   environment of the version picked, into the plugin's own evaluator
+   (`validating.NewValidator`); each request is admitted by the plugin's
+   own dispatcher (`validating.NewDispatcher`), which matches the binding,
+   collects the params (`generic.CollectParams`), and acts on what the
+   evaluator decides, with the binding's `validationActions`.
+3. The request is a `CREATE`, or an `UPDATE` with `oldObject`, by no user
+   in particular (`request.userInfo` is empty), with `namespaceObject` the
+   example's Namespace document, or the one the API server has.
+4. `matchConditions` first: a match condition that is false excludes the
+   example (`excluded`), and nothing else of the policy runs on it (`not
+   run: excluded by matchConditions`); an error is the policy's
+   `failurePolicy`'s: under `Fail` it is an `error` of every validation,
+   which refuses the example under `Deny`, unless another condition is
+   false; under `Ignore` the condition is an `error` that says the API
+   server ignores it, and the policy does not run on the example. Each match condition's own verdict comes from
+   evaluating it alone with the API server's matcher, as the evaluator says
+   only whether all of them match.
+5. `validations`, with `variables`, under the API server's cost budget: a
+   validation that is false fails with its `messageExpression`, else its
+   `message`, else `failed expression: ...`, and its `reason`; an error
+   follows `failurePolicy` (`Fail` fails the validation, `Ignore` admits).
+   A failure is `refused` under a binding with `Deny`, `warned` under
+   `Warn` without `Deny` (the example is allowed, with the API server's
+   warning), and `audited` under `Audit` alone (allowed, with the
+   `validation.policy.admission.k8s.io/validation_failure` annotation).
+6. `auditAnnotations`: a value is `annotated`, never a refusal; null or
+   empty adds none (`allowed`); an error under `Fail` refuses the example,
+   as the API server does.
+7. `authorizer` checks are not run: an expression that reads `authorizer`,
+   directly or through a variable, is `not run` (`reads authorizer`) and
+   left out of the policy as it runs; with a match condition that reads it,
+   nothing of the policy runs.
+8. An example the policy matches in another version than its own is
+   converted by the API server first: for a custom resource whose CRD has
+   the conversion strategy `None`, as it does (its `apiVersion` is set);
+   another is `not run` (`needs a conversion`).
+
+The answer of `cel-lens.exampleResults` for a file with policies lists their
+expressions after its CRDs' rules, each with `document`
+(`ValidatingAdmissionPolicy <name>`), `field` (`validation`,
+`matchCondition` or `auditAnnotation`), `name` (a match condition's name or
+an annotation's key), `index`, `rule` (its text) and `location`, and its
+results, one for each example under each binding and param:
+
+```json
+{
+  "document": "ValidatingAdmissionPolicy replicas", "field": "validation", "index": 0,
+  "rule": "object.spec.replicas <= int(params.data.max)",
+  "location": {"uri": "file:///repo/policy.yaml", "range": {"start": {"line": 14, "character": 18}, "end": {"line": 14, "character": 62}}},
+  "results": [{
+    "example": {"uri": "file:///repo/deploy.yaml", "file": "deploy.yaml", "line": 1, "apiVersion": "apps/v1",
+                "kind": "Deployment", "name": "web", "operation": "create", "expect": "allowed"},
+    "binding": "limits",
+    "param": {"uri": "file:///repo/params.yaml", "file": "params.yaml", "line": 1, "apiVersion": "v1", "kind": "ConfigMap", "name": "small"},
+    "result": "warned", "message": "at most 3 replicas",
+    "admission": {"warnings": ["Validation failed for ValidatingAdmissionPolicy 'replicas' with binding 'limits': at most 3 replicas"]},
+    "expected": true
+  }]
+}
+```
+
+| Key of a policy's result | What it is |
+| --- | --- |
+| `binding` | The binding, left out when no binding of the workspace binds the policy |
+| `param` | The param it ran with, left out for none |
+| `result` | `allowed`, `refused`, `warned`, `audited`, `annotated`, `excluded`, `not run` or `error` |
+| `message` | A failed validation's message, an annotation's value |
+| `reason`, `error` | Why it did `not run`; what failed, for `error` |
+| `admission` | The API server's answer to the example under the binding: `denied`, the error it refuses it with (`deployments.apps "web" is forbidden: ValidatingAdmissionPolicy 'replicas' with binding 'limits' denied request: ...`), its `warnings` and its audit `annotations` |
+| `expected`, `wrong` | As for a CRD's rule |
+
+**What the example expects.** An example that expects to be allowed is
+wrong at an expression whose result refuses it: a failed validation under
+`Deny`, an error that refuses, a failed audit annotation. One that expects
+to be refused is right when something refuses it as it expects: the schema,
+a rule of its CRD, or any policy under any binding, the message part, when
+it gives one, in that refusal's message; a warning or an audit annotation
+refuses nothing. That holds across the CRDs and the policies: a CRD's rule
+that allows an example a policy refuses as it expects passes too.
+
+**The line and the hover** use the words above, and these:
+
+| What the expression does | The part |
+| --- | --- |
+| a validation fails under `Warn` | `warns 1 example` |
+| a validation fails under `Audit` alone | `audits 1 example` |
+| a match condition is false | `excludes 1 example` |
+| an audit annotation has a value | `annotates 1 example` |
+| runs on none of them | `not run: policy refused`, `not run: excluded by matchConditions`, `not run: no binding gives params`, `not run: no params` (`parameterNotFoundAction: Allow`), `not run: binding refuses the request` (`Deny`), `not run: reads authorizer`, `not run: needs a conversion` |
+
+An example a policy ran on under several bindings or params counts once, as
+the first of what they did in the order wrong, error, warns, audits,
+excludes, annotates, passes. The words end with the binding when all the
+results are under one, `under binding limits`, or `under 2 bindings`, or
+`under no binding`, which the part drops first when the line is long. The
+hover lists each result with its binding and param (`**warned** under
+binding limits with param params.yaml:1: at most 3 replicas`), and so do the
+warnings (`refuses deploy.yaml:1 under binding limits with param
+params.yaml:1, which expects to be allowed: at most 3 replicas`).
+
+**When.** As for the rules of a CRD: in the check of the examples, off the
+message loop, waiting while the loop handles a message before each
+example is admitted; for an open policy, the check takes the server's own
+check of its text. What each policy did to each example under each binding
+is kept until the policy, the binding, its params, the example's namespace,
+the example (its object, the object it updates, what refused it before) or
+the Kubernetes version changes. Nothing of this reads the process-wide
+compatibility version that `check.UnderVersion` guards: the policy is
+compiled in the environment of the version picked. `go test -bench
+PolicyRun ./internal/examples/` measures a policy of 20 validations over
+100 examples, from an empty cache and unchanged; `go test -bench
+PolicyLineRunning ./internal/lsp/` hover and the code lenses of the open
+policy while the check runs it on 100 examples again and again, and while
+no check runs.
 
 ## Typed `object` and `oldObject`
 
