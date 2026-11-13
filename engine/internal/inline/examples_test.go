@@ -228,3 +228,85 @@ func TestWarnings(t *testing.T) {
 		}
 	}
 }
+
+// TestLinePolicyExamples checks the words a policy's expression adds to the
+// table (#19): warns, audits, excludes and annotates, an example counted
+// once whatever the bindings and params it ran under, the binding they all
+// ran under, and the reasons a policy's expression does not run.
+func TestLinePolicyExamples(t *testing.T) {
+	t.Parallel()
+	under := func(binding, param string, e inline.Example) inline.Example {
+		e.Binding, e.Param = binding, param
+		return e
+	}
+	warned := inline.Example{Verdict: inline.Warned, Message: "at most 3"}
+	audited := inline.Example{Verdict: inline.Audited, Message: "at most 3"}
+	excluded := inline.Example{Verdict: inline.Excluded}
+	annotated := inline.Example{Verdict: inline.Annotated, Message: "5"}
+	web := func(e inline.Example) inline.Example {
+		e.File, e.URI, e.Line = "deploy.yaml", "file:///ws/deploy.yaml", 1
+		return e
+	}
+	rule := func(examples []inline.Example) inline.Rule {
+		return inline.Rule{Subject: "o", SubjectType: "D", Examples: examples}
+	}
+	for _, tc := range []struct {
+		name string
+		ex   []inline.Example
+		want string
+	}{
+		{"warns", join(ex(1, under("limits", "", warned)), ex(2, under("limits", "", pass))), "warns 1 example · 2 pass · under binding limits"},
+		{"audits", ex(2, under("audit", "", audited)), "audits 2 examples · under binding audit"},
+		{"excludes", join(ex(1, under("b", "", excluded)), ex(2, under("b", "", pass))[1:]), "excludes 1 example · 1 passes · under binding b"},
+		{"annotates", ex(3, under("b", "", annotated)), "annotates 3 examples · under binding b"},
+		{"no binding", ex(1, under(inline.Unbound, "", refusedOK)), "1 example passes · under no binding"},
+		{"two bindings", join(ex(1, under("a", "", pass)), ex(2, under("b", "", warned))[1:]), "warns 1 example · 1 passes · under 2 bindings"},
+		{
+			"an example under two params counts once, as the first of what they did",
+			[]inline.Example{web(under("limits", "params.yaml:1", warned)), web(under("limits", "params.yaml:6", pass))},
+			"warns 1 example · under binding limits",
+		},
+		{"a refusal of an example that expects to be allowed is wrong first", join(ex(1, under("d", "", refusesBad)), ex(2, under("d", "", warned))[1:]), "refuses 1 example it should allow · warns 1 · under binding d"},
+		{"excluded from all", ex(2, under("b", "", inline.Example{Verdict: inline.NotRun, Skip: inline.SkipExcluded})), "not run: excluded by matchConditions"},
+		{"no binding gives params", ex(1, under(inline.Unbound, "", inline.Example{Verdict: inline.NotRun, Skip: inline.SkipNoBinding})), "not run: no binding gives params"},
+		{"authorizer", ex(1, under("b", "", inline.Example{Verdict: inline.NotRun, Skip: inline.SkipAuthorizer})), "not run: reads authorizer"},
+		{"policy refused", ex(1, under("b", "", inline.Example{Verdict: inline.NotRun, Skip: inline.SkipPolicy})), "not run: policy refused"},
+		{"no params", ex(1, under("b", "", inline.Example{Verdict: inline.NotRun, Skip: inline.SkipNoParams})), "not run: no params"},
+		{"the binding refuses", ex(1, under("b", "", inline.Example{Verdict: inline.NotRun, Skip: inline.SkipBinding})), "not run: binding refuses the request"},
+		{"a conversion", ex(1, under("b", "", inline.Example{Verdict: inline.NotRun, Skip: inline.SkipConversion})), "not run: needs a conversion"},
+	} {
+		got := inline.Line(rule(tc.ex))
+		if title := got[len(got)-1].Title; title != tc.want {
+			t.Errorf("Line(%s) ends with %q, want %q", tc.name, title, tc.want)
+		}
+	}
+	// Shortened, the binding goes first.
+	long := inline.Rule{Subject: "object", SubjectType: "apps/v1 Deployment", Examples: join(ex(1, under("limits", "", warned)), ex(2, under("limits", "", pass)))}
+	if got := inline.Line(long); got[len(got)-1].Title != "warns 1 example · 2 pass" {
+		t.Errorf("Line(long) ends with %q, want warns 1 example · 2 pass", got[len(got)-1].Title)
+	}
+}
+
+// TestPolicyHoverAndWarnings checks that the hover and the warnings name
+// the binding and the param of a policy's result (#19).
+func TestPolicyHoverAndWarnings(t *testing.T) {
+	t.Parallel()
+	e := inline.Example{File: "deploy.yaml", URI: "file:///ws/deploy.yaml", Line: 1, Verdict: inline.Refused, Wrong: true, Binding: "limits", Param: "params.yaml:1", Message: "at most 3"}
+	w := inline.Example{File: "deploy.yaml", URI: "file:///ws/deploy.yaml", Line: 6, Verdict: inline.Warned, Binding: "limits", Message: "at most 3"}
+	n := inline.Example{File: "deploy.yaml", URI: "file:///ws/deploy.yaml", Line: 11, Verdict: inline.Refused, Binding: inline.Unbound, Message: "no zero"}
+	want := "**Examples:** refuses 1 example it should allow · warns 1 · 1 passes · under 2 bindings\n\n" +
+		"- [deploy.yaml:1](<file:///ws/deploy.yaml#L1>) **refused** under binding limits with param params.yaml:1, expected to be allowed: at most 3\n" +
+		"- [deploy.yaml:6](<file:///ws/deploy.yaml#L6>) **warned** under binding limits: at most 3\n" +
+		"- [deploy.yaml:11](<file:///ws/deploy.yaml#L11>) refused under no binding: no zero\n"
+	if got := inline.ExamplesHover([]inline.Example{e, w, n}); got != want {
+		t.Errorf("ExamplesHover() =\n%s\nwant\n%s", got, want)
+	}
+	for _, tc := range []struct{ got, want string }{
+		{inline.RuleWarning(e), "refuses deploy.yaml:1 under binding limits with param params.yaml:1, which expects to be allowed: at most 3"},
+		{inline.ExampleWarning("object.spec.replicas <= 3", e), `expected to be allowed, but the rule "object.spec.replicas <= 3" refuses it under binding limits with param params.yaml:1: at most 3`},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("warning = %q, want %q", tc.got, tc.want)
+		}
+	}
+}

@@ -83,6 +83,10 @@ type checkedFile struct {
 	crds  []*examples.CRD
 	found []*examples.Object
 	done  map[*examples.Object]bool
+	// builtIn are the documents of built-in kinds found in text that an
+	// admission policy may run on, of the kinds builtInKey names.
+	builtIn    []*examples.Object
+	builtInKey string
 }
 
 // crdsRead are the CRDs read from a text for a Kubernetes version.
@@ -97,19 +101,23 @@ type crdsRead struct {
 // the kinds of the CRDs then, and nil when it had none, which a check with
 // the same words need not read again.
 type fileRead struct {
-	size  int64
-	mod   time.Time
-	crd   bool
-	words string
-	text  []byte
+	size   int64
+	mod    time.Time
+	crd    bool
+	policy bool
+	words  string
+	text   []byte
 }
 
 // exampleCheck is a check of the examples: what it needs of the session,
 // made on the message loop, so it runs off it.
 type exampleCheck struct {
 	// crdFiles are the keys of the files with CRDs the session knows, the
-	// open ones among them; the check adds those of its walk.
-	crdFiles []string
+	// open ones among them; the check adds those of its walk. policyFiles
+	// are files to read the admission policies of besides those the walk
+	// and the open documents have.
+	crdFiles    []string
+	policyFiles []string
 	// open are the texts of the open documents, by key.
 	open    map[string][]byte
 	folders []string
@@ -125,6 +133,26 @@ type exampleCheck struct {
 	// them again (see loopChecks).
 	results *examples.Cache
 	checks  map[string][]check.Diagnostic
+	// policies runs the admission policies on their examples, nil none.
+	policies *examples.PolicyCache
+	// admission is what the walk of examples found for the admission
+	// policies.
+	admission admissionFound
+}
+
+// admissionFound are the admission policies a check found, the bindings,
+// and the documents of the workspace a policy may run on: the examples of
+// the CRDs, checked, and the documents of the built-in kinds the policies
+// may match, take params or namespaces from, each file's in its order, and
+// the path of each file below its folder, by key.
+type admissionFound struct {
+	policies []*examples.Policy
+	bindings []*examples.Binding
+	objects  []*examples.Object
+	rels     map[string]string
+	// texts are the texts of the files of the policies and of the
+	// documents, by key.
+	texts map[string][]byte
 }
 
 // examplesChanged records that what the examples are, or their problems,
@@ -191,7 +219,7 @@ func (ss *session) startExamples(ctx context.Context) {
 	}
 	c := exampleCheck{
 		crdFiles: ss.crds.Files(), open: open, folders: outermost(ss.folders), dirFS: ss.dirFS(), limit: limit, kube: ss.kube, memo: memo, loop: &ss.loopBusy,
-		results: &ss.results, checks: checks,
+		results: &ss.results, checks: checks, policies: &ss.policyResults,
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	run := &exampleRun{cancel: cancel, done: make(chan exampleResult, 1)}
@@ -367,7 +395,7 @@ func (c *exampleCheck) run(ctx context.Context) (map[string]exampleFile, error) 
 		return nil, err
 	}
 	var rules ruleFindings
-	if c.results != nil {
+	if c.results != nil || c.policies != nil {
 		if rules, err = c.runRules(ctx, crds, found); err != nil {
 			return nil, err
 		}
@@ -381,6 +409,11 @@ func (c *exampleCheck) run(ctx context.Context) (map[string]exampleFile, error) 
 		diags = append(diags, rules.warnings[ff.f.key]...)
 		if len(diags) > 0 {
 			out[ff.f.key] = exampleFile{text: ff.text, diags: diags}
+		}
+	}
+	for key, warnings := range rules.warnings {
+		if _, done := out[key]; !done && !slices.ContainsFunc(found, func(ff fileFound) bool { return ff.f.key == key }) {
+			out[key] = exampleFile{text: c.admission.texts[key], diags: warnings}
 		}
 	}
 	for key, cf := range rules.crds {
@@ -414,12 +447,22 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 	checked := map[string]checkedFile{}
 	var listed []walked
 	crdFiles := slices.Clone(c.crdFiles)
+	policyFiles := slices.Clone(c.policyFiles)
+	for key, text := range c.open {
+		if examples.HasPolicies(text) && !slices.Contains(policyFiles, key) {
+			policyFiles = append(policyFiles, key)
+		}
+	}
 	walkYAML(ctx, c.dirFS, c.folders, c.limit, yamlWalk{file: func(dir, rel string, d fs.DirEntry) bool {
 		c.wait(ctx)
 		f := walked{dir: dir, rel: rel, d: d, key: crdKey(pathURI(filepath.Join(dir, filepath.FromSlash(rel))))}
 		listed = append(listed, f)
-		if c.hasCRD(f, files) && !slices.Contains(crdFiles, f.key) {
+		crd, policy := c.holds(f, files)
+		if crd && !slices.Contains(crdFiles, f.key) {
 			crdFiles = append(crdFiles, f.key)
+		}
+		if policy && !slices.Contains(policyFiles, f.key) {
+			policyFiles = append(policyFiles, f.key)
 		}
 		return true
 	}})
@@ -430,7 +473,13 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(crds) == 0 {
+	slices.Sort(policyFiles)
+	c.admission = c.readPolicies(ctx, policyFiles, files)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	policies := len(c.admission.policies) > 0
+	if len(crds) == 0 && !policies {
 		c.memo.files, c.memo.checked = files, checked
 		return nil, nil
 	}
@@ -438,8 +487,22 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 	for _, crd := range crds {
 		kinds = append(kinds, crd.Kind)
 	}
+	builtIn, anyKind := examples.PolicyKinds(c.admission.policies, c.kube)
+	kinds = append(kinds, builtIn...)
 	slices.Sort(kinds)
 	words := strings.Join(slices.Compact(kinds), "\x00")
+	if anyKind {
+		words = anyWords
+	}
+	builtInKey := strings.Join(builtIn, "\x00")
+	if anyKind {
+		builtInKey = anyWords
+	}
+	want := func(_, kind string) bool { return anyKind || slices.Contains(builtIn, kind) }
+	c.admission.rels = map[string]string{}
+	if c.admission.texts == nil {
+		c.admission.texts = map[string][]byte{}
+	}
 	taken := map[*examples.CRD]int{}
 	for _, f := range listed {
 		c.wait(ctx)
@@ -449,6 +512,10 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 				continue
 			}
 		}
+		c.admission.rels[f.key] = f.rel
+		if policies {
+			c.admission.texts[f.key] = text
+		}
 		open := slices.DeleteFunc(slices.Clone(crds), func(crd *examples.CRD) bool { return taken[crd] >= maxExamples })
 		cf, ok := c.memo.checked[f.key]
 		if !ok || !bytes.Equal(cf.text, text) || !slices.Equal(cf.crds, open) {
@@ -457,6 +524,13 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 				return nil, err
 			}
 			cf = checkedFile{text: text, crds: open, found: found, done: map[*examples.Object]bool{}}
+		}
+		if policies && (cf.builtInKey != builtInKey || !bytes.Equal(cf.text, text)) {
+			found, err := examples.FindBuiltIn(ctx, f.key, f.rel, text, want)
+			if err != nil {
+				return nil, err
+			}
+			cf.builtIn, cf.builtInKey = found, builtInKey
 		}
 		checked[f.key] = cf
 		objs := slices.DeleteFunc(slices.Clone(cf.found), func(o *examples.Object) bool {
@@ -478,7 +552,11 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 		if len(objs) > 0 {
 			each(f, text, objs)
 		}
-		if !slices.ContainsFunc(crds, func(crd *examples.CRD) bool { return taken[crd] < maxExamples }) {
+		if policies {
+			all := append(slices.Clone(objs), cf.builtIn...)
+			slices.SortStableFunc(all, func(a, b *examples.Object) int { return a.Line - b.Line })
+			c.admission.objects = append(c.admission.objects, all...)
+		} else if !slices.ContainsFunc(crds, func(crd *examples.CRD) bool { return taken[crd] < maxExamples }) {
 			break
 		}
 	}
@@ -576,19 +654,25 @@ func (c *exampleCheck) crds(ctx context.Context, keys []string, files map[string
 	return out
 }
 
-// hasCRD reports whether the file f of the walk may hold a
-// CustomResourceDefinition: whether its text, the editor's when it is open,
-// has its kind. It records what it read of the disk in files.
-func (c *exampleCheck) hasCRD(f walked, files map[string]fileRead) bool {
+// holds reports whether the file f of the walk may hold a
+// CustomResourceDefinition, and an admission policy or binding: whether its
+// text, the editor's when it is open, has their kinds. It records what it
+// read of the disk in files.
+func (c *exampleCheck) holds(f walked, files map[string]fileRead) (crd, policy bool) {
 	if text, ok := c.open[f.key]; ok {
-		return bytes.Contains(text, []byte(crdWord))
+		return bytes.Contains(text, []byte(crdWord)), false // the open ones are listed already
 	}
 	r, ok := c.load(f, "", files)
-	return ok && r.crd
+	return ok && r.crd, ok && r.policy
 }
 
+// anyWords are the words of load for a check that reads every file, for an
+// admission policy that may match any kind.
+const anyWords = "\x01"
+
 // read returns the text of the file f of the walk when it has one of the
-// words, the CRDs' kinds, or may hold a CRD. It records what it read of the
+// words, the kinds of the CRDs and those admission policies may run on,
+// any for anyWords, or may hold a CRD or an admission policy. It records what it read of the
 // disk in files.
 func (c *exampleCheck) read(f walked, words string, files map[string]fileRead) ([]byte, bool) {
 	r, ok := c.load(f, words, files)
@@ -620,10 +704,43 @@ func (c *exampleCheck) load(f walked, words string, files map[string]fileRead) (
 	if err != nil {
 		return fileRead{}, false
 	}
-	r := fileRead{size: info.Size(), mod: info.ModTime(), words: words, crd: bytes.Contains(data, []byte(crdWord))}
-	if r.crd || words != "" && slices.ContainsFunc(strings.Split(words, "\x00"), func(w string) bool { return bytes.Contains(data, []byte(w)) }) {
+	r := fileRead{size: info.Size(), mod: info.ModTime(), words: words, crd: bytes.Contains(data, []byte(crdWord)), policy: examples.HasPolicies(data)}
+	if r.crd || r.policy || words == anyWords || words != "" && slices.ContainsFunc(strings.Split(words, "\x00"), func(w string) bool { return bytes.Contains(data, []byte(w)) }) {
 		r.text = data
 	}
 	files[f.key] = r
 	return r, true
+}
+
+// readPolicies reads the admission policies and the bindings of the files
+// with the keys, an open one with the editor's text, one the walk read with
+// that text.
+func (c *exampleCheck) readPolicies(ctx context.Context, keys []string, files map[string]fileRead) admissionFound {
+	var out admissionFound
+	for _, key := range keys {
+		c.wait(ctx)
+		text, ok := c.open[key]
+		if !ok {
+			text = files[key].text
+		}
+		if text == nil {
+			var err error
+			if text, err = readUnder(c.folders, filepath.FromSlash(key)); err != nil {
+				continue
+			}
+		}
+		policies := examples.ReadPolicies(ctx, key, text, c.kube)
+		if len(policies) > 0 {
+			if out.texts == nil {
+				out.texts = map[string][]byte{}
+			}
+			out.texts[key] = text
+		}
+		out.policies = append(out.policies, policies...)
+		out.bindings = append(out.bindings, examples.ReadBindings(ctx, key, text)...)
+		if ctx.Err() != nil {
+			return admissionFound{}
+		}
+	}
+	return out
 }

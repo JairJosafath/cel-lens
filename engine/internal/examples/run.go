@@ -81,6 +81,27 @@ const (
 	CauseNoOldValue
 	// CauseAbsent is a rule whose field the example does not have.
 	CauseAbsent
+	// CausePolicyRefused is an expression of a ValidatingAdmissionPolicy
+	// the API server refuses: it admits nothing with the policy.
+	CausePolicyRefused
+	// CauseExcluded is a policy whose match condition is false on the
+	// example.
+	CauseExcluded
+	// CauseNoBinding is an expression that reads params, of a policy no
+	// binding of the workspace binds.
+	CauseNoBinding
+	// CauseNoParams is a policy for which a binding has no params.
+	CauseNoParams
+	// CauseBindingRefused is a binding the API server refuses the example
+	// for before it runs the policy, such as for params not found with
+	// parameterNotFoundAction Deny.
+	CauseBindingRefused
+	// CauseAuthorizer is an expression that reads authorizer, which cel-lens
+	// does not run, or a policy with a match condition that does.
+	CauseAuthorizer
+	// CauseConversion is an example the API server would convert to the
+	// version the policy matches it as, which cel-lens does not.
+	CauseConversion
 )
 
 // Refusal is a refusal of an example by a rule, as the API server returns

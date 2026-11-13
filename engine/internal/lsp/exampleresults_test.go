@@ -230,3 +230,46 @@ spec: {size: 4}
 		t.Errorf("exampleResults at %+v = %+v, want the immutable rule's 5 results", at, one.Rules)
 	}
 }
+
+// TestExampleResultsRootPath checks that a rule at the root of a CRD's
+// schema keeps its version and its path "" in the answer, as #9 made it,
+// beside a policy's expressions, which have none (review of #22).
+func TestExampleResultsRootPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	crd := strings.Replace(ruleCRD, "          type: object\n          properties:\n            spec:", "          type: object\n          x-kubernetes-validations:\n            - rule: self.metadata.name.size() < 10\n          properties:\n            spec:", 1)
+	crdPath := filepath.Join(dir, "crd.yaml")
+	writeIn(t, crdPath, crd)
+	writeIn(t, filepath.Join(dir, "w.yaml"), "apiVersion: example.com/v1\nkind: Widget\nmetadata: {name: w}\nspec: {size: 1}\n")
+	c := start(t)
+	if _, rerr := c.call("initialize", map[string]any{"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": fileURI(dir), "name": "ws"}}}); rerr != nil {
+		t.Fatalf("initialize error = %+v", rerr)
+	}
+	c.notify("initialized", map[string]any{})
+	_, raw, rerr := c.command("cel-lens.exampleResults", map[string]any{"uri": fileURI(crdPath)}, nil)
+	if rerr != nil {
+		t.Fatalf("cel-lens.exampleResults error = %+v", rerr)
+	}
+	var answer struct {
+		Rules []map[string]json.RawMessage
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Rules) == 0 {
+		t.Fatalf("cel-lens.exampleResults = %s, want the rules", raw)
+	}
+	root := answer.Rules[0]
+	var text string
+	if err := json.Unmarshal(root["rule"], &text); err != nil || text != "self.metadata.name.size() < 10" {
+		t.Fatalf("first rule = %s, want the root rule", root["rule"])
+	}
+	if string(root["version"]) != `"v1"` || string(root["path"]) != `""` {
+		t.Errorf("root rule version = %s, path = %s, want \"v1\" and \"\"", root["version"], root["path"])
+	}
+	for _, key := range []string{"field", "name"} {
+		if _, ok := root[key]; ok {
+			t.Errorf("root rule has %q, which only a policy's expression has", key)
+		}
+	}
+}
