@@ -99,6 +99,8 @@ const MIN_FRAMES_PER_SECOND = 5;
 
 const PNGS = [
   'inline-info.png',
+  'example-results-line.png',
+  'example-results-picker.png',
   'problems.png',
   'hover.png',
   'completion.png',
@@ -233,7 +235,7 @@ describe('npm run pictures', () => {
     expect(manifest.pictures.openvscodeServer).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it.each(['widget_crd.yaml', 'pod_policy.yaml'])(
+  it.each(['widget_crd.yaml', 'pod_policy.yaml', 'limit_crd.yaml'])(
     'has the fixture %s, which the script uses',
     (name) => {
       expect(readFileSync(`test/pictures/${name}`, 'utf8').length).toBeGreaterThan(0);

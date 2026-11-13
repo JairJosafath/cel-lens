@@ -112,54 +112,126 @@ describe('CHANGELOG.md', () => {
     expect(engineVersions(text)).toEqual(found);
   });
 
-  it('has an Unreleased section, with only Added entries, and a released version for every other section', () => {
+  it('has an Unreleased section, empty, and a released version for every other section', () => {
     expect(sections[0]?.version).toBe('Unreleased');
-    expect(sections[0]?.kinds).toEqual(['Added']);
+    expect(sections[0]?.kinds).toEqual([]);
     expect(sections.length).toBeGreaterThan(1);
   });
 
-  const unreleased =
-    CHANGELOG.split(/^(?=## \[)/m).find((text) => text.startsWith('## [Unreleased]')) ?? '';
+  /** The section of `version` of the changelog, and the part of it under the heading of `kind`. */
+  function sectionOf(version: string): string {
+    return CHANGELOG.split(/^(?=## \[)/m).find((text) => text.startsWith(`## [${version}]`)) ?? '';
+  }
+  function partOf(version: string, kind: string): string | undefined {
+    return sectionOf(version)
+      .split(/^(?=### )/m)
+      .find((part) => part.startsWith(`### ${kind}\n`));
+  }
+
+  const LATEST = '0.37.0';
+
+  it('has the notes of the latest release right under Unreleased, with the date of its preparation, and the version of package.json', () => {
+    expect(sectionOf(LATEST)).toMatch(/^## \[0\.37\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sections[1]?.version).toBe(LATEST);
+    const version = (
+      JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
+    ).version;
+    expect(version).toBe(LATEST);
+  });
+
+  it('lists the kinds of the latest release in order: Added, Changed', () => {
+    expect(sections.find(({ version }) => version === LATEST)?.kinds).toEqual(['Added', 'Changed']);
+  });
+
+  it('says nothing twice in the notes of the latest release', () => {
+    const entries = sectionOf(LATEST)
+      .split('\n')
+      .filter((line) => line.startsWith('- '));
+    expect(new Set(entries).size).toBe(entries.length);
+    const sentences = entries.flatMap((entry) =>
+      entry
+        .slice(2)
+        .split(/(?<=[.:;])\s+/)
+        .filter((sentence) => sentence.length > 60),
+    );
+    expect(sentences.filter((sentence, at) => sentences.indexOf(sentence) !== at)).toEqual([]);
+  });
+
+  it('names the engine of the latest release once, and says it needs nothing set', () => {
+    expect(engineVersions(sectionOf(LATEST))).toEqual(['v0.29.0']);
+    expect(partOf(LATEST, 'Changed')).toContain(
+      'The extension ships `cel-lens-core` v0.29.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
+    );
+  });
+
+  it('describes nothing of example results as needing an engine that no release has, or as pictures still to take', () => {
+    const notes = sectionOf(LATEST);
+    expect(notes).not.toContain('does not yet');
+    expect(notes).not.toContain('still to take');
+    expect(notes).not.toContain('no engine release has');
+  });
 
   it.each([
     "what each rule of a CRD's `x-kubernetes-validations` does to the example objects of the workspace",
+    'There is no cluster and nothing to register',
+    "at most 100 a CRD and never in the CRD's own file",
+    '`invalid`, `bad`, `refused`, `rejected` or `denied`',
+    '`# cel-lens: refused "part of the message"`',
+    'another `# cel-lens:` comment there is an error naming the three forms',
+    'The same kind, namespace and name twice in a file is an update from the first',
+    'decoding, defaulting and validation of a custom resource',
+    "what it refuses is an error on the example at the field, in the API server's words, unless the example expects to be refused",
+    'whatever the experimental features',
+    'take as long with 100 examples as with none, except that a request that arrives just as a check starts, in the first 25 ms or so after typing pauses, takes 1.5 to 4 ms longer than its usual 4.5 ms or so',
+    'no admission policy is covered yet',
     '`3 examples pass`',
     '`refuses 1 example it should allow · 2 pass`',
+    '`allows 1 example it should refuse`',
+    '`1 example errors`',
+    '`not run: needs an update example`',
+    '`not run: CRD refused`',
+    'A refused example that expects to be refused passes, and a rule without examples gets no part',
+    'The part shortens first (`2 wrong · 3 pass`, then `2 wrong`)',
     "a picker titled after the rule's line",
     "each with its verdict, its file and line, and the API server's message",
     'says the results are being computed until the engine answers',
     'picking an example opens it at its line beside the rule',
     "never shows another rule's results",
+    "The rule's hover gains a section listing each example",
+    'at most 10 and then `and N more`',
+    'A wrong verdict is a warning, source `cel-lens`, on the rule',
+    "at the example's first key",
     'With the setting off, the part says so and offers a button that turns it on',
     'The setting `cel-lens.exampleResults` (on by default, resource scope)',
     '**cel-lens: Toggle Example Results**',
     '**Example results: on** or **off**',
     'open editors follow at once, without a reload',
+    'with a picture of the line above a rule with its part and one of the picker it opens',
     'Dry runs stay under _Not supported yet_ for admission policies only',
-  ])('names %s under Added in the notes of the next release', (text) => {
-    expect(unreleased).toContain(text);
+  ])('names %s under Added in the notes of the latest release', (text) => {
+    expect(partOf(LATEST, 'Added')).toContain(text);
   });
 
-  it('names no engine version in the notes of the next release, which no engine release has yet', () => {
-    expect(engineVersions(unreleased)).toEqual([]);
+  it.each([
+    'The engine checks CRDs for the same Kubernetes version at once, where it checked one at a time',
+    'the check of an edited open CRD no longer waits for the background check of a CRD that is not open',
+    'the worst wait for a change and a hover in a session is 12 to 23 ms, as without examples, where it was 21 to 48 ms',
+    'has the engine work the results out again for the new version',
+  ])('names %s under Changed in the notes of the latest release', (text) => {
+    expect(partOf(LATEST, 'Changed')).toContain(text);
   });
 
   const RELEASE = '0.36.0';
-  const release =
-    CHANGELOG.split(/^(?=## \[)/m).find((text) => text.startsWith(`## [${RELEASE}]`)) ?? '';
+  const release = sectionOf(RELEASE);
 
   /** The part of the section of the release under the heading of `kind`. */
   function releasePart(kind: string): string | undefined {
     return release.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
   }
 
-  it('has the notes of 0.36.0 under its heading with the date of its preparation', () => {
+  it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0', () => {
     expect(release).toMatch(/^## \[0\.36\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[1]?.version).toBe(RELEASE);
-    const version = (
-      JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
-    ).version;
-    expect(version).toBe(RELEASE);
+    expect(sections[2]?.version).toBe(RELEASE);
   });
 
   it('lists the kinds of the release in order: Added, Changed, Fixed, Security', () => {

@@ -89,7 +89,7 @@ Bugs go to <https://github.com/JairJosafath/cel-lens/issues>. Say which Kubernet
 ## How it works
 
 The extension activates on YAML files and starts the bundled cel-lens language
-server, `cel-lens-core` v0.28.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
+server, `cel-lens-core` v0.29.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
 Kubernetes YAML such as CRDs and admission policies. The status bar shows the
 Kubernetes version the server reports; the engine lists the versions it supports, so Pick
 Kubernetes Version offers them; or type a version in the
@@ -342,10 +342,10 @@ releases are tagged `core-vX.Y.Z` there, the extension's `vscode-vX.Y.Z`.
   (`vitest.config.mts` points `vscode` at it).
 - `test/e2e/` is the end-to-end test: `engine.test.ts` takes the engine from `bin/` (failing with "npm run engine" when it is missing), starts it
   with the extension's own command, and as a language client checks a diagnostic, hover,
-  completion and broken YAML. The stand-in unit tests do not replace it. A case for a feature that no
-  engine release has yet skips, saying why, when the engine it starts lacks it; set `CEL_LENS_SERVER_PATH` to a
-  `cel-lens-core` binary built from the engine's source (as `cel-lens.serverPath` would name it) to run the whole
-  file on that engine instead of the one in `bin/`.
+  completion and broken YAML. The stand-in unit tests do not replace it. No case skips: the engine in
+  `bin/` is the pinned one, and a case fails when it lacks what the extension needs. To try an engine that is not
+  pinned yet, set `CEL_LENS_SERVER_PATH` to a `cel-lens-core` binary built from the engine's source (as
+  `cel-lens.serverPath` would name it) to run the whole file on that engine instead of the one in `bin/`.
 - `test/pictures/` holds the fixtures and `take.ts`, the script behind `npm run pictures`.
 - `esbuild.mjs` bundles into `out/`; `.vscodeignore` keeps everything else out of
   the `.vsix`.

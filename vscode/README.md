@@ -106,9 +106,13 @@ A value of a CRD takes an int or a string: its picker offers `int` and `string` 
 
 While you edit a rule in a CRD's `x-kubernetes-validations`, cel-lens runs it on the example objects you keep next to it, with the API server's own validator, and says what the rule does to each one. There is no cluster and nothing to register: a kubebuilder project's `config/samples/` is found as it is, and so is a `testdata/` folder.
 
-<!-- Picture to take: images/example-results-line.png, a CRD open in a dark theme with a rule whose line above it says `refuses 1 example it should allow · 2 pass`, and the warning on the rule and its message in the hover, in a workspace with `config/samples/` holding three examples. -->
+![Example results: the line above a rule of a CRD says `refuses 1 example it should allow · 2 pass`, and the rule has a warning](https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/example-results-line.png)
 
-<!-- Picture to take: images/example-results-picker.png, the picker titled `Example results of the rule on line 16` in a dark theme, opened from that part: `Not as expected` with `config/samples/big.yaml:3` and its message `spec.replicas: Invalid value: 20: at most 10 replicas`, then `As expected` with the two examples that pass. -->
+The line above a rule that refuses one of its three examples, which expects to be allowed: `refuses 1 example it should allow · 2 pass`, and the warning on the rule.
+
+![Example results: the picker opened from that part, with big.yaml not as expected and the two examples that pass](https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/example-results-picker.png)
+
+The picker the part opens, titled after the rule's line: `big.yaml` first, with the API server's message, then the two examples that pass.
 
 ### Where the examples come from
 

@@ -122,11 +122,12 @@ describe('CONTRIBUTING.md', () => {
     expect(flat).toContain("asks the engine's `cel-lens.exampleResults` for that rule");
   });
 
-  it('says how to run the end-to-end test on an engine no release has, and that its case skips on one without the feature', () => {
+  it('says how to run the end-to-end test on an engine that is not pinned yet, and that no case skips', () => {
     const flat = CONTRIBUTING.replace(/\s+/g, ' ');
 
     expect(flat).toContain('set `CEL_LENS_SERVER_PATH` to a `cel-lens-core` binary');
-    expect(flat).toContain('skips, saying why');
+    expect(flat).toContain('No case skips');
+    expect(flat).not.toContain('skips, saying why');
   });
 
   it('names no factory image or devcontainer', () => {

@@ -55,7 +55,7 @@ import { spawnEngine } from '../../src/spawn_engine';
 
 /**
  * An engine to start in place of the one in bin/, as the extension's `cel-lens.serverPath` names
- * one: for an engine no release has yet.
+ * one: to try an engine build before it is pinned.
  */
 const ENGINE_PATH = process.env['CEL_LENS_SERVER_PATH'] ?? '';
 const FIXTURES = fileURLToPath(new URL('fixtures/', import.meta.url));
@@ -769,12 +769,11 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
     }
   });
 
-  it('shows what a CRD rule does to its examples: the part of the line, the command’s answer as the picker lists it, and the toggle', async (context) => {
-    if (!running().commands.includes('cel-lens.exampleResults')) {
-      context.skip(
-        'the engine has no cel-lens.exampleResults: it is older than the first with example results. Set CEL_LENS_SERVER_PATH to one built from cel-lens-core, as cel-lens.serverPath would.',
-      );
-    }
+  it('shows what a CRD rule does to its examples: the part of the line, the command’s answer as the picker lists it, and the toggle', async () => {
+    expect(
+      running().commands,
+      'the engine of bin/ is the pinned one, which has example results',
+    ).toContain('cel-lens.exampleResults');
     const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
     for (const [fixture, path] of [
       ['limit_crd.yaml', 'crd.yaml'],
