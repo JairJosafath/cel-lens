@@ -18,18 +18,24 @@ import (
 // schema validation also writes an index, and a key with dots, between dots
 // ("spec.ports.0.name", "spec.labels.example.com/team").
 func (o *Object) at(field string) (start, end extract.Position) {
-	root := content(o.node)
-	found := root
-	if root != nil && field != "<nil>" {
-		found = walk(root, steps(field))
-	}
-	if found == nil || found == root {
+	found, _ := o.find(field)
+	if root := content(o.node); found == nil || found == root {
 		found = firstKey(root)
 	}
 	if found == nil {
 		return extract.Position{Line: o.Line, Column: 1}, extract.Position{Line: o.Line, Column: 1}
 	}
 	return o.span(found)
+}
+
+// find returns the node at (see at) and the value the field has there, the
+// document's content for the root, or nils for a document without any.
+func (o *Object) find(field string) (at, value *yaml.Node) {
+	root := content(o.node)
+	if root == nil || field == "<nil>" {
+		return root, root
+	}
+	return walk(root, steps(field))
 }
 
 // Head returns where the document of o starts, where a problem of the
@@ -71,9 +77,10 @@ func steps(field string) []step {
 
 // walk follows the steps from n, and returns the node to point at for the
 // last one the document has: a mapping's key, or an item of a list; n when
-// it has none of them.
-func walk(n *yaml.Node, path []step) *yaml.Node {
-	at := n
+// it has none of them. It also returns the value there: the key's, or the
+// item itself.
+func walk(n *yaml.Node, path []step) (at, value *yaml.Node) {
+	at = n
 	for len(path) > 0 {
 		n = resolve(n)
 		switch n.Kind {
@@ -93,21 +100,21 @@ func walk(n *yaml.Node, path []step) *yaml.Node {
 				used = i
 			}
 			if key == nil {
-				return at
+				return at, n
 			}
 			at, n, path = key, value, path[used:]
 		case yaml.SequenceNode:
 			i, err := strconv.Atoi(path[0].text)
 			if err != nil || i < 0 || i >= len(n.Content) {
-				return at
+				return at, n
 			}
 			n = n.Content[i]
 			at, path = n, path[1:]
 		case yaml.DocumentNode, yaml.ScalarNode, yaml.AliasNode:
-			return at
+			return at, n
 		}
 	}
-	return at
+	return at, n
 }
 
 // lookup returns the key and value of the mapping n for name, through its

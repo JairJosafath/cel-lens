@@ -45,6 +45,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	sigsyaml "sigs.k8s.io/yaml"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
@@ -105,50 +106,91 @@ type servedVersion struct {
 // document that is no apiextensions.k8s.io/v1 CustomResourceDefinition, or
 // whose YAML does not parse, gives none. A cancelled ctx gives none.
 func Read(ctx context.Context, file string, data []byte, v kubeversion.Version) []*CRD {
+	out, _ := ReadWithProblems(ctx, file, data, v)
+	return out
+}
+
+// ReadWithProblems is Read, with the problems of each CustomResourceDefinition
+// it leaves out: for a field of the wrong type, the problem check gives, at
+// the value (such as `n`, which kubectl reads as a boolean where a string is
+// wanted); for another reason, one that says what the API server refuses, at
+// the first line of the document. A CRD's problems with its rules are not
+// among them.
+func ReadWithProblems(ctx context.Context, file string, data []byte, v kubeversion.Version) ([]*CRD, []check.Diagnostic) {
 	if !bytes.Contains(data, []byte("CustomResourceDefinition")) {
-		return nil
+		return nil, nil
 	}
 	docs, _, err := extract.Documents(ctx, file, data)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	var out []*CRD
+	var (
+		out      []*CRD
+		problems []check.Diagnostic
+	)
 	for _, d := range docs {
 		if ctx.Err() != nil {
-			return nil // validating another would hold the version (see check.UnderVersion)
+			return nil, nil // validating another would hold the version (see check.UnderVersion)
 		}
 		if apiVersion, kind, _ := typeMeta(d.Node); apiVersion != "apiextensions.k8s.io/v1" || kind != "CustomResourceDefinition" {
 			continue
 		}
-		if c, ok := readCRD(ctx, d.Node, v); ok {
-			c.File, c.data, c.doc, c.node, c.kube = file, data, d.Index, d.Node, v
-			out = append(out, c)
+		c, why := readCRD(ctx, d.Node, v)
+		if c == nil {
+			if why != "" {
+				problems = append(problems, unreadable(ctx, file, data, d.Node, &apiextensionsv1.CustomResourceDefinition{}, why)...)
+			}
+			continue
 		}
+		c.File, c.data, c.doc, c.node, c.kube = file, data, d.Index, d.Node, v
+		out = append(out, c)
 	}
-	return out
+	return out, problems
+}
+
+// unreadable gives the problems of the document doc of file, whose text is
+// data, which cannot be read as the Kubernetes type of out: those that check
+// reports where it reads a document of the type, and, when it reports none,
+// one at the first line of the document that says why, as a message.
+func unreadable(ctx context.Context, file string, data []byte, doc *yaml.Node, out any, why string) []check.Diagnostic {
+	if ctx.Err() != nil {
+		return nil
+	}
+	diags, err := check.ReadProblems(ctx, file, data, doc, out)
+	if len(diags) > 0 {
+		return diags
+	}
+	if err != nil {
+		why = err.Error()
+	}
+	_, _, line := typeMeta(doc)
+	at := extract.Position{Line: line, Column: 1}
+	return []check.Diagnostic{{File: file, Message: why, Severity: check.SeverityError, Start: at, End: at}}
 }
 
 // readCRD reads the CustomResourceDefinition doc, false when the API server
-// would refuse it.
-func readCRD(ctx context.Context, doc *yaml.Node, v kubeversion.Version) (*CRD, bool) {
+// would refuse it, and then, in why, what it refuses; why is "" for a CRD that
+// is left out without a word: one that serves no version, or when ctx is
+// cancelled.
+func readCRD(ctx context.Context, doc *yaml.Node, v kubeversion.Version) (c *CRD, why string) {
 	// Read as the engine reads a CustomResourceDefinition to check it (see
 	// package check), so a CRD it checks is the one its examples have.
 	var raw any
-	if doc.Decode(&raw) != nil {
-		return nil, false
+	if err := yamlfield.Decode(doc, &raw); err != nil {
+		return nil, "the CustomResourceDefinition cannot be read: " + err.Error()
 	}
 	js, err := json.Marshal(raw)
 	if err != nil {
-		return nil, false
+		return nil, "the CustomResourceDefinition cannot be read: " + err.Error()
 	}
 	var versioned apiextensionsv1.CustomResourceDefinition
 	if json.Unmarshal(js, &versioned) != nil {
-		return nil, false
+		return nil, "the CustomResourceDefinition cannot be read"
 	}
 	apiextensionsv1.SetObjectDefaults_CustomResourceDefinition(&versioned)
 	var internal apiextensions.CustomResourceDefinition
 	if apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(&versioned, &internal, nil) != nil {
-		return nil, false
+		return nil, "the API server refuses the CustomResourceDefinition: it cannot convert it"
 	}
 	// The rules are left out: compiling them is the costly part of the
 	// check, and a rule that does not compile leaves the schema as it is.
@@ -158,10 +200,16 @@ func readCRD(ctx context.Context, doc *yaml.Node, v kubeversion.Version) (*CRD, 
 		dropRules(withoutRules.Spec.Versions[i].Schema)
 	}
 	var errs field.ErrorList
-	if err := check.UnderVersion(v, func() { errs = crdvalidation.ValidateCustomResourceDefinition(ctx, withoutRules) }); err != nil || len(errs) > 0 || ctx.Err() != nil {
-		return nil, false
+	err = check.UnderVersion(v, func() { errs = crdvalidation.ValidateCustomResourceDefinition(ctx, withoutRules) })
+	switch {
+	case ctx.Err() != nil:
+		return nil, ""
+	case err != nil:
+		return nil, "the API server refuses the CustomResourceDefinition: " + err.Error()
+	case len(errs) > 0:
+		return nil, "the API server refuses the CustomResourceDefinition: " + errs.ToAggregate().Error()
 	}
-	c := &CRD{
+	c = &CRD{
 		Name: versioned.Name, Group: versioned.Spec.Group, Kind: versioned.Spec.Names.Kind, Plural: versioned.Spec.Names.Plural,
 		namespaced: versioned.Spec.Scope == apiextensionsv1.NamespaceScoped,
 		converts:   versioned.Spec.Conversion == nil || versioned.Spec.Conversion.Strategy == apiextensionsv1.NoneConverter,
@@ -174,11 +222,14 @@ func readCRD(ctx context.Context, doc *yaml.Node, v kubeversion.Version) (*CRD, 
 		}
 		sv, ok := readVersion(&versioned, ver.Name, v)
 		if !ok {
-			return nil, false
+			return nil, "the API server refuses the CustomResourceDefinition: its version " + ver.Name + " cannot be read"
 		}
 		c.versions[ver.Name] = sv
 	}
-	return c, len(c.versions) > 0
+	if len(c.versions) == 0 {
+		return nil, "" // no example can be of a kind it does not serve
+	}
+	return c, ""
 }
 
 // readVersion makes what the API server checks a custom resource of the
@@ -448,7 +499,7 @@ func nameOf(doc *yaml.Node) (namespace, name string) {
 			Name      any `yaml:"name"`
 		} `yaml:"metadata"`
 	}
-	if doc.Decode(&m) != nil {
+	if yamlfield.Decode(doc, &m) != nil {
 		return "", ""
 	}
 	namespace, _ = m.Metadata.Namespace.(string)

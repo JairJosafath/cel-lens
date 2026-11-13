@@ -433,6 +433,10 @@ type yamlWalk struct {
 	// capped is called, in each folder, at the first YAML file past the
 	// limit, where the walk of the folder stops.
 	capped func()
+	// over, when not nil, is called for each YAML file past the limit, in
+	// place of capped, and the walk goes on, so that the caller can count
+	// them; it reads none of them.
+	over func()
 	// file is called for each YAML file, with the folder of folders it is
 	// below and its slash-separated path relative to it. It returns false to
 	// stop the walk.
@@ -475,6 +479,10 @@ func walkYAML(ctx context.Context, dirFS func(dir string) fs.FS, folders []strin
 			}
 			seen++
 			if seen > limit {
+				if w.over != nil {
+					w.over()
+					return nil
+				}
 				if w.capped != nil {
 					w.capped()
 				}

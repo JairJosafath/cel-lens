@@ -37,7 +37,8 @@ func (s *spans) parse(text string) *ast.AST {
 	return tree
 }
 
-// locate maps a place in the text of e, line counting from 1 and col from 0,
+// locate maps a place in the text of e, line counting from 1 and col from 0 (a
+// negative col is 0),
 // to a range in the file. The range is the part of the expression that the
 // syntax tree node at that place covers, see nodeSpan. Where the expression
 // does not parse, there is no tree and the range is the one character at the
@@ -45,6 +46,9 @@ func (s *spans) parse(text string) *ast.AST {
 // with escapes or folded lines, so that the caller falls back to the whole
 // expression.
 func locate(parsed *ast.AST, lines [][]rune, e extract.Expression, line, col int) (start, end extract.Position, ok bool) {
+	// A compiler that reports column 0, which counts from 1, gives -1 here: the
+	// place is the start of the line.
+	col = max(col, 0)
 	text := []rune(e.Text)
 	if e.Chars != nil {
 		return locateChars(parsed, text, e.Chars, line, col)
@@ -96,6 +100,7 @@ func locate(parsed *ast.AST, lines [][]rune, e extract.Expression, line, col int
 // locateChars is locate for an expression with a map from its characters to
 // the file, see extract.Expression.Chars.
 func locateChars(parsed *ast.AST, text []rune, chars []extract.Range, line, col int) (start, end extract.Position, ok bool) {
+	col = max(col, 0)
 	rows := strings.Split(string(text), "\n")
 	if line < 1 || line > len(rows) || col > len([]rune(rows[line-1])) || len(chars) != len(text) {
 		return start, end, false

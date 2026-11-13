@@ -23,6 +23,7 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assume"
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -500,7 +501,7 @@ func (p *policyVars) rules() []matchkind.Rule {
 // each type that is not placed is not, by index. The error is for a cancelled ctx.
 func (r *reporter) placePolicy(ctx context.Context, node *yaml.Node, types []indexedType) (policyPlaced, map[int]string, error) {
 	var root map[string]any
-	err := node.Decode(&root)
+	err := yamlfield.Decode(node, &root)
 	var p *policyVars
 	if err == nil {
 		p, err = readPolicyVars(root)

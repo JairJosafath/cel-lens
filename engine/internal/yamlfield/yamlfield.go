@@ -203,6 +203,9 @@ func nodeKind(n *yaml.Node) string {
 	case yaml.SequenceNode:
 		return "array"
 	case yaml.ScalarNode:
+		if _, ok := PlainBool(n); ok {
+			return "bool"
+		}
 		switch n.ShortTag() {
 		case "!!int", "!!float":
 			return "number"
@@ -239,6 +242,9 @@ func got(n *yaml.Node) string {
 	case "number":
 		return "the number " + n.Value
 	case "bool":
+		if _, ok := PlainBool(n); ok {
+			return "a boolean: kubectl reads an unquoted " + n.Value + " as one (YAML 1.1), so quote it if a string is meant"
+		}
 		return "a boolean"
 	case "object":
 		return "an object"

@@ -157,7 +157,7 @@ func (c *exampleCheck) evaluate(ctx context.Context, crds []*examples.CRD, found
 				return evaluated{}, err
 			}
 			run, err := c.policies.Run(ctx, p, rules, in, examples.PolicyOptions{
-				Pause: c.wait, Checked: c.checks[p.File], Before: func(o *examples.Object) string { return before[at(o)] },
+				Pause: c.wait, Checked: c.checks[p.File], MaxExamples: c.maxExamples, Before: func(o *examples.Object) string { return before[at(o)] },
 			})
 			if err != nil {
 				return evaluated{}, err

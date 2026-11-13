@@ -518,6 +518,31 @@ func TestPolicyCache(t *testing.T) {
 	}
 }
 
+// TestPolicyRunMaxExamples checks that a policy runs on the first 100
+// examples it matches, and on as many as PolicyOptions.MaxExamples says (#24).
+func TestPolicyRunMaxExamples(t *testing.T) {
+	t.Parallel()
+	var docs strings.Builder
+	for i := range maxPolicyExamples + 50 {
+		docs.WriteString(deployment("d"+strconv.Itoa(i), 1) + "---\n")
+	}
+	ws := readWorkspace(t, vap("p", "  validations:\n    - {expression: \"object.spec.replicas < 3\"}\n"), [2]string{"deploy.yaml", docs.String()})
+	rules, err := ws.policies[0].Rules(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ max, want int }{{0, maxPolicyExamples}, {10, 10}, {maxPolicyExamples + 50, maxPolicyExamples + 50}, {1 << 30, maxPolicyExamples + 50}} {
+		var c PolicyCache
+		run, err := c.Run(t.Context(), ws.policies[0], rules, ws.in, PolicyOptions{MaxExamples: tc.max})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(run.Results) != tc.want {
+			t.Errorf("Run(MaxExamples: %d) gave %d results, want %d", tc.max, len(run.Results), tc.want)
+		}
+	}
+}
+
 func TestPolicyRunCancelled(t *testing.T) {
 	t.Parallel()
 	ws := readWorkspace(t, vap("p", "  validations:\n    - {expression: \"true\"}\n"), [2]string{"deploy.yaml", deployment("web", 5)})

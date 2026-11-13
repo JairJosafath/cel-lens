@@ -124,7 +124,7 @@ spec:
 	request("second", "workspace/executeCommand", results)
 	released.Do(func() { close(release) })
 	m := next("second")
-	var got resultsAnswer
+	var got ExampleResults
 	if err := json.Unmarshal(m.Result, &got); err != nil || m.Error != nil {
 		t.Fatalf("exampleResults = %s, %+v (%v), want an answer", m.Result, m.Error, err)
 	}
@@ -190,7 +190,7 @@ spec:
 		<-served
 	})
 	c := jsonrpc.NewConn(clientIn, clientOut)
-	answer := func(id string) resultsAnswer {
+	answer := func(id string) ExampleResults {
 		t.Helper()
 		if err := c.Request(id, "workspace/executeCommand", map[string]any{"command": commandExampleResults, "arguments": []any{map[string]any{"uri": pathURI(filepath.Join(dir, "crd.yaml"))}}}); err != nil {
 			t.Fatal(err)
@@ -200,7 +200,7 @@ spec:
 			if m.Method != "" || string(m.ID) != `"`+id+`"` {
 				continue
 			}
-			var got resultsAnswer
+			var got ExampleResults
 			if err := json.Unmarshal(m.Result, &got); err != nil || m.Error != nil || len(got.Rules) != 1 || len(got.Rules[0].Results) != 1 {
 				t.Fatalf("exampleResults = %s, %+v (%v), want one rule's one result", m.Result, m.Error, err)
 			}

@@ -20,13 +20,13 @@ type resultsArgs struct {
 	Range *lspRange `json:"range"`
 }
 
-// resultsAnswer is the answer of exampleResults: the results of each rule.
-type resultsAnswer struct {
+// ExampleResults is the answer of exampleResults: the results of each rule.
+type ExampleResults struct {
 	KubernetesVersion string        `json:"kubernetesVersion"`
-	Rules             []ruleResults `json:"rules"`
+	Rules             []RuleResults `json:"rules"`
 }
 
-// ruleResults are the results of a rule, named as the line above it and a
+// RuleResults are the results of a rule, named as the line above it and a
 // .cellens entry name it: its document, version and path, its index there,
 // its text, and its location as cel-lens.showRule takes it.
 //
@@ -34,7 +34,7 @@ type resultsAnswer struct {
 // left out, as a rule always has them, "" for the root path: its field
 // says which it is (validation, matchCondition or auditAnnotation), and
 // name a match condition's name or an annotation's key.
-type ruleResults struct {
+type RuleResults struct {
 	Document string          `json:"document"`
 	Version  *string         `json:"version,omitempty"`
 	Path     *string         `json:"path,omitempty"`
@@ -42,52 +42,61 @@ type ruleResults struct {
 	Name     string          `json:"name,omitempty"`
 	Index    int             `json:"index"`
 	Rule     string          `json:"rule"`
-	Location map[string]any  `json:"location"`
-	Results  []ruleOnExample `json:"results"`
+	Location RuleLocation    `json:"location"`
+	Results  []RuleOnExample `json:"results"`
 }
 
-// ruleOnExample is what a rule does to an example (see examples.Result).
+// RuleLocation is where a rule is, as cel-lens.showRule takes it, and
+// cel-lens.exampleResults, to ask for the results of that rule alone: its
+// range in its file, and the file's URI. They are in the order the answer has
+// always had them, a map's sorted keys.
+type RuleLocation struct {
+	Range lspRange `json:"range"`
+	URI   string   `json:"uri"`
+}
+
+// RuleOnExample is what a rule does to an example (see examples.Result).
 //
 // For an admission policy's expression it also gives the binding it was
 // admitted under, left out when no binding binds the policy, the param,
 // the message of a validation that fails, or an annotation's value, and
 // the API server's answer to the example under that binding.
-type ruleOnExample struct {
-	Example   exampleRef      `json:"example"`
+type RuleOnExample struct {
+	Example   ExampleRef      `json:"example"`
 	Binding   string          `json:"binding,omitempty"`
-	Param     *exampleRef     `json:"param,omitempty"`
+	Param     *ExampleRef     `json:"param,omitempty"`
 	Result    string          `json:"result"`
 	Message   string          `json:"message,omitempty"`
-	Refusals  []resultRefusal `json:"refusals,omitempty"`
+	Refusals  []ResultRefusal `json:"refusals,omitempty"`
 	Ignored   []string        `json:"ignored,omitempty"`
 	Ran       []string        `json:"ran,omitempty"`
 	Reason    string          `json:"reason,omitempty"`
 	Error     string          `json:"error,omitempty"`
-	Admission *admissionRef   `json:"admission,omitempty"`
+	Admission *AdmissionRef   `json:"admission,omitempty"`
 	Expected  bool            `json:"expected"`
 	Wrong     string          `json:"wrong,omitempty"`
 }
 
-// admissionRef is the API server's answer to an example under a binding
+// AdmissionRef is the API server's answer to an example under a binding
 // of an admission policy: the error it refuses it with, its warnings and
 // its audit annotations.
-type admissionRef struct {
+type AdmissionRef struct {
 	Denied      string            `json:"denied,omitempty"`
 	Warnings    []string          `json:"warnings,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// resultRefusal is a refusal of a rule, as the API server returns it.
-type resultRefusal struct {
+// ResultRefusal is a refusal of a rule, as the API server returns it.
+type ResultRefusal struct {
 	Path    string `json:"path"`
 	Message string `json:"message"`
 }
 
-// exampleRef names an example: its file, by URI and by path below its
+// ExampleRef names an example: its file, by URI and by path below its
 // workspace folder, the line its content starts at, from 1, what it is,
 // whether the rules ran on it as a create or an update, and what it
 // expects.
-type exampleRef struct {
+type ExampleRef struct {
 	URI        string `json:"uri"`
 	File       string `json:"file"`
 	Line       int    `json:"line"`
@@ -178,7 +187,7 @@ func (ss *session) answerExampleResults(ctx context.Context, msg jsonrpc.Message
 // resultsDone is what the work of exampleResults returns: the answer, and
 // what it kept for the next check of the examples.
 type resultsDone struct {
-	answer resultsAnswer
+	answer ExampleResults
 	memo   *exampleMemo
 }
 
@@ -239,9 +248,9 @@ func (c *resultsCheck) run(ctx context.Context) (any, error) {
 // answer is the answer for results, of rules, the rules of text, those of
 // the location asked for alone; rels are the paths of the examples' files
 // below their folders, by key.
-func (c *resultsCheck) answer(text []byte, rules []*examples.Rule, results []examples.Result, rels map[string]string) resultsAnswer {
+func (c *resultsCheck) answer(text []byte, rules []*examples.Rule, results []examples.Result, rels map[string]string) ExampleResults {
 	lines := splitLines(text)
-	out := resultsAnswer{KubernetesVersion: c.kube.String(), Rules: []ruleResults{}}
+	out := ExampleResults{KubernetesVersion: c.kube.String(), Rules: []RuleResults{}}
 	byRule := map[*examples.Rule]int{}
 	for _, r := range rules {
 		at := toRange(lines, r.Start, r.End)
@@ -249,9 +258,9 @@ func (c *resultsCheck) answer(text []byte, rules []*examples.Rule, results []exa
 			continue
 		}
 		byRule[r] = len(out.Rules)
-		out.Rules = append(out.Rules, ruleResults{
+		out.Rules = append(out.Rules, RuleResults{
 			Document: "CustomResourceDefinition " + r.CRD.Name, Version: &r.Version, Path: &r.Path, Index: r.Index, Rule: r.Text,
-			Location: map[string]any{"uri": c.uri, "range": at}, Results: []ruleOnExample{},
+			Location: RuleLocation{URI: c.uri, Range: at}, Results: []RuleOnExample{},
 		})
 	}
 	for _, res := range results {
@@ -260,7 +269,7 @@ func (c *resultsCheck) answer(text []byte, rules []*examples.Rule, results []exa
 			continue
 		}
 		o := res.Example
-		ref := exampleRef{
+		ref := ExampleRef{
 			URI: pathURI(filepath.FromSlash(o.File)), File: rels[o.File], Line: o.Line,
 			APIVersion: o.APIVersion, Kind: o.Kind, Namespace: o.Namespace, Name: o.Name,
 			Operation: "create", Expect: o.Expect.String(), Message: o.Message,
@@ -268,9 +277,9 @@ func (c *resultsCheck) answer(text []byte, rules []*examples.Rule, results []exa
 		if res.Update {
 			ref.Operation = "update"
 		}
-		one := ruleOnExample{Example: ref, Result: res.Verdict.String(), Ignored: res.Ignored, Ran: res.Ran, Reason: res.Reason, Error: res.Error, Expected: res.Expected}
+		one := RuleOnExample{Example: ref, Result: res.Verdict.String(), Ignored: res.Ignored, Ran: res.Ran, Reason: res.Reason, Error: res.Error, Expected: res.Expected}
 		for _, f := range res.Refusals {
-			one.Refusals = append(one.Refusals, resultRefusal{Path: f.Path, Message: f.Message})
+			one.Refusals = append(one.Refusals, ResultRefusal{Path: f.Path, Message: f.Message})
 		}
 		switch {
 		case res.Expected:
@@ -293,10 +302,10 @@ func within(p position, r lspRange) bool {
 // answerPolicies adds to out the results of runs, the admission policies
 // of text, those of the location asked for alone; rels are the paths of
 // the files below their folders, by key.
-func (c *resultsCheck) answerPolicies(out *resultsAnswer, text []byte, runs []policyRan, rels map[string]string) {
+func (c *resultsCheck) answerPolicies(out *ExampleResults, text []byte, runs []policyRan, rels map[string]string) {
 	lines := splitLines(text)
-	ref := func(o *examples.Object, update bool) exampleRef {
-		r := exampleRef{
+	ref := func(o *examples.Object, update bool) ExampleRef {
+		r := ExampleRef{
 			URI: pathURI(filepath.FromSlash(o.File)), File: rels[o.File], Line: o.Line,
 			APIVersion: o.APIVersion, Kind: o.Kind, Namespace: o.Namespace, Name: o.Name,
 			Operation: "create", Expect: o.Expect.String(), Message: o.Message,
@@ -314,9 +323,9 @@ func (c *resultsCheck) answerPolicies(out *resultsAnswer, text []byte, runs []po
 				continue
 			}
 			byRule[r] = len(out.Rules)
-			out.Rules = append(out.Rules, ruleResults{
+			out.Rules = append(out.Rules, RuleResults{
 				Document: "ValidatingAdmissionPolicy " + pr.policy.Name, Field: policyFieldName(r.Field), Name: r.Name, Index: r.Index, Rule: r.Text,
-				Location: map[string]any{"uri": c.uri, "range": at}, Results: []ruleOnExample{},
+				Location: RuleLocation{URI: c.uri, Range: at}, Results: []RuleOnExample{},
 			})
 		}
 		admissions := map[*examples.Object]map[*examples.Binding]examples.Admission{}
@@ -331,7 +340,7 @@ func (c *resultsCheck) answerPolicies(out *resultsAnswer, text []byte, runs []po
 			if !ok {
 				continue
 			}
-			one := ruleOnExample{Example: ref(res.Example, res.Update), Result: res.Verdict.String(), Expected: res.Expected}
+			one := RuleOnExample{Example: ref(res.Example, res.Update), Result: res.Verdict.String(), Expected: res.Expected}
 			if res.Binding != nil {
 				one.Binding = res.Binding.Name
 			}
@@ -349,7 +358,7 @@ func (c *resultsCheck) answerPolicies(out *resultsAnswer, text []byte, runs []po
 				one.Message = res.Message
 			}
 			if a, ok := admissions[res.Example][res.Binding]; ok && a.NotRun == "" {
-				one.Admission = &admissionRef{Denied: a.Denied, Warnings: a.Warnings, Annotations: a.Annotations}
+				one.Admission = &AdmissionRef{Denied: a.Denied, Warnings: a.Warnings, Annotations: a.Annotations}
 			}
 			switch {
 			case res.Expected:

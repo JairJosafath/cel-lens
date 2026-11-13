@@ -25,6 +25,7 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assume"
 	"github.com/JairJosafath/cel-lens/engine/internal/crdschema"
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -427,33 +428,6 @@ func plain(v any) any {
 	return v
 }
 
-// isYAML11Bool reports whether s is a plain string that YAML 1.1 reads as a
-// boolean and YAML 1.2 as a string.
-func isYAML11Bool(s string) bool {
-	switch s {
-	case "y", "Y", "yes", "Yes", "YES", "on", "On", "ON",
-		"n", "N", "no", "No", "NO", "off", "Off", "OFF":
-		return true
-	}
-	return false
-}
-
-// yaml11True reports whether YAML 1.1 reads s, a string isYAML11Bool
-// accepts, as true.
-func yaml11True(s string) bool {
-	switch strings.ToLower(s) {
-	case "y", "yes", "on":
-		return true
-	}
-	return false
-}
-
-// isYAML11BoolNode reports whether n is a plain scalar that YAML 1.1 reads as
-// a boolean and YAML 1.2 as a string.
-func isYAML11BoolNode(n *yaml.Node) bool {
-	return n.Kind == yaml.ScalarNode && n.Style == 0 && n.ShortTag() == "!!str" && isYAML11Bool(n.Value)
-}
-
 // value is the value of the node n, depth objects and lists deep.
 func (d *decoder) value(ctx context.Context, n *yaml.Node, depth int) (any, error) {
 	v, _, err := d.node(ctx, n, depth)
@@ -503,7 +477,7 @@ func (d *decoder) node(ctx context.Context, n *yaml.Node, depth int) (any, int, 
 		if err := d.count(ctx, 1); err != nil {
 			return nil, 0, err
 		}
-		if isYAML11BoolNode(n) {
+		if _, ok := yamlfield.PlainBool(n); ok {
 			v = yaml11Bool(n.Value)
 			break
 		}
@@ -587,7 +561,7 @@ func (d *decoder) mapping(ctx context.Context, n *yaml.Node, depth int) (*object
 		for k.Kind == yaml.AliasNode {
 			k = k.Alias
 		}
-		if isYAML11BoolNode(k) {
+		if _, ok := yamlfield.PlainBool(k); ok {
 			val = yaml11Key{key, val}
 		}
 		out.set(key, val)
@@ -783,7 +757,7 @@ func (s *shape) field(k string) *shape {
 // crdschema.Arrange puts right.
 func (in *inferrer) schema(s *shape, path string, notes *[]string) *yaml.Node {
 	if s.yaml11Key != "" {
-		b := yaml11True(s.yaml11Key)
+		b, _ := yamlfield.YAML11Bool(s.yaml11Key)
 		*notes = append(*notes, fmt.Sprintf("%s: the key %s, unquoted, is the boolean %t to kubectl (YAML 1.1), which sends it as the key \"%t\": quote it", name(path), s.yaml11Key, b, b))
 	}
 	if s.fixed != nil {

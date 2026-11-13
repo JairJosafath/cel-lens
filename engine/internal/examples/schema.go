@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
+	"go.yaml.in/yaml/v3"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel/model"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
@@ -25,6 +27,7 @@ import (
 	apiserverfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 )
 
@@ -244,5 +247,32 @@ func objectMeta(obj map[string]any) (*metav1.ObjectMeta, field.ErrorList) {
 // server writes one, on the nearest key of the document that exists.
 func (o *Object) problem(path, msg string) {
 	start, end := o.at(path)
+	if _, value := o.find(path); value != nil && strings.Contains(msg, "bool") {
+		msg += yaml11Hint(value)
+	}
 	o.Problems = append(o.Problems, check.Diagnostic{File: o.File, Message: msg, Severity: check.SeverityError, Start: start, End: end})
+}
+
+// yaml11Hint is what to add to the API server's complaint about a boolean
+// where it wants something else, at or below n: where the document has a
+// plain scalar that kubectl reads as a boolean, "" when it has none.
+func yaml11Hint(n *yaml.Node) string {
+	if w := firstPlainBool(n); w != nil {
+		return fmt.Sprintf(" (line %d: kubectl reads the unquoted %s as a boolean, as YAML 1.1 does; quote it if a string is meant)", w.Line, w.Value)
+	}
+	return ""
+}
+
+// firstPlainBool is the first scalar at or below n that yamlfield.PlainBool
+// accepts, nil when there is none. Aliases are not followed.
+func firstPlainBool(n *yaml.Node) *yaml.Node {
+	if _, ok := yamlfield.PlainBool(n); ok {
+		return n
+	}
+	for _, c := range n.Content {
+		if w := firstPlainBool(c); w != nil {
+			return w
+		}
+	}
+	return nil
 }

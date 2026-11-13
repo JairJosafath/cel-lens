@@ -15,6 +15,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -71,7 +72,7 @@ func (c *CRDs) Set(ctx context.Context, file string, data []byte) bool {
 		}
 		for _, d := range docs {
 			var root map[string]any
-			if d.Node.Decode(&root) == nil {
+			if yamlfield.Decode(d.Node, &root) == nil {
 				found = append(found, crdKinds(root)...)
 			}
 		}

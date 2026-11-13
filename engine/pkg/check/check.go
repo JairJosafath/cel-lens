@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"go.yaml.in/yaml/v3"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	plugincel "k8s.io/apiserver/pkg/admission/plugin/cel"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
@@ -194,8 +195,27 @@ func (r *reporter) document(ctx context.Context, node *yaml.Node, exprs map[stri
 		return r.policy(ctx, node, exprs)
 	case group == "admissionregistration.k8s.io" && head.Kind == "MutatingAdmissionPolicy" && len(exprs) > 0:
 		return r.mutatingPolicy(ctx, node, exprs)
-	case group == "policies.kyverno.io" && version == "v1" && head.Kind == "ValidatingPolicy" && len(exprs) > 0 && r.kyverno:
+	case group == "admissionregistration.k8s.io" && head.Kind == "ValidatingAdmissionPolicy":
+		return r.readOnly(ctx, node, &admissionregistrationv1.ValidatingAdmissionPolicy{}, head.Kind)
+	case group == "admissionregistration.k8s.io" && head.Kind == "MutatingAdmissionPolicy":
+		return r.readOnly(ctx, node, &admissionregistrationv1.MutatingAdmissionPolicy{}, head.Kind)
+	case group == "admissionregistration.k8s.io" && head.Kind == "ValidatingAdmissionPolicyBinding":
+		return r.readOnly(ctx, node, &admissionregistrationv1.ValidatingAdmissionPolicyBinding{}, head.Kind)
+	case group == "admissionregistration.k8s.io" && head.Kind == "MutatingAdmissionPolicyBinding":
+		return r.readOnly(ctx, node, &admissionregistrationv1.MutatingAdmissionPolicyBinding{}, head.Kind)
+	case group == "policies.kyverno.io" && version == "v1" && head.Kind == "ValidatingPolicy" && r.kyverno:
 		return r.kyvernoPolicy(ctx, node, exprs)
+	}
+	return nil
+}
+
+// readOnly reads the document node as the kind named kind, out, for a
+// document with no CEL to check, so that one the API server could not read,
+// such as one with a field of the wrong type, is reported and not left alone
+// without a word.
+func (r *reporter) readOnly(ctx context.Context, node *yaml.Node, out any, kind string) error {
+	if _, err := r.read(ctx, node, out); err != nil {
+		return fmt.Errorf("read %s: %w", kind, err)
 	}
 	return nil
 }
@@ -415,7 +435,7 @@ var issuePattern = regexp.MustCompile(`(?m)^(?:.*: )?ERROR: <input>:(\d+):(\d+):
 // JSON field names, so the node goes through JSON.
 func decode(node *yaml.Node, out any) error {
 	var raw any
-	if err := node.Decode(&raw); err != nil {
+	if err := yamlfield.Decode(node, &raw); err != nil {
 		return err
 	}
 	js, err := json.Marshal(raw)
@@ -423,6 +443,19 @@ func decode(node *yaml.Node, out any) error {
 		return err
 	}
 	return json.Unmarshal(js, out)
+}
+
+// ReadProblems reads node, a document of the file whose text is data, into
+// out, a pointer to a Kubernetes API type, as Check reads a document of that
+// kind, and returns what Check reports where the document cannot be read: an
+// error on the value of each field of the wrong type, such as a plain `n`,
+// which kubectl reads as a boolean, where a string is wanted. out holds the
+// rest of the document. The error is a failure to read that is no wrong type,
+// or ctx's.
+func ReadProblems(ctx context.Context, file string, data []byte, node *yaml.Node, out any) ([]Diagnostic, error) {
+	r := reporter{file: file, lines: extract.SplitLines(extract.UTF8(data))}
+	_, err := r.read(ctx, node, out)
+	return r.sorted(), err
 }
 
 // maxPruned is the most wrong-typed fields read reports in one document.

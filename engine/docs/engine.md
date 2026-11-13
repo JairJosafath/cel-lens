@@ -1244,6 +1244,26 @@ cluster, name the Kubernetes version it ran, and drop the file in the folder.
 A change to the wording or the prefix of a type-check warning is checked against
 these cases first and never made from a guess about the API server.
 
+## How the YAML is read
+
+The engine reads a document into its Kubernetes type as `kubectl apply` sends it
+to the API server, whose YAML (`sigs.k8s.io/yaml`) is YAML 1.1 for the plain
+scalars `y`, `n`, `yes`, `no`, `on` and `off`, in the cases `y`, `Y`, `yes`,
+`Yes`, `YES` and the like (`yEs` is a string): they are the booleans `true` and
+`false`. A field that wants a string then gets a boolean, which the API server
+refuses with `cannot unmarshal bool into Go struct field`, and so the engine
+reports it as an error at the word: `spec.auditAnnotations[0].key: expected a
+string, got a boolean: kubectl reads an unquoted n as one (YAML 1.1), so quote it
+if a string is meant`, with the rest of the document, its CEL too, still
+checked. A word in quotes, or tagged `!!str`, is a string, as is any other
+word. The enum of a string schema of a CRD with such a word is a warning at the
+entry (the API server takes the CRD with the boolean in the enum, so a value of
+the field equal to the word is refused), and
+a schema problem on an example that comes of one names the line of the word.
+`internal/yamlfield.Decode` is the one place that reads a document so, for every
+path. Mapping keys are read as written, though kubectl sends the key `on` as
+`true`.
+
 ## Command-line check
 
 `cel-lens-core check [--format text|json] [--experimental name,name] <paths...>` runs the editor's checks
@@ -1258,3 +1278,109 @@ prints an array of `{file, start, end, severity, message}` instead (with `fixes`
 means no errors, 1 that errors were found, 2 a usage or read error (a missing
 path, malformed YAML, which is also printed as a problem at the line where it
 breaks, as the language server shows it), 130 that the run was interrupted (Ctrl-C). Unreadable paths do not stop the others being checked.
+
+
+### Command-line examples
+
+`cel-lens-core examples [--format text|json] [--kube-version <1.x>] [--fail-on wrong|error|none] [--verbose] [paths...]`
+runs the rules of the CustomResourceDefinitions and ValidatingAdmissionPolicies
+of the files and folders on their examples and exits 1 when a verdict is not
+what its example expects, so a repository can run its examples in CI:
+
+```sh
+cel-lens-core examples ./config
+```
+
+It is not a second implementation of the editor's results: `lsp.RunExamples`
+runs the check of the examples that the server's background check and
+`cel-lens.exampleResults` run (finding the CRDs and the examples, pairing
+updates, the bindings and their params, the API server's validation and
+admission, `not run` and its reasons, the examples' own problems) once over
+the workspace the paths make up, and answers the answer of
+`cel-lens.exampleResults` for each file with rules, in the order of the
+files' paths. `TestRunExamplesIsExampleResults` holds the two to each other for
+a workspace with a CRD, a policy with its binding and their examples. With no
+paths it runs the current folder.
+
+**The workspace.** A folder is walked as the language server's workspace scan
+walks its workspace, with its limits: `.yaml` and `.yml` files only, hidden
+folders and `node_modules` left out, files over 1 MiB not read, and the files
+after the first 20000 not read. The editor's cap of 100 examples of a CRD, and
+of 100 examples a policy matches, is for its latency and does not apply: the
+command runs every example it finds. A file given alone, which must end in
+`.yaml` or `.yml`, is the whole workspace of its folder: the CRDs, policies,
+bindings, params and examples are those of the files given, and of the folders
+given, not of the other files beside it. A file below a folder given is read
+with the folder, so a hidden folder is read only when a file in it is named
+while no folder above it is. What the limits leave out is a warning on stderr
+(`cel-lens-core examples: warning: ...`), counted in `filesLeftOut` of the
+JSON and said by the summary line (`... 0 wrong · 1 file left out at the
+limits`); it does not change the exit status. A folder or file that cannot be
+read is named on stderr and exits 2, and the rest is run.
+
+**Text.** Quiet: it lists the problems of the examples, then each rule with a
+wrong verdict or an error, wrong ones first, with the examples it is wrong for,
+and ends with a summary:
+
+```
+config/samples/invalid/small.yaml:2:1: error: expected to be refused, but nothing refuses it
+config/crd/widget.yaml:22: self.size <= 10  (CustomResourceDefinition widgets.example.com v1 spec)
+  wrong config/samples/huge.yaml:1: refused, expected to be allowed: spec: Invalid value: at most 10
+3 rules, 5 examples: 2 wrong, 3 not run
+```
+
+A rule is `file:line: text` (shortened to 60 characters) with its document and
+where in it; a result is its mark (`wrong`, `error`, `skip` for a rule that did
+not run, `ok`), its example's file and line, what the rule did (`refused`,
+`allowed`, `error`, `warned`, ... `as an update`, `under binding "name"`), what
+the example expected when that is not it, and the API server's message on one
+line. Paths are relative to the working folder when they are below it.
+`--verbose` lists every result, `skip`s and `ok`s included, and the rules with no
+example. The summary counts the rules, the distinct examples any of them has a
+result for, and each kind of result of a rule on an example once:
+
+- `wrong`: a verdict that is not what the example expects, the rule being to
+  blame (it refuses an example that expects to be allowed, or stops with an
+  error on it, which the API server answers as a refusal), plus each problem of
+  an example. An example that expects to be refused, with a part of the message
+  or not, and that nothing refuses so, is one problem of the example however
+  many rules allow it, as the editor warns on it once; the rules that allow it
+  are listed with `--verbose`.
+- `error`: a rule that stopped with an error, a runtime error or a cost limit,
+  on an example that expects to be refused: the example is as expected, so it
+  is not wrong, but it is not a verdict either.
+- `not run`: a rule the API server does not run on the example, with the reason.
+
+Zero errors and zero rules that did not run are left out of the line.
+
+**Problems.** What the editor shows on the examples themselves is reported in
+the problems, one line each, `file:line:col: error: message`, before the rules,
+and counts as wrong: the schema's problems on an example that expects to be
+allowed (the API server's words, at the field), a `# cel-lens:` comment that is
+none of the three forms, an example that expects to be refused that nothing
+refuses, and a CustomResourceDefinition, ValidatingAdmissionPolicy or binding of
+the workspace that the API server cannot read, which the command would
+otherwise leave out without a word: a field of the wrong type, such as a plain
+`n` where a string is wanted (kubectl reads it as a boolean), is reported at the
+word as `check` reports it, and a CRD the API server refuses for anything but its
+rules says what it refuses, at the first line of the document. A document with
+no name, a binding that names no policy, a CRD that serves no version and a file
+whose YAML does not parse are left out without a problem. The language server
+says the same on such a file of the workspace that is not open.
+
+**JSON.** `--format json` prints one object: `kubernetesVersion` and `rules`,
+each as `cel-lens.exampleResults` gives it (an example's `file` is its path below
+the workspace folder it is in, `uri` its file URI), the rules of each file after
+those of the file before it, and `problems`, a list of `{uri, file, line,
+column, severity, message}`, empty when there are none. `--verbose` does not
+change it.
+
+**What fails.** `--fail-on wrong` (the default) fails the run, with exit 1, on a
+result that is wrong, an error that refuses an example expected to be allowed
+included, or a problem of an example, a CRD, policy or binding the API server cannot read among them; `error` also on a rule that ended in an
+error on an example that expects to be refused; `none` never. A rule that did not run never fails
+a run. `--kube-version` (also spelled `--kubernetes-version`) is what `check`
+takes, with the same default and range. Exit code 0 means nothing failed, 1 that
+a verdict did, 2 a usage or read error (a missing path, a file that is not YAML,
+an unknown flag or value, a folder that cannot be read), 130 that the run was
+interrupted. Flags may come before, between or after the paths.
