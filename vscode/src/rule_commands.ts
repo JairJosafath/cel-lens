@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { SHOW_LOGS_LABEL } from './button_labels';
-import { openCellens } from './cellens_editor';
+import { openBesideRule } from './cellens_editor';
 import {
   LIST_VALUES_COMMAND,
   SHOW_RULE_COMMAND,
@@ -39,7 +39,7 @@ export async function showRule(location: unknown, log: CommandLog): Promise<void
   }
   if (isCellensLocation(rule)) {
     try {
-      await openCellens(rule.uri, rule.range);
+      await openBesideRule(rule.uri, rule.range);
     } catch (error) {
       log.error(`Could not show the entry in ${rule.uri}: ${String(error)}`);
     }

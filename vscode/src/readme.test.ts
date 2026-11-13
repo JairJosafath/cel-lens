@@ -87,6 +87,7 @@ describe('README.md as the store page', () => {
       'What it looks like',
       'Install',
       'Give a value a type',
+      'Example results',
       'Commands',
       'Settings',
       'Supported Kubernetes versions',
@@ -348,6 +349,71 @@ describe('README.md as the store page', () => {
     expect(colorRow).toContain('Choose Color Style');
     expect(versions).not.toContain('CONTRIBUTING.md');
     expect(colorRow).not.toContain('CONTRIBUTING.md');
+  });
+
+  it('says in the Example results section where the examples come from, what one expects, updates, the line, the hover, the warnings and the toggle, in that order', () => {
+    const section = readmeSection(README, 'Example results') ?? '';
+    const parts = section.split(/^(?=### )/m).slice(1);
+
+    expect(parts.map((part) => part.split('\n')[0])).toEqual([
+      '### Where the examples come from',
+      '### What an example expects',
+      '### Updates',
+      '### The line above the rule',
+      '### The hover and the warnings',
+      '### Turn it off',
+    ]);
+  });
+
+  it.each([
+    'a version the CRD serves',
+    '`config/samples/`',
+    'a folder of it below its workspace folder, or a word of its file name',
+    '`invalid`, `bad`, `refused`, `rejected` or `denied`',
+    '`# cel-lens: refused`',
+    '`# cel-lens: refused "at most 10"`',
+    '`# cel-lens: allowed`',
+    'which wins over the path',
+    'The same object twice in one file is an update',
+    '`3 examples pass`',
+    '`refuses 1 example it should allow · 2 pass`',
+    'the wrong verdicts come first',
+    "the API server's message",
+    'opens at its line beside the rule',
+    'A wrong verdict is also a warning',
+    '**cel-lens: Toggle Example Results**',
+    '**Example results: on** or **off**',
+    'without a reload',
+    'offers a button to turn it on',
+  ])('describes example results: %s', (text) => {
+    expect(readmeSection(README, 'Example results')).toContain(text);
+  });
+
+  it('names the pictures of example results for the release step to take, each by its file', () => {
+    expect(readmePicturePlaceholders(readmeSection(README, 'Example results') ?? '')).toEqual([
+      'images/example-results-line.png',
+      'images/example-results-picker.png',
+    ]);
+  });
+
+  it('keeps dry runs under Not supported yet only for admission policies', () => {
+    const dryRuns =
+      (readmeSection(README, 'Not supported yet') ?? '')
+        .split('\n')
+        .find((line) => line.includes('Dry runs')) ?? '';
+
+    expect(dryRuns).toContain('admission policies');
+    expect(dryRuns).toContain('only the rules of a CRD run on examples so far');
+  });
+
+  it('lists Toggle Example Results in the Commands table and the setting with its toggle and status bar entry', () => {
+    const row =
+      README.split('\n').find((line) => line.startsWith('| `cel-lens.exampleResults`')) ?? '';
+
+    expect(readmeSection(README, 'Commands')).toContain('| **cel-lens: Toggle Example Results**');
+    expect(row).toContain('**cel-lens: Toggle Example Results**');
+    expect(row).toContain('**Example results: on** or **off**');
+    expect(row).toContain('Resource scope');
   });
 
   it('lists what is not supported yet', () => {

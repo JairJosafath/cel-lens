@@ -1,24 +1,11 @@
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
 
-import {
-  INLINE_INFO_SETTING,
-  INLINE_INFO_SETTING_NAME,
-  inlineInfoInForce,
-  toggleScope,
-  type InlineInfoScope,
-} from './inline_info';
-
-const SECTION = 'cel-lens';
-
-const OPEN_SETTINGS_BUTTON = 'Open Settings';
-
-const FAILURE_MESSAGE = `Could not change ${INLINE_INFO_SETTING_NAME}. Fix any errors in settings.json, then toggle it again.`;
+import { DEFAULT_INLINE_INFO, INLINE_INFO_SETTING } from './inline_info';
+import { engineBooleanSetting, readBooleanSetting, toggleBooleanSetting } from './toggle_setting';
 
 /** Whether the lines show for the file at `resource`, its workspace folder's setting included; for the window without one. */
 export function readInlineInfo(resource?: vscode.Uri): boolean {
-  return inlineInfoInForce(
-    vscode.workspace.getConfiguration(SECTION, resource).inspect<unknown>(INLINE_INFO_SETTING),
-  );
+  return readBooleanSetting(INLINE_INFO_SETTING, DEFAULT_INLINE_INFO, resource);
 }
 
 /**
@@ -26,21 +13,7 @@ export function readInlineInfo(resource?: vscode.Uri): boolean {
  * any workspace folder shows the lines; the client hides the lines of a folder that turns them off.
  */
 export function engineInlineInfo(): boolean {
-  return (
-    readInlineInfo() ||
-    (vscode.workspace.workspaceFolders ?? []).some((folder) => readInlineInfo(folder.uri))
-  );
-}
-
-function target(scope: InlineInfoScope): vscode.ConfigurationTarget {
-  switch (scope) {
-    case 'user':
-      return vscode.ConfigurationTarget.Global;
-    case 'workspace':
-      return vscode.ConfigurationTarget.Workspace;
-    case 'folder':
-      return vscode.ConfigurationTarget.WorkspaceFolder;
-  }
+  return engineBooleanSetting(INLINE_INFO_SETTING, DEFAULT_INLINE_INFO);
 }
 
 /**
@@ -49,25 +22,5 @@ function target(scope: InlineInfoScope): vscode.ConfigurationTarget {
  * user settings), or the user settings when none does.
  */
 export async function toggleInlineInfo(log: Pick<vscode.LogOutputChannel, 'error'>): Promise<void> {
-  const configuration = vscode.workspace.getConfiguration(
-    SECTION,
-    vscode.window.activeTextEditor?.document.uri,
-  );
-  const values = configuration.inspect<unknown>(INLINE_INFO_SETTING);
-  try {
-    await configuration.update(
-      INLINE_INFO_SETTING,
-      !inlineInfoInForce(values),
-      target(toggleScope(values)),
-    );
-  } catch (error) {
-    log.error(`Could not change ${INLINE_INFO_SETTING_NAME}: ${String(error)}`);
-    const button = await vscode.window.showErrorMessage(FAILURE_MESSAGE, OPEN_SETTINGS_BUTTON);
-    if (button === OPEN_SETTINGS_BUTTON) {
-      await vscode.commands.executeCommand(
-        'workbench.action.openSettings',
-        INLINE_INFO_SETTING_NAME,
-      );
-    }
-  }
+  await toggleBooleanSetting(INLINE_INFO_SETTING, DEFAULT_INLINE_INFO, log);
 }

@@ -37,6 +37,8 @@ import {
   type ServerState,
   type VersionInfo,
 } from './kubernetes_version';
+import { SHOW_EXAMPLE_RESULTS_COMMAND } from './example_results';
+import { engineExampleResults, readExampleResults } from './example_results_setting';
 import { engineInlineInfo, readInlineInfo } from './inline_info_setting';
 import { LIST_VALUES_COMMAND, listValuesArguments } from './rule_parts';
 import { SERVER_PATH_SETTING, openServerPathSetting } from './open_server_setting';
@@ -139,6 +141,20 @@ function withRuleLine(lens: vscode.CodeLens): vscode.CodeLens {
   return lens;
 }
 
+/**
+ * The lenses without the part that says what a rule does to its examples, when the example
+ * results are off for the file: the engine has one switch for the window, on while any workspace
+ * folder has them on.
+ */
+function withoutExampleResults(
+  lenses: vscode.CodeLens[] | null | undefined,
+  resource: vscode.Uri,
+): vscode.CodeLens[] | null | undefined {
+  return lenses !== null && lenses !== undefined && !readExampleResults(resource)
+    ? lenses.filter((lens) => lens.command?.command !== SHOW_EXAMPLE_RESULTS_COMMAND)
+    : lenses;
+}
+
 export const END_WAIT_MS = 2000;
 
 /** Starts, stops and restarts the `cel-lens-core lsp` language client. */
@@ -163,8 +179,8 @@ export class ServerController implements vscode.Disposable {
   ) {}
 
   /**
-   * Tells the running server the `cel-lens.kubernetesVersion`, `cel-lens.experimental` and
-   * `cel-lens.inlineInfo` settings, without restarting it. Queued behind a start or restart in
+   * Tells the running server the `cel-lens.kubernetesVersion`, `cel-lens.experimental`,
+   * `cel-lens.inlineInfo` and `cel-lens.exampleResults` settings, without restarting it. Queued behind a start or restart in
    * progress, so a change made while the server starts still arrives. Never rejects.
    */
   sendSettings(): Promise<void> {
@@ -174,9 +190,10 @@ export class ServerController implements vscode.Disposable {
   /**
    * Tells the running server the settings, then has VS Code ask for the lines above the rules
    * again: the engine asks for them itself when its switch flips, but a workspace folder's own
-   * `cel-lens.inlineInfo` shows or hides its lines in the client alone. Never rejects.
+   * `cel-lens.inlineInfo` or `cel-lens.exampleResults` shows or hides its lines, or the part of
+   * them that says what a rule does to its examples, in the client alone. Never rejects.
    */
-  sendInlineInfo(): Promise<void> {
+  sendLineSettings(): Promise<void> {
     return this.enqueue(async () => {
       await this.sendSettingsNow();
       this.refreshCodeLenses();
@@ -240,7 +257,11 @@ export class ServerController implements vscode.Disposable {
       }
       const params = configurationParams(readVersionSetting(), info, experimental);
       await this.client.sendNotification('workspace/didChangeConfiguration', {
-        settings: { ...params.settings, inlineInfo: engineInlineInfo() },
+        settings: {
+          ...params.settings,
+          inlineInfo: engineInlineInfo(),
+          exampleResults: engineExampleResults(),
+        },
       });
       this.sentVersion = options.kubernetesVersion;
       this.sentExperimental = experimentalKey;
@@ -402,12 +423,19 @@ export class ServerController implements vscode.Disposable {
           { scheme: 'file', pattern: CELLENS_PATTERN },
         ],
         outputChannel: this.log,
-        initializationOptions: { ...sentOptions, inlineInfo: engineInlineInfo() },
+        initializationOptions: {
+          ...sentOptions,
+          inlineInfo: engineInlineInfo(),
+          exampleResults: engineExampleResults(),
+        },
         middleware: {
-          // The engine has one switch for the window; a workspace folder that turns the lines
-          // off loses them here. The +N more lens learns its line.
+          // The engine has one switch for the window for each setting; a workspace folder that
+          // turns the lines off loses them here, and one that turns the example results off loses
+          // their part. The +N more lens learns its line.
           provideCodeLenses: async (document, token, next) =>
-            readInlineInfo(document.uri) ? (await next(document, token))?.map(withRuleLine) : [],
+            readInlineInfo(document.uri)
+              ? withoutExampleResults(await next(document, token), document.uri)?.map(withRuleLine)
+              : [],
           // A lens the engine fills in later gets its line too.
           resolveCodeLens: async (lens, token, next) => {
             const resolved = await next(lens, token);

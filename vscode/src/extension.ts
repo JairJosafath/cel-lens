@@ -4,6 +4,14 @@ import { SHOW_ACTIONS_COMMAND, SHOW_LOGS_COMMAND } from './actions_menu';
 import { ColorPainter, chooseColorStyle } from './color_painter';
 import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
 import { ExampleEditors, ExampleNotes } from './example_editor';
+import {
+  EXAMPLE_RESULTS_SETTING_NAME,
+  SHOW_EXAMPLE_RESULTS_COMMAND,
+  TOGGLE_EXAMPLE_RESULTS_COMMAND,
+} from './example_results';
+import { resultsUi } from './example_results_commands';
+import { ExampleResultsFlow } from './example_results_flow';
+import { toggleExampleResults } from './example_results_setting';
 import { INLINE_INFO_SETTING_NAME, TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
 import { toggleInlineInfo } from './inline_info_setting';
 import { offerLegacyColorStyleMove } from './legacy_color_style';
@@ -48,6 +56,11 @@ export function activate(
     ui,
     log,
   );
+  const results = new ExampleResultsFlow(
+    (command, argument, signal) => server.runEngineCommand(command, argument, signal),
+    resultsUi(log),
+    log,
+  );
   context.subscriptions.push(
     log,
     server,
@@ -56,8 +69,11 @@ export function activate(
     notes,
     new ColorPainter(),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration(INLINE_INFO_SETTING_NAME)) {
-        void server.sendInlineInfo();
+      if (
+        event.affectsConfiguration(INLINE_INFO_SETTING_NAME) ||
+        event.affectsConfiguration(EXAMPLE_RESULTS_SETTING_NAME)
+      ) {
+        void server.sendLineSettings();
       } else if (
         event.affectsConfiguration('cel-lens.kubernetesVersion') ||
         event.affectsConfiguration('cel-lens.experimental')
@@ -83,9 +99,15 @@ export function activate(
     vscode.commands.registerCommand(TOGGLE_INLINE_INFO_COMMAND, async () => {
       await toggleInlineInfo(log);
     }),
+    vscode.commands.registerCommand(TOGGLE_EXAMPLE_RESULTS_COMMAND, async () => {
+      await toggleExampleResults(log);
+    }),
     // The parts of the line above each rule; the engine names them, so they have no palette entry.
     vscode.commands.registerCommand(SHOW_RULE_COMMAND, async (location: unknown) => {
       await showRule(location, log);
+    }),
+    vscode.commands.registerCommand(SHOW_EXAMPLE_RESULTS_COMMAND, async (location: unknown) => {
+      await results.show(location);
     }),
     vscode.commands.registerCommand(LIST_VALUES_COMMAND, async (more: unknown) => {
       await listValues(more, log);

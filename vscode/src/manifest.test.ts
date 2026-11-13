@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { EXAMPLE_SCHEME, USE_EXAMPLE_COMMAND } from './example_editor';
+import { SHOW_EXAMPLE_RESULTS_COMMAND, TOGGLE_EXAMPLE_RESULTS_COMMAND } from './example_results';
 
 interface Command {
   command: string;
@@ -9,6 +10,9 @@ interface Command {
   category?: string;
 }
 interface Setting {
+  type?: string;
+  default?: unknown;
+  scope?: string;
   order?: number;
   markdownDescription?: string;
   enum?: string[];
@@ -29,6 +33,7 @@ const MANIFEST = JSON.parse(readFileSync('package.json', 'utf8')) as Manifest;
 const { commands, menus, configuration } = MANIFEST.contributes;
 const INTERNAL_COMMANDS = [
   'cel-lens.showRule',
+  'cel-lens.showExampleResults',
   'cel-lens.listValues',
   'cel-lens.giveType',
   'cel-lens.editType',
@@ -94,6 +99,28 @@ describe('commands in package.json', () => {
   );
 });
 
+describe('Example results in package.json', () => {
+  it('has the command Toggle Example Results, in the palette on YAML files', () => {
+    expect(commands.find((c) => c.command === TOGGLE_EXAMPLE_RESULTS_COMMAND)).toEqual({
+      command: TOGGLE_EXAMPLE_RESULTS_COMMAND,
+      title: 'Toggle Example Results',
+      category: 'cel-lens',
+    });
+    expect(
+      menus.commandPalette.find((e) => e.command === TOGGLE_EXAMPLE_RESULTS_COMMAND)?.when,
+    ).toBe('editorLangId == yaml');
+  });
+
+  it('has the command of the part of the line above a rule, which the palette never lists: it needs a rule', () => {
+    expect(commands.find((c) => c.command === SHOW_EXAMPLE_RESULTS_COMMAND)?.title).toBe(
+      'Show Example Results',
+    );
+    expect(menus.commandPalette.find((e) => e.command === SHOW_EXAMPLE_RESULTS_COMMAND)?.when).toBe(
+      'false',
+    );
+  });
+});
+
 describe('Use This Example as the Type', () => {
   const where = `resourceScheme == ${EXAMPLE_SCHEME}`;
 
@@ -115,13 +142,22 @@ describe('Use This Example as the Type', () => {
 });
 
 describe('settings in package.json', () => {
-  it('puts the color style first, the inline info second and the Kubernetes version third', () => {
+  it('puts the color style first, the inline info second, the example results third and the Kubernetes version fourth', () => {
     const ordered = [...SETTINGS].sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0));
-    expect(ordered.slice(0, 3).map(([key]) => key)).toEqual([
+    expect(ordered.slice(0, 4).map(([key]) => key)).toEqual([
       'cel-lens.colorStyle',
       'cel-lens.inlineInfo',
+      'cel-lens.exampleResults',
       'cel-lens.kubernetesVersion',
     ]);
+  });
+
+  it('contributes cel-lens.exampleResults as a boolean that is on by default, with resource scope, as cel-lens.inlineInfo is', () => {
+    const exampleResults = configuration.properties['cel-lens.exampleResults'];
+    const inlineInfo = configuration.properties['cel-lens.inlineInfo'];
+    expect(exampleResults).toMatchObject({ type: 'boolean', default: true, scope: 'resource' });
+    expect(exampleResults?.scope).toBe(inlineInfo?.scope);
+    expect(exampleResults?.markdownDescription).toContain('cel-lens: Toggle Example Results');
   });
 
   it('contributes no celLens.* setting', () => {

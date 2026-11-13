@@ -762,7 +762,12 @@ describe('ServerController', () => {
       {
         method: 'workspace/didChangeConfiguration',
         params: {
-          settings: { kubernetesVersion: '', experimental: ['kyverno'], inlineInfo: true },
+          settings: {
+            kubernetesVersion: '',
+            experimental: ['kyverno'],
+            inlineInfo: true,
+            exampleResults: true,
+          },
         },
       },
     ]);
@@ -797,8 +802,104 @@ describe('ServerController', () => {
     await newController().start();
 
     expect(client.created).toMatchObject([
-      { options: { initializationOptions: { inlineInfo: true } } },
+      { options: { initializationOptions: { inlineInfo: true, exampleResults: true } } },
     ]);
+  });
+
+  it.each([
+    [undefined, true],
+    [false, false],
+    [true, true],
+  ])(
+    'passes cel-lens.exampleResults %j in initializationOptions as %j',
+    async (setting, expected) => {
+      settings.set('cel-lens.serverPath', execPath);
+      settings.set('cel-lens.exampleResults', setting);
+
+      await newController().start();
+
+      expect(client.created).toMatchObject([
+        { options: { initializationOptions: { exampleResults: expected } } },
+      ]);
+    },
+  );
+
+  it('passes exampleResults on when the user turns it off but a workspace folder turns it on', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.exampleResults', false);
+    addWorkspaceFolder('a');
+    addWorkspaceFolder('b', { 'cel-lens.exampleResults': true });
+
+    await newController().start();
+
+    expect(client.created).toMatchObject([
+      { options: { initializationOptions: { exampleResults: true } } },
+    ]);
+  });
+
+  it('sends an example results change with didChangeConfiguration, then has VS Code ask for the lines once, without a restart', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    await controller.start();
+    visibleEditors.push(new FakeEditor({ languageId: 'yaml', getText: () => '' }));
+    settings.set('cel-lens.exampleResults', false);
+
+    await controller.sendLineSettings();
+
+    expect(client.notifications).toEqual([
+      {
+        method: 'workspace/didChangeConfiguration',
+        params: {
+          settings: {
+            kubernetesVersion: '',
+            experimental: [],
+            inlineInfo: true,
+            exampleResults: false,
+          },
+        },
+      },
+    ]);
+    expect(client.lensRefreshes).toBe(1);
+    expect(client.created).toHaveLength(1);
+  });
+
+  it('hides the part that says what a rule does to its examples in a file whose workspace folder turns the results off, and keeps the other lenses', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    addWorkspaceFolder('a', { 'cel-lens.exampleResults': false });
+    addWorkspaceFolder('b');
+    await newController().start();
+    const summary = {
+      range: { start: { line: 15 } },
+      command: { title: 'self: Widget.spec · compiles', command: 'cel-lens.showRule' },
+    };
+    const results = {
+      range: { start: { line: 15 } },
+      command: { title: '3 examples pass', command: 'cel-lens.showExampleResults' },
+    };
+    const next = vi.fn(() => [summary, results]);
+
+    const hidden = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/a/crd.yaml') },
+      {},
+      next,
+    );
+    const shown = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/b/crd.yaml') },
+      {},
+      next,
+    );
+
+    expect(hidden).toEqual([summary]);
+    expect(shown).toEqual([summary, results]);
+  });
+
+  it('gives no lenses when the engine gives none', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    await newController().start();
+
+    expect(
+      await provideCodeLenses()({ uri: Uri.parse('file:///workspace/crd.yaml') }, {}, () => null),
+    ).toBeUndefined();
   });
 
   it('sends an inline info change with didChangeConfiguration, then has VS Code ask for the lines once, without a restart', async () => {
@@ -809,12 +910,19 @@ describe('ServerController', () => {
     visibleEditors.push(new FakeEditor(crd), new FakeEditor(crd));
     settings.set('cel-lens.inlineInfo', false);
 
-    await controller.sendInlineInfo();
+    await controller.sendLineSettings();
 
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '', experimental: [], inlineInfo: false } },
+        params: {
+          settings: {
+            kubernetesVersion: '',
+            experimental: [],
+            inlineInfo: false,
+            exampleResults: true,
+          },
+        },
       },
     ]);
     expect(client.lensRefreshes).toBe(1);
@@ -833,7 +941,7 @@ describe('ServerController', () => {
       visibleEditors.push(new FakeEditor({ languageId: 'yaml', getText: () => '' }));
     }
 
-    await controller.sendInlineInfo();
+    await controller.sendLineSettings();
 
     expect(client.lensRefreshes).toBe(0);
   });
@@ -1216,7 +1324,14 @@ describe('ServerController', () => {
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '1.36', experimental: [], inlineInfo: true } },
+        params: {
+          settings: {
+            kubernetesVersion: '1.36',
+            experimental: [],
+            inlineInfo: true,
+            exampleResults: true,
+          },
+        },
       },
     ]);
     expect(client.created).toHaveLength(1);
@@ -1250,7 +1365,7 @@ describe('ServerController', () => {
       ]);
       expect(client.notifications.at(-1)).toEqual({
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { ...options, inlineInfo: true } },
+        params: { settings: { ...options, inlineInfo: true, exampleResults: true } },
       });
     },
   );
@@ -1261,7 +1376,14 @@ describe('ServerController', () => {
       [
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '', experimental: [], inlineInfo: true } },
+          params: {
+            settings: {
+              kubernetesVersion: '',
+              experimental: [],
+              inlineInfo: true,
+              exampleResults: true,
+            },
+          },
         },
       ],
     ],
@@ -1302,7 +1424,14 @@ describe('ServerController', () => {
     expect(client.notifications).toEqual([
       {
         method: 'workspace/didChangeConfiguration',
-        params: { settings: { kubernetesVersion: '1.36', experimental: [], inlineInfo: true } },
+        params: {
+          settings: {
+            kubernetesVersion: '1.36',
+            experimental: [],
+            inlineInfo: true,
+            exampleResults: true,
+          },
+        },
       },
     ]);
   });

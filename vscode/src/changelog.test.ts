@@ -112,10 +112,36 @@ describe('CHANGELOG.md', () => {
     expect(engineVersions(text)).toEqual(found);
   });
 
-  it('has an Unreleased section, empty, and a released version for every other section', () => {
+  it('has an Unreleased section, with only Added entries, and a released version for every other section', () => {
     expect(sections[0]?.version).toBe('Unreleased');
-    expect(sections[0]?.kinds).toEqual([]);
+    expect(sections[0]?.kinds).toEqual(['Added']);
     expect(sections.length).toBeGreaterThan(1);
+  });
+
+  const unreleased =
+    CHANGELOG.split(/^(?=## \[)/m).find((text) => text.startsWith('## [Unreleased]')) ?? '';
+
+  it.each([
+    "what each rule of a CRD's `x-kubernetes-validations` does to the example objects of the workspace",
+    '`3 examples pass`',
+    '`refuses 1 example it should allow · 2 pass`',
+    "a picker titled after the rule's line",
+    "each with its verdict, its file and line, and the API server's message",
+    'says the results are being computed until the engine answers',
+    'picking an example opens it at its line beside the rule',
+    "never shows another rule's results",
+    'With the setting off, the part says so and offers a button that turns it on',
+    'The setting `cel-lens.exampleResults` (on by default, resource scope)',
+    '**cel-lens: Toggle Example Results**',
+    '**Example results: on** or **off**',
+    'open editors follow at once, without a reload',
+    'Dry runs stay under _Not supported yet_ for admission policies only',
+  ])('names %s under Added in the notes of the next release', (text) => {
+    expect(unreleased).toContain(text);
+  });
+
+  it('names no engine version in the notes of the next release, which no engine release has yet', () => {
+    expect(engineVersions(unreleased)).toEqual([]);
   });
 
   const RELEASE = '0.36.0';
@@ -129,9 +155,7 @@ describe('CHANGELOG.md', () => {
 
   it('has the notes of 0.36.0 under its heading with the date of its preparation', () => {
     expect(release).toMatch(/^## \[0\.36\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(CHANGELOG.indexOf('## [0.36.0]')).toBe(
-      CHANGELOG.indexOf('## [Unreleased]') + '## [Unreleased]\n\n'.length,
-    );
+    expect(sections[1]?.version).toBe(RELEASE);
     const version = (
       JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
     ).version;

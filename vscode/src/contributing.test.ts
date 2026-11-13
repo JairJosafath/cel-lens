@@ -112,6 +112,23 @@ describe('CONTRIBUTING.md', () => {
     expect(body).toContain('a CHANGELOG line names no issue number');
   });
 
+  it('lists the Toggle Example Results command and says what the part of a rule does when it runs', () => {
+    const flat = CONTRIBUTING.replace(/\s+/g, ' ');
+
+    expect(flat).toContain(
+      '**cel-lens: Toggle Example Results** (`cel-lens.toggleExampleResults`)',
+    );
+    expect(flat).toContain('`cel-lens.showExampleResults`');
+    expect(flat).toContain("asks the engine's `cel-lens.exampleResults` for that rule");
+  });
+
+  it('says how to run the end-to-end test on an engine no release has, and that its case skips on one without the feature', () => {
+    const flat = CONTRIBUTING.replace(/\s+/g, ' ');
+
+    expect(flat).toContain('set `CEL_LENS_SERVER_PATH` to a `cel-lens-core` binary');
+    expect(flat).toContain('skips, saying why');
+  });
+
   it('names no factory image or devcontainer', () => {
     expect(CONTRIBUTING).not.toMatch(/devcontainer|factory|git[e]a|docker/i);
   });

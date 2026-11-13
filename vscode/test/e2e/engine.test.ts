@@ -5,7 +5,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -27,6 +27,7 @@ import {
   type CompletionItem,
   type CompletionList,
   type Diagnostic,
+  type CancellationToken,
   type CodeLens,
   type Registration,
   type Hover,
@@ -46,10 +47,17 @@ import {
 } from '../../src/readme';
 import { featureNameProblems, experimentalRows } from '../../src/experimental_table';
 import { experimentalSettingEnum } from '../../src/manifest_setting';
+import { ExampleResultsFlow, type ResultsUi } from '../../src/example_results_flow';
 import { requireEngineFile } from '../../src/engine_file';
+import { isRecord } from '../../src/is_record';
 import { resolveServer } from '../../src/server_path';
 import { spawnEngine } from '../../src/spawn_engine';
 
+/**
+ * An engine to start in place of the one in bin/, as the extension's `cel-lens.serverPath` names
+ * one: for an engine no release has yet.
+ */
+const ENGINE_PATH = process.env['CEL_LENS_SERVER_PATH'] ?? '';
 const FIXTURES = fileURLToPath(new URL('fixtures/', import.meta.url));
 const EXTENSION_PATH = fileURLToPath(new URL('../../', import.meta.url));
 const ERROR = 1;
@@ -74,8 +82,14 @@ interface Engine {
   readonly experimentalFeatures: readonly string[];
   /** The registrations the engine asked the client for with `client/registerCapability`. */
   readonly registrations: Registration[];
+  /** The commands the engine lists in `executeCommandProvider`, from its `initialize` result. */
+  readonly commands: readonly string[];
+  /** How many times the engine asked the client to ask again for the lines above the rules. */
+  readonly refreshes: { count: number };
   /** Resolves on the next publishDiagnostics. */
   nextPublish: () => Promise<void>;
+  /** Resolves once the engine has asked for the lines again after `seen` refreshes. */
+  refreshedAfter: (seen: number) => Promise<void>;
 }
 
 let engine: Engine | undefined;
@@ -108,6 +122,8 @@ interface SessionOptions {
   readonly inlineInfo?: boolean;
   /** Tells the engine the client applies the edits that write `.cellens`, and applies them to disk. */
   readonly writesCellens?: boolean;
+  /** Whether the engine shows what each rule does to its examples: the extension's `cel-lens.exampleResults`. */
+  readonly exampleResults?: boolean;
 }
 
 /** The offset in `text` of an LSP position (characters count UTF-16 code units, as JavaScript's do). */
@@ -150,7 +166,7 @@ async function applyEditToDisk(edit: WorkspaceEdit): Promise<void> {
 /** Starts the engine as the extension does and initializes a session. */
 async function startEngine(extensionPath: string, options: SessionOptions = {}): Promise<Engine> {
   const server = await resolveServer({
-    setting: '',
+    setting: ENGINE_PATH,
     extensionPath,
     platform: platform(),
     isFile: () => Promise.resolve(true),
@@ -184,6 +200,15 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
       wake();
     }
   });
+  const refreshes = { count: 0 };
+  const refreshWaiting: (() => void)[] = [];
+  connection.onRequest('workspace/codeLens/refresh', () => {
+    refreshes.count += 1;
+    for (const wake of refreshWaiting.splice(0)) {
+      wake();
+    }
+    return null;
+  });
   const registrations: Registration[] = [];
   connection.onRequest(RegistrationRequest.type, (params) => {
     registrations.push(...params.registrations);
@@ -206,6 +231,7 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
           : [{ uri: pathToFileURL(options.folder).href, name: 'workspace' }],
       capabilities: {
         workspace: {
+          codeLens: { refreshSupport: true },
           ...(options.dynamicRegistration && {
             didChangeWatchedFiles: { dynamicRegistration: true },
           }),
@@ -218,6 +244,7 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
       initializationOptions: {
         ...serverOptions('', undefined, options.experimental),
         inlineInfo: options.inlineInfo ?? true,
+        exampleResults: options.exampleResults ?? true,
       },
     }),
     exited,
@@ -232,11 +259,29 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
     experimentalFeatures: parseExperimentalFeatures(initialized),
     published,
     registrations,
+    commands: listedCommands(initialized),
+    refreshes,
     nextPublish: () =>
       new Promise<void>((resolve) => {
         waiting.push(resolve);
       }),
+    refreshedAfter: (seen) =>
+      refreshes.count > seen
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            refreshWaiting.push(resolve);
+          }),
   };
+}
+
+/** The commands the engine lists in its `initialize` result, for the client to run with `workspace/executeCommand`. */
+function listedCommands(initialized: unknown): string[] {
+  const capabilities = isRecord(initialized) ? initialized['capabilities'] : undefined;
+  const provider = isRecord(capabilities) ? capabilities['executeCommandProvider'] : undefined;
+  const commands = isRecord(provider) ? provider['commands'] : undefined;
+  return Array.isArray(commands)
+    ? commands.filter((command): command is string => typeof command === 'string')
+    : [];
 }
 
 /** Waits until the diagnostics for `uri` satisfy `accept`, or the engine exits. */
@@ -299,6 +344,88 @@ async function lensArgument(uri: string, command: string): Promise<Record<string
     throw new Error(`No line above a rule has a part that runs ${command}.`);
   }
   return { ...argument };
+}
+
+/** Asks for the lines above the rules of an open document until `accept` takes them, as VS Code does when the engine asks it to. */
+async function lensesWhen(
+  uri: string,
+  accept: (lenses: { title: string; command: string }[]) => boolean,
+): Promise<{ title: string; command: string }[]> {
+  const { refreshes, refreshedAfter, exited } = running();
+  for (;;) {
+    const seen = refreshes.count;
+    const found = await lensesOf(uri);
+    if (accept(found)) {
+      return found;
+    }
+    await Promise.race([refreshedAfter(seen), exited]);
+  }
+}
+
+/** The lines of a picker the flow showed, once the engine answered. */
+interface PickedLines {
+  readonly title: string;
+  readonly lines: { label: string; description?: string; detail?: string }[];
+}
+
+/** A picker that records its lines and picks the one labelled `choice`. */
+function pickerOf(
+  picked: PickedLines[],
+  opened: { uri: string; line: number }[],
+  choice: string,
+): ResultsUi {
+  return {
+    async pick(request) {
+      const lines = request.lines instanceof Promise ? await request.lines : request.lines;
+      picked.push({
+        title: request.title,
+        lines: lines.map((line) => ({
+          label: line.label,
+          ...(line.separator !== true &&
+            line.description !== undefined && {
+              description: line.description,
+            }),
+          ...(line.separator !== true && line.detail !== undefined && { detail: line.detail }),
+        })),
+      });
+      const line = lines.find((each) => each.separator !== true && each.label === choice);
+      return line === undefined || line.separator === true
+        ? undefined
+        : { value: line.value, typed: '' };
+    },
+    isOn: () => true,
+    offerTurnOn: () => Promise.reject(new Error('the results are on')),
+    openExample(uri, line) {
+      opened.push({ uri, line });
+      return Promise.resolve();
+    },
+    showError: (message) => Promise.reject(new Error(message)),
+    showLogs: fail,
+  };
+}
+
+/** A cancellation token that fires when `signal` does, for a request of the protocol connection. */
+function cancellationOf(signal: AbortSignal): CancellationToken {
+  return {
+    get isCancellationRequested() {
+      return signal.aborted;
+    },
+    onCancellationRequested: (listener) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          listener(undefined);
+        },
+        { once: true },
+      );
+      return { dispose: () => undefined };
+    },
+  };
+}
+
+/** Fails the test: the flow logged a problem, which it does only for an engine it does not understand. */
+function fail(message?: string): never {
+  throw new Error(message ?? 'the flow showed something it should not');
 }
 
 beforeAll(async () => {
@@ -635,6 +762,144 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
       expect((await lensesOf(uri)).map((lens) => lens.title)).toContain(
         'params: dyn · Give it a type',
       );
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('shows what a CRD rule does to its examples: the part of the line, the command’s answer as the picker lists it, and the toggle', async (context) => {
+    if (!running().commands.includes('cel-lens.exampleResults')) {
+      context.skip(
+        'the engine has no cel-lens.exampleResults: it is older than the first with example results. Set CEL_LENS_SERVER_PATH to one built from cel-lens-core, as cel-lens.serverPath would.',
+      );
+    }
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    for (const [fixture, path] of [
+      ['limit_crd.yaml', 'crd.yaml'],
+      ['limit_small.yaml', 'config/samples/small.yaml'],
+      ['limit_big.yaml', 'config/samples/big.yaml'],
+      ['limit_huge.yaml', 'testdata/invalid/huge.yaml'],
+      ['limit_fine.yaml', 'testdata/invalid/fine.yaml'],
+    ]) {
+      await mkdir(dirname(join(root, path ?? '')), { recursive: true });
+      await copyFile(join(FIXTURES, fixture ?? ''), join(root, path ?? ''));
+    }
+    const session = await startEngine(await checkedExtensionPath(), { folder: root });
+    const shared = engine;
+    engine = session;
+    try {
+      const uri = pathToFileURL(join(root, 'crd.yaml')).href;
+      const text = await readFile(join(root, 'crd.yaml'), 'utf8');
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+
+      // The part of the line above the rule, shortened by the engine to the 80 characters the line keeps:
+      // two wrong verdicts (one refused, one allowed), then the two that pass.
+      const isPart = (lens: { command: string }): boolean =>
+        lens.command === 'cel-lens.showExampleResults';
+      const shown = await lensesWhen(uri, (lenses) => lenses.some(isPart));
+      expect(shown.filter(isPart)).toEqual([
+        {
+          title: '2 wrong · 2 pass',
+          command: 'cel-lens.showExampleResults',
+        },
+      ]);
+
+      // The command the part runs, with its argument, as the extension runs it: a picker whose
+      // lines list the wrong verdicts first, each with its file, line and the API server's message.
+      const location = await lensArgument(uri, 'cel-lens.showExampleResults');
+      const picked: PickedLines[] = [];
+      const opened: { uri: string; line: number }[] = [];
+      const flow = new ExampleResultsFlow(
+        (command, argument, signal) =>
+          signal === undefined
+            ? session.connection.sendRequest('workspace/executeCommand', {
+                command,
+                arguments: [argument],
+              })
+            : session.connection.sendRequest(
+                'workspace/executeCommand',
+                { command, arguments: [argument] },
+                cancellationOf(signal),
+              ),
+        pickerOf(picked, opened, '$(warning) config/samples/big.yaml:1'),
+        { warn: fail, error: fail },
+      );
+      await flow.show(location);
+
+      expect(picked).toHaveLength(1);
+      expect(picked[0]?.title).toBe(
+        `Example results of the rule on line ${String(lineOf(text, '- rule:') + 1)}`,
+      );
+      expect(picked[0]?.lines).toEqual([
+        { label: 'Not as expected' },
+        {
+          label: '$(warning) config/samples/big.yaml:1',
+          description: 'refused · expected allowed',
+          detail: 'spec: Invalid value: at most 10 replicas',
+        },
+        {
+          label: '$(warning) testdata/invalid/fine.yaml:1',
+          description: 'allowed · expected refused',
+        },
+        { label: 'As expected' },
+        { label: '$(pass) config/samples/small.yaml:1', description: 'allowed' },
+        {
+          label: '$(pass) testdata/invalid/huge.yaml:1',
+          description: 'refused',
+          detail: 'spec: Invalid value: at most 10 replicas',
+        },
+      ]);
+      expect(opened).toEqual([
+        { uri: pathToFileURL(join(root, 'config/samples/big.yaml')).href, line: 1 },
+      ]);
+
+      // The wrong verdicts are warnings: on the rule and on big.yaml, which the rule refuses though it
+      // expects to be allowed, and on fine.yaml alone, which expects to be refused and is allowed.
+      const bigUri = pathToFileURL(join(root, 'config/samples/big.yaml')).href;
+      const fineUri = pathToFileURL(join(root, 'testdata/invalid/fine.yaml')).href;
+      const warned = (list: Diagnostic[]): boolean =>
+        list.filter((each) => each.severity === WARNING).length > 0;
+      const crdWarnings = await diagnosticsFor(uri, warned);
+      expect(crdWarnings).toHaveLength(1);
+      expect(crdWarnings[0]).toMatchObject({ severity: WARNING, source: 'cel-lens' });
+      expect(crdWarnings[0]?.message).toContain('refuses config/samples/big.yaml:1');
+      const bigWarnings = await diagnosticsFor(bigUri, warned);
+      expect(bigWarnings).toHaveLength(1);
+      expect(bigWarnings[0]?.message).toContain('expected to be allowed');
+      const fineWarnings = await diagnosticsFor(fineUri, warned);
+      expect(fineWarnings).toHaveLength(1);
+      expect(fineWarnings[0]?.message).toContain('expected to be refused');
+
+      // Off: the part goes, the warnings go, and the engine refuses the command.
+      await session.connection.sendNotification(DidChangeConfigurationNotification.type, {
+        settings: { ...serverOptions('', undefined, []), exampleResults: false },
+      });
+      const quiet = await lensesWhen(uri, (lenses) => !lenses.some(isPart));
+      expect(quiet.filter(isPart)).toEqual([]);
+      expect(await diagnosticsFor(uri, (list) => !warned(list))).toEqual([]);
+      expect(await diagnosticsFor(bigUri, (list) => !warned(list))).toEqual([]);
+      expect(await diagnosticsFor(fineUri, (list) => !warned(list))).toEqual([]);
+      await expect(
+        session.connection.sendRequest('workspace/executeCommand', {
+          command: 'cel-lens.exampleResults',
+          arguments: [location],
+        }),
+      ).rejects.toMatchObject({ code: -32803 });
+
+      // On again: the part and the warnings come back.
+      await session.connection.sendNotification(DidChangeConfigurationNotification.type, {
+        settings: { ...serverOptions('', undefined, []), exampleResults: true },
+      });
+      expect((await lensesWhen(uri, (lenses) => lenses.some(isPart))).filter(isPart)).toHaveLength(
+        1,
+      );
+      expect(await diagnosticsFor(uri, warned)).toHaveLength(1);
+      expect(await diagnosticsFor(bigUri, warned)).toHaveLength(1);
+      expect(await diagnosticsFor(fineUri, warned)).toHaveLength(1);
     } finally {
       await stopEngine(session);
       engine = shared;

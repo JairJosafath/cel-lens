@@ -65,8 +65,18 @@
         "category": "cel-lens"
       },
       {
+        "command": "cel-lens.toggleExampleResults",
+        "title": "Toggle Example Results",
+        "category": "cel-lens"
+      },
+      {
         "command": "cel-lens.showRule",
         "title": "Show Rule",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.showExampleResults",
+        "title": "Show Example Results",
         "category": "cel-lens"
       },
       {
@@ -128,11 +138,18 @@
           "order": 1,
           "markdownDescription": "Shows a line above each CEL rule: what `self` is, whether the rule compiles, and the values it reads as `dyn`. Turn it off and on with **cel-lens: Toggle Inline Info** or from the status bar menu."
         },
+        "cel-lens.exampleResults": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "order": 2,
+          "markdownDescription": "Shows what each rule of a CustomResourceDefinition does to the example objects of the workspace: a part of the line above the rule (such as `3 examples pass` or `refuses 1 example it should allow`), a section of its hover and a warning for each wrong verdict. Off, the engine reads, checks and runs no example. Turn it off and on with **cel-lens: Toggle Example Results** or from the status bar menu."
+        },
         "cel-lens.kubernetesVersion": {
           "type": "string",
           "default": "",
           "scope": "window",
-          "order": 2,
+          "order": 3,
           "markdownDescription": "Advanced: the Kubernetes version the results match, such as `1.36`. Leave empty to use the engine's default."
         },
         "cel-lens.trace.server": {
@@ -144,7 +161,7 @@
           ],
           "default": "off",
           "scope": "window",
-          "order": 3,
+          "order": 4,
           "markdownDescription": "Traces the messages between VS Code and the engine in the cel-lens output channel.",
           "enumDescriptions": [
             "No tracing.",
@@ -170,14 +187,14 @@
           "uniqueItems": true,
           "default": [],
           "scope": "window",
-          "order": 5,
+          "order": 6,
           "markdownDescription": "Advanced: the experimental features to turn on. An experimental feature is off until you list it here; a name the engine does not know is ignored and reported once in a notification."
         },
         "cel-lens.serverPath": {
           "type": "string",
           "default": "",
           "scope": "machine",
-          "order": 4,
+          "order": 5,
           "markdownDescription": "Advanced: path to a `cel-lens-core` binary to use instead of the engine bundled with the extension. Leave empty."
         }
       }
@@ -209,7 +226,15 @@
           "when": "editorLangId == yaml"
         },
         {
+          "command": "cel-lens.toggleExampleResults",
+          "when": "editorLangId == yaml"
+        },
+        {
           "command": "cel-lens.showRule",
+          "when": "false"
+        },
+        {
+          "command": "cel-lens.showExampleResults",
           "when": "false"
         },
         {

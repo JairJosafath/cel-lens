@@ -1,6 +1,7 @@
 import { RESTART_ENGINE_LABEL, SHOW_LOGS_LABEL } from './button_labels';
 import type { CelStyle } from './cel_styles';
 import { CHOOSE_COLOR_STYLE_COMMAND, styleLabel } from './color_style';
+import { TOGGLE_EXAMPLE_RESULTS_COMMAND, exampleResultsLabel } from './example_results';
 import { TOGGLE_INLINE_INFO_COMMAND, inlineInfoLabel } from './inline_info';
 import {
   PICK_VERSION_COMMAND,
@@ -24,13 +25,15 @@ export interface ActionItem {
 
 /**
  * The menu's entries in order; style and version are shown as descriptions, and whether the
- * lines above the rules show is in the inline info entry's label.
+ * lines above the rules show, and what a rule does to its examples, are in the labels of the
+ * inline info and example results entries.
  */
 export function actionItems(
   style: CelStyle,
   version: string,
   engineDown = false,
   inlineInfo = true,
+  exampleResults = true,
 ): ActionItem[] {
   const restart = { label: RESTART_ENGINE_LABEL, description: '', command: RESTART_SERVER_COMMAND };
   const logs = { label: SHOW_LOGS_LABEL, description: '', command: SHOW_LOGS_COMMAND };
@@ -38,6 +41,11 @@ export function actionItems(
     { label: 'Color style', description: styleLabel(style), command: CHOOSE_COLOR_STYLE_COMMAND },
     { label: 'Kubernetes version', description: version, command: PICK_VERSION_COMMAND },
     { label: inlineInfoLabel(inlineInfo), description: '', command: TOGGLE_INLINE_INFO_COMMAND },
+    {
+      label: exampleResultsLabel(exampleResults),
+      description: '',
+      command: TOGGLE_EXAMPLE_RESULTS_COMMAND,
+    },
   ];
   return engineDown ? [restart, logs, ...settings] : [...settings, restart, logs];
 }

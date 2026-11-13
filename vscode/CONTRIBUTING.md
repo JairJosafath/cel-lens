@@ -115,6 +115,17 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
   names these parts' commands, `cel-lens.showRule`, `cel-lens.listValues`,
   `cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, so they are not
   in the Command Palette.
+- **Example results:** above a CRD's rule with examples, a last part of the line says
+  what the rule does to them (`3 examples pass`, or the wrong verdicts first). The engine
+  names its command, `cel-lens.showExampleResults`, and gives it the rule's location, so
+  it is not in the Command Palette: it asks the engine's `cel-lens.exampleResults` for
+  that rule and opens a picker of each example's verdict, the wrong ones first, each with
+  its file and line and the API server's message. The picker opens at once, saying the
+  results are being computed, and Escape cancels the engine's work; picking an example
+  opens it at its line beside the rule. With `cel-lens.exampleResults` off for the file,
+  the command says so and has a button that turns it on. The engine has one switch for the
+  window, on while any workspace folder has the setting on; the client hides the part in a
+  folder that turns it off, as it hides the whole line for `cel-lens.inlineInfo`.
 - **Types for `dyn` values:** **Give it a type** and **Edit** open a picker:
   **Write a schema in .cellens…**, **Use a Go type…** (a second picker of the
   Go types of the `.cellens`'s workspace folder, with a Back button) and **Write a
@@ -246,6 +257,10 @@ The colors follow the theme kind, so they read in light, dark and high contrast 
 - **cel-lens: Toggle Inline Info** (`cel-lens.toggleInlineInfo`) turns the line
   above each CEL rule off or on, by flipping `cel-lens.inlineInfo` at the scope that
   sets it for the open file, or in your user settings.
+- **cel-lens: Toggle Example Results** (`cel-lens.toggleExampleResults`) turns what each
+  CRD rule does to its examples off or on (the part of the line, the hover, the warnings),
+  by flipping `cel-lens.exampleResults` at the scope that sets it for the open file, or in
+  your user settings.
 - **cel-lens: Give a Value a Type…** (`cel-lens.giveValueType`) lists the values the
   line above each rule of the open YAML file names, from its code lenses
   (`vscode.executeCodeLensProvider`), and gives the one picked a type, or edits it.
@@ -327,7 +342,10 @@ releases are tagged `core-vX.Y.Z` there, the extension's `vscode-vX.Y.Z`.
   (`vitest.config.mts` points `vscode` at it).
 - `test/e2e/` is the end-to-end test: `engine.test.ts` takes the engine from `bin/` (failing with "npm run engine" when it is missing), starts it
   with the extension's own command, and as a language client checks a diagnostic, hover,
-  completion and broken YAML. The stand-in unit tests do not replace it.
+  completion and broken YAML. The stand-in unit tests do not replace it. A case for a feature that no
+  engine release has yet skips, saying why, when the engine it starts lacks it; set `CEL_LENS_SERVER_PATH` to a
+  `cel-lens-core` binary built from the engine's source (as `cel-lens.serverPath` would name it) to run the whole
+  file on that engine instead of the one in `bin/`.
 - `test/pictures/` holds the fixtures and `take.ts`, the script behind `npm run pictures`.
 - `esbuild.mjs` bundles into `out/`; `.vscodeignore` keeps everything else out of
   the `.vsix`.

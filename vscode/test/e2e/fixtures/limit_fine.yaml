@@ -1,0 +1,6 @@
+apiVersion: example.com/v1
+kind: Limit
+metadata:
+  name: fine
+spec:
+  replicas: 1
