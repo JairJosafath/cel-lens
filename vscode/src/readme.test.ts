@@ -359,7 +359,7 @@ describe('README.md as the store page', () => {
     expect(colorRow).not.toContain('CONTRIBUTING.md');
   });
 
-  it('says in the Example results section where the examples come from, what one expects, updates, the line, the hover, the warnings and the toggle, in that order, then the admission policies', () => {
+  it('says in the Example results section where the examples come from, what one expects, updates, the line, the hover, the warnings and the toggle, in that order, then the admission policies and CI', () => {
     const section = readmeSection(README, 'Example results') ?? '';
     const parts = section.split(/^(?=### )/m).slice(1);
 
@@ -371,6 +371,7 @@ describe('README.md as the store page', () => {
       '### The hover and the warnings',
       '### Turn it off',
       '### Admission policies',
+      '### In CI',
     ]);
   });
 
@@ -488,5 +489,41 @@ describe('README.md as the store page', () => {
     expect(section).toMatch(/Example results for a MutatingAdmissionPolicy/);
     expect(section).toMatch(/Helm/);
     expect(section).toMatch(/[Kk]ubebuilder/);
+  });
+});
+
+describe('README.md on running the examples in CI', () => {
+  const section = (): string =>
+    (readmeSection(README, 'Example results') ?? '').split('### In CI')[1] ?? '';
+
+  it.each([
+    '`cel-lens-core examples [paths...]`',
+    'the file of the release `core-v0.31.0` for your system',
+    'it is named `cel-lens-core_v0.31.0_<os>_<arch>`, with `.exe` on Windows; rename it `cel-lens-core`',
+    'each rule with a wrong verdict or that ended in an error',
+    'the problems of the examples (such as a CRD, policy or binding the API server cannot read)',
+    '1 that a verdict or a problem of the examples did',
+    'a rule that stopped with an error on an example that expects to be allowed',
+    '`error` also fails a rule that stopped with an error on an example that expects to be refused',
+    'a rule that did not run never does',
+    'runs every rule of the CRDs and ValidatingAdmissionPolicies in the files and folders given',
+    'exits 1 when a verdict is not what its example expects',
+    '`go install github.com/JairJosafath/cel-lens/engine@v0.31.0`',
+    'the binary is named `engine`; rename it `cel-lens-core`',
+    '`12 rules, 40 examples: 2 wrong, 1 error, 3 not run`',
+    'Exit code 0 means nothing failed',
+    '2 a usage or read error and 130 an interrupted run',
+    '`--fail-on wrong`',
+    '`--format json`',
+    '`--kube-version 1.34`',
+  ])('says: %s', (text) => {
+    expect(section()).toContain(text);
+  });
+
+  it('names the engine release it was written for, the one the extension carries', () => {
+    const pinned = (JSON.parse(readFileSync('core-version.json', 'utf8')) as { version: string })
+      .version;
+    expect(section()).toContain(`engine@${pinned}`);
+    expect(section()).toContain(`core-${pinned}`);
   });
 });

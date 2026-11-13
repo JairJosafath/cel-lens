@@ -6,6 +6,23 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-13
+
+### Added
+
+- The engine runs the examples in CI: `cel-lens-core examples [--format text|json] [--kube-version <1.x>] [--fail-on wrong|error|none] [--verbose] [paths...]` runs the rules of the CustomResourceDefinitions and ValidatingAdmissionPolicies of the files and folders given (the current folder with none) on their examples, with the results the editor shows, and exits 1 when a verdict is not what its example expects, so a repository's examples are a test. It runs the check of the examples once over the workspace the paths make up (a folder is walked as the editor's workspace scan walks it; a file given alone is the workspace of its own, but for the folders given). The text lists the problems of the examples and each rule with a wrong verdict or an error, the wrong ones first, with the API server's message and paths relative to the working folder, and ends with `12 rules, 40 examples: 2 wrong, 1 error, 3 not run`; with nothing wrong that line is all it prints, and `--verbose` lists every result. `--format json` prints one object, the answer of `cel-lens.exampleResults` for every file with rules and the `problems` of the examples. `--fail-on` picks what fails the run: `wrong` (the default) a verdict that is not what its example expects, a rule that stops with an error on an example that expects to be allowed, and a problem of an example; `error` also a rule that stopped with an error on an example that expects to be refused; `none` never; a rule that did not run never fails. Exit code 0 means nothing failed, 1 that a verdict did, 2 a usage or read error, 130 an interrupted run. It runs every example it finds, not only the first 100 of a CRD or that a policy matches, which is the editor's cap; files over 1 MiB and past the first 20000 are not read, which stderr warns of and the last line counts, and the exit code ignores.
+- `cel-lens-core examples` reports each CustomResourceDefinition, ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding of the workspace that the API server cannot read, which the engine used to leave out without a word: a CI check passed on a policy the API server refuses. For a field of the wrong type the problem is the one the editor shows, at the word; for a CRD that the API server refuses for anything but its rules it says what it refuses, at the first line of the document. It counts as wrong, so the default exits 1. The editor says the same on such a file of the workspace that is not open, where its example results said nothing for it; an open document has the problem already.
+- The README says how to run the examples in CI: how to install `cel-lens-core` (`go install github.com/JairJosafath/cel-lens/engine@v0.31.0` or the release file), what it runs, and its exit codes.
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.31.0, which has all of the above, with nothing to set in `cel-lens.serverPath`.
+
+### Fixed
+
+- A plain `y`, `n`, `yes`, `no`, `on` or `off` (and `Y`, `Yes`, `YES`, `N`, `No`, `NO`, `On`, `ON`, `Off`, `OFF`) is read as the boolean that kubectl and the API server read, not as a string. The engine read the file as YAML 1.2, where `n` is a string, so a policy whose audit annotation `key` is `n` passed the check, as did a policy label `tier: yes`, a binding's `tier: on` and a string enum `[y, n]` in a CRD, whose entry the API server takes as a boolean, so a value equal to the word is refused. A field that wants a string is now an error at the word (`spec.auditAnnotations[0].key: expected a string, got a boolean: kubectl reads an unquoted n as one (YAML 1.1), so quote it if a string is meant`), the CEL of the document is still checked, and a string enum with such an entry is a warning at the entry. A quoted word, or one tagged `!!str`, is a string, as before. The schema's problems on an example of a CRD that come of such a word name its line, and an example the engine used to drop from the example results for one is no longer dropped. Not covered yet: a mapping key such as `on:` is still read as written, where kubectl sends `true`.
+- A CustomResourceDefinition whose version says `served: yes` or `storage: on`, or another plain `y`, `n`, `yes`, `no`, `on` or `off` where the API server wants a boolean, is read as the API server reads it: the check no longer reports `expected a boolean, got a string` for it, and its examples run, which they did not, as the CRD was left out. A CEL expression that is a plain `yes` is one problem, a boolean where a string is wanted, and no longer also an expression that does not compile.
+
 ## [0.38.0] - 2026-11-13
 
 ### Added
@@ -711,7 +728,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.38.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.39.0...HEAD
+[0.39.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.38.0...vscode-v0.39.0
 [0.38.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.37.0...vscode-v0.38.0
 [0.37.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.36.0...vscode-v0.37.0
 [0.36.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.35.0...vscode-v0.36.0

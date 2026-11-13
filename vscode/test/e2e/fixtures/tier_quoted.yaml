@@ -1,0 +1,6 @@
+apiVersion: example.com/v1
+kind: Tier
+metadata:
+  name: silver
+spec:
+  tier: 'on'

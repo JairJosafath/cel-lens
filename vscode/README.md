@@ -162,6 +162,16 @@ The picker opened from the part above a policy's validation: `big.yaml` is refus
 
 A document of a built-in kind is decoded strictly, as the API server decodes a request, but gets no defaulting or validation of its own: a policy that reads a field the API server defaults, such as a Deployment's `spec.strategy`, sees it absent when the document does not set it.
 
+### In CI
+
+The engine that runs in the editor also runs on a repository's examples, so they are a test: `cel-lens-core examples [paths...]` runs every rule of the CRDs and ValidatingAdmissionPolicies in the files and folders given (the current folder with none) on their examples, with the results the editor shows, and exits 1 when a verdict is not what its example expects. It needs no extension. Install it with `go install github.com/JairJosafath/cel-lens/engine@v0.31.0` (the binary is named `engine`; rename it `cel-lens-core`) or take the file of the release `core-v0.31.0` for your system on <https://github.com/JairJosafath/cel-lens/releases>, the first with the command (it is named `cel-lens-core_v0.31.0_<os>_<arch>`, with `.exe` on Windows; rename it `cel-lens-core`). It prints each rule with a wrong verdict or that ended in an error and the examples it is wrong for, with the API server's message, the problems of the examples (such as a CRD, policy or binding the API server cannot read), and a last line such as `12 rules, 40 examples: 2 wrong, 1 error, 3 not run`; with nothing wrong that line is all it prints.
+
+```sh
+cel-lens-core examples ./config
+```
+
+Exit code 0 means nothing failed, 1 that a verdict or a problem of the examples did (`--fail-on wrong`, the default, fails a verdict that is not what its example expects, a rule that stopped with an error on an example that expects to be allowed, and a problem such as a CRD, policy or binding the API server cannot read; `error` also fails a rule that stopped with an error on an example that expects to be refused; `none` never fails; a rule that did not run never does), 2 a usage or read error and 130 an interrupted run. `--format json` prints the answer of `cel-lens.exampleResults` for every file with rules, `--kube-version 1.34` picks the Kubernetes version, and `--verbose` lists every result. It runs every example it finds, not the editor's first 100 a CRD, and does not read files over 1 MiB or past the first 20000.
+
 ## Commands
 
 The Command Palette lists the commands under **cel-lens**: **cel-lens: Show Logs** on any file, the others on YAML files, and **cel-lens: Use This Example as the Type** only on the editor of a pasted example. None has a keybinding.
