@@ -1,0 +1,326 @@
+name: Release
+
+# Makes a release of the engine or of the extension from the head of main, the
+# commit this run started at: it builds the files with the part's own make
+# dist, creates the two tags, publishes the release with the files and their
+# build provenance, and has sign-release.yml sign it. The version is prepared
+# first, in a change of its own: this workflow refuses a version the source
+# does not name yet.
+#
+# When a run fails, re-run its failed jobs, or run this workflow again with the
+# same inputs: each job says below what that does. A new run finishes the
+# release as long as it is not published, and both tags, if they exist, are at
+# the commit it releases. The commit is always the head of main at the start of
+# the run, never one chosen by an input: a version is released right after its
+# change is merged, or prepared again.
+run-name: Release ${{ inputs.part }} ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      part:
+        description: The part to release
+        required: true
+        type: choice
+        options:
+          - engine
+          - vscode
+      version:
+        description: The version to release, as X.Y.Z; the source names it already
+        required: true
+        type: string
+
+# One run at a time per part and version. A run in progress finishes:
+# cancelled between the tags and the release, it would leave tags without one.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.part }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions: read-all
+
+jobs:
+  # Stops the run before anything is built or written, with what to do instead.
+  # A re-run checks again; nothing was done.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.check.outputs.commit }}
+      source-tag: ${{ steps.check.outputs.source-tag }}
+      release-tag: ${{ steps.check.outputs.release-tag }}
+      title: ${{ steps.check.outputs.title }}
+      latest: ${{ steps.check.outputs.latest }}
+    steps:
+      # The run's own commit, which git reads the source from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The inputs reach the script through env, never as an expression in its
+      # text. The run must have started from main: the workflow file is then
+      # the one main has, which is what the commands in SECURITY.md accept. The
+      # commit to release is the head of main the run started at (GITHUB_SHA).
+      #
+      # A version is released once. A tag that exists already means the version
+      # is out, or that an earlier run failed after it created the tags. That
+      # run is finished by this one when both tags are at the commit to release,
+      # as a run creates them, and the release is not published: the tags are
+      # then pushed again as they are, which changes nothing. A tag at another
+      # commit, or only one of the two, is not a run to finish. An annotated tag
+      # is refused too, as git does not let a push of the commit replace it.
+      #
+      # The source at the commit must name the version already: its heading in
+      # the part's changelog, and for the extension package.json too.
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PART: ${{ inputs.part }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "Run this workflow from main, not from $GITHUB_REF: the commands in SECURITY.md accept only a release that the workflow made as main has it." >&2
+            exit 1
+          fi
+          if [[ ! $RELEASE_VERSION =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "The version \"$RELEASE_VERSION\" is not X.Y.Z. Run this workflow again with the version as three numbers, such as 1.2.3, without a v in front." >&2
+            exit 1
+          fi
+          case "$PART" in
+          engine)
+            source_tag=engine/v$RELEASE_VERSION
+            release_tag=core-v$RELEASE_VERSION
+            title="cel-lens core v$RELEASE_VERSION"
+            latest=false
+            ;;
+          vscode)
+            source_tag=vscode/v$RELEASE_VERSION
+            release_tag=vscode-v$RELEASE_VERSION
+            title="cel-lens for VS Code v$RELEASE_VERSION"
+            latest=true
+            ;;
+          *)
+            echo "The part \"$PART\" is not engine or vscode. Run this workflow again with one of the two." >&2
+            exit 1
+            ;;
+          esac
+          commit=$GITHUB_SHA
+          releases=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,isDraft --jq '.[] | "\(.tagName) \(.isDraft)"')
+          published=false
+          if grep -qxF -- "$release_tag false" <<<"$releases"; then
+            published=true
+          fi
+          present=()
+          elsewhere=()
+          annotated=()
+          for tag in "$source_tag" "$release_tag"; do
+            refs=$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+            if [ -z "$refs" ]; then
+              continue
+            fi
+            present+=("$tag")
+            object=$(awk -F '\t' '$2 !~ /\^\{\}$/ { print $1 }' <<<"$refs")
+            peeled=$(awk -F '\t' '$2 ~ /\^\{\}$/ { print $1 }' <<<"$refs")
+            at=${peeled:-$object}
+            if [ "$at" != "$commit" ]; then
+              elsewhere+=("$tag $at")
+            elif [ -n "$peeled" ]; then
+              annotated+=("$tag")
+            fi
+          done
+          if [ ${#elsewhere[@]} -gt 0 ]; then
+            read -r tag at <<<"${elsewhere[0]}"
+            if [ ${#elsewhere[@]} -eq 2 ] && [ "${elsewhere[0]#* }" = "${elsewhere[1]#* }" ] && [ "$published" = false ]; then
+              echo "The tags $source_tag and $release_tag both point at $at, not at $commit, and the release $release_tag is not published: a run that failed was releasing version $RELEASE_VERSION from $at. Finish that release by re-running the failed jobs of the run that created the tags, which keeps its commit $at; a new run releases only the head of main, so it cannot finish it." >&2
+            else
+              echo "The tag $tag points at $at, not at $commit: version $RELEASE_VERSION was released from that commit, or a run that failed was releasing it from there, and a run releases only the head of main. Prepare the next version and release that." >&2
+            fi
+            exit 1
+          fi
+          if [ ${#annotated[@]} -gt 0 ]; then
+            echo "The tag ${annotated[0]} is an annotated tag, which a run cannot reuse: it pushes the commit itself as the tag, and git refuses that over an annotated tag. Delete the tag if nothing uses it, then run this workflow again; or prepare and release the next version." >&2
+            exit 1
+          fi
+          if [ ${#present[@]} -eq 1 ]; then
+            echo "Only the tag ${present[0]} exists, not the other tag of version $RELEASE_VERSION, so this run cannot tell what it was for. Delete the tag if the release was never made, then run this workflow again; or prepare and release the next version." >&2
+            exit 1
+          fi
+          if [ "$published" = true ]; then
+            echo "The release $release_tag exists already. Prepare and release the next version." >&2
+            exit 1
+          fi
+          if [ "$PART" = vscode ]; then
+            named=$(git show "$commit:vscode/package.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')
+            if [ "$named" != "$RELEASE_VERSION" ]; then
+              echo "vscode/package.json at $commit names version $named, not $RELEASE_VERSION. Release $named; or prepare $RELEASE_VERSION first, merge it, and run this workflow again." >&2
+              exit 1
+            fi
+          fi
+          changelog=$(git show "$commit:$PART/CHANGELOG.md")
+          if [[ $'\n'$changelog != *$'\n'"## [$RELEASE_VERSION]"* ]]; then
+            echo "$PART/CHANGELOG.md at $commit has no \"## [$RELEASE_VERSION]\" heading. Prepare the version first: move its notes under that heading in a change of its own, then run this workflow again once it is merged to main." >&2
+            exit 1
+          fi
+          {
+            echo "commit=$commit"
+            echo "source-tag=$source_tag"
+            echo "release-tag=$release_tag"
+            echo "title=$title"
+            echo "latest=$latest"
+          } >>"$GITHUB_OUTPUT"
+          echo "Releasing $title from $commit."
+
+  # Builds the files from the source of the run's commit, with no permission to
+  # write anything: the code of the part and of its dependencies runs here.
+  # When this job fails, nothing of the release exists; a re-run builds again.
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # As CI does: the Go version of engine/go.mod, or Node 24. Without a
+      # cache, so that the files hold nothing an earlier job left in one.
+      - if: inputs.part == 'engine'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: engine/go.mod
+          cache: false
+      - if: inputs.part == 'vscode'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      # make dist writes the engine's six binaries and checksums.txt, or the
+      # extension's .vsix files with the pinned engine, into the part's dist/.
+      # The notes of the release are the version's section of the changelog:
+      # the lines under its heading, up to the next version's.
+      - env:
+          PART: ${{ inputs.part }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          make -C "$PART" dist VERSION="v$RELEASE_VERSION"
+          files=("$PART"/dist/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "make dist wrote no file into $PART/dist/." >&2
+            exit 1
+          fi
+          mkdir -p release/files
+          cp "${files[@]}" release/files/
+          awk -v heading="## [$RELEASE_VERSION]" '
+            index($0, heading) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside && (started || NF) { started = 1; print }
+          ' "$PART/CHANGELOG.md" >release/notes.md
+      # A re-run of this job uploads over what an earlier attempt left.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          overwrite: true
+
+  # Attests what the build job built, then makes the release. No code of the
+  # source runs in this job.
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # creates the two tags and the release
+      id-token: write # the identity Sigstore signs the provenance with
+      attestations: write # keeps the provenance with this repository
+    steps:
+      # Only for git, which pushes the tags with the token this step keeps. It
+      # checks out the run's own commit, with no ref: no workflow job checks
+      # out a ref an input or another job names.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+      # One attestation of build provenance names every file the build job
+      # built. When this step or one before it fails, nothing of the release
+      # exists; a re-run attests the same files again, which harms nothing.
+      - id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release/files/*
+      # The release is first a draft, which only maintainers see and which has
+      # no tag: the files and the provenance, a file whose name ends in
+      # .intoto.jsonl, are in it before anything public exists. Then both tags
+      # are pushed in one push that creates both or neither, and only then is
+      # the draft published. A tag is what cannot be taken back, as
+      # go install github.com/JairJosafath/cel-lens/engine@vX.Y.Z reads the
+      # source at engine/vX.Y.Z from then on; so the tags come as late as they
+      # can.
+      #
+      # What a re-run of this job does after each step that can fail:
+      # - gh release create: a draft may be left, with some of the files. The
+      #   re-run deletes it and makes a new one. So does a new run.
+      # - git push: neither tag exists, and the draft does. The re-run makes
+      #   the draft again and pushes both tags. So does a new run.
+      # - gh release edit: the tags exist and the draft does. The re-run makes
+      #   the draft again, pushes nothing new, as both tags are at the commit
+      #   already, and publishes. So does a new run: its check lets it pass, as
+      #   both tags are at its commit.
+      # - when the release is published and the step still failed: the re-run
+      #   sees the release and leaves it as it is.
+      # No re-run deletes or moves a tag, or deletes a published release.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.check.outputs.commit }}
+          SOURCE_TAG: ${{ needs.check.outputs.source-tag }}
+          RELEASE_TAG: ${{ needs.check.outputs.release-tag }}
+          TITLE: ${{ needs.check.outputs.title }}
+          LATEST: ${{ needs.check.outputs.latest }}
+          PROVENANCE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(release/files/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "The build job left no file to release. Re-run all jobs of this run." >&2
+            exit 1
+          fi
+          releases=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,isDraft --jq '.[] | "\(.tagName) \(.isDraft)"')
+          if grep -qxF -- "$RELEASE_TAG false" <<<"$releases"; then
+            echo "The release $RELEASE_TAG is published already, by an earlier attempt of this run. It stays as it is."
+            exit 0
+          fi
+          drafts=$(grep -cxF -- "$RELEASE_TAG true" <<<"$releases" || true)
+          for ((n = 0; n < drafts; n++)); do
+            gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes
+          done
+          cp "$PROVENANCE" release/provenance.intoto.jsonl
+          gh release create "$RELEASE_TAG" "${files[@]}" release/provenance.intoto.jsonl \
+            --repo "$GITHUB_REPOSITORY" --draft --target "$COMMIT" --title "$TITLE" --notes-file release/notes.md
+          git push --atomic origin "$COMMIT:refs/tags/$SOURCE_TAG" "$COMMIT:refs/tags/$RELEASE_TAG"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$LATEST"
+
+  # Has the release signed. A release published with this workflow's token
+  # starts no other workflow, so this job starts sign-release.yml itself, from
+  # main and for the tag, as a person would by hand: the signatures are then
+  # the ones the command in SECURITY.md accepts. It waits for that run, and
+  # fails when that run fails.
+  #
+  # When this job fails, the release is published and may lack signatures. A
+  # re-run starts sign-release.yml again, which signs every file again and
+  # replaces the signatures it finds.
+  sign:
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # starts sign-release.yml for the release
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.check.outputs.release-tag }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/sign-release.yml/dispatches" \
+            --method POST -f ref=main -f "inputs[tag]=$RELEASE_TAG" -F return_run_details=true \
+            --jq '.workflow_run_id // empty')
+          if [ -z "$run" ]; then
+            echo "GitHub started sign-release.yml for $RELEASE_TAG and did not say which run it is. Find the run under Actions; if it failed or is not there, run sign-release.yml by hand from main with the tag $RELEASE_TAG." >&2
+            exit 1
+          fi
+          gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 10

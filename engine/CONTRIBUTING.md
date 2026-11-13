@@ -30,6 +30,15 @@ Release binaries are built with `CGO_ENABLED=0` for six platforms and named
 or `windows` and `<arch>` is `amd64` or `arm64`. `checksums.txt` on the same
 release lists the SHA-256 of every file (`sha256sum -c checksums.txt`).
 
+A release is built on GitHub, by the `release.yml` workflow of
+https://github.com/JairJosafath/cel-lens. A maintainer runs it by hand for the
+engine and the version, right after the change that prepares the version is
+merged there, and it builds from the source under `engine/` at the head of that
+repository's `main`: it takes no commit. The workflow creates the release's
+tags, `core-vX.Y.Z` and the Go module's own tag for `engine/`, and the release
+with the six binaries, `checksums.txt`, a build provenance attestation and
+Sigstore signatures.
+
 ## Test
 
 ```sh
@@ -89,7 +98,8 @@ repeat:
    `core-v` tags listed in `testdata/public-core-tags.txt`, the tags really on the
    public repository (the newest release's own tag is accepted before it is
    listed); a version whose tag is not public has no link line, and a compare link
-   starts at the previous public tag. After a release's tag is published, add it to
+   starts at the previous public tag. The `release.yml` workflow publishes a
+   release's tag (see [Build](#build)); after that, add the tag to
    that list, so the next release's compare link is checked against it.
    `make release RELEASE=X.Y.Z` prepares a release: it first reads every `core-v`
    tag of the public repository and adds each one the list lacks (it removes

@@ -1,7 +1,7 @@
 # Sources
 
 Every source read to write `docs/style/`. The TypeScript, VS Code and LSP
-sources were read on 2026-10-02. The cross-language sources were read on
+sources were read on 2026-10-02, the UX bar's sources on 2026-11-09. The cross-language sources were read on
 2026-09-30 for another Standard, whose `principles.md` this one adapts; they were
 not read again. Version or date as shown on the page; "live" when the page shows
 none.
@@ -28,6 +28,21 @@ none.
 | Language server extension guide — https://code.visualstudio.com/api/language-extensions/language-server-extension-guide                                           | live                                               |
 | Language Server Protocol — https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/                                            | **3.17**                                           |
 | vscode-languageclient — https://www.npmjs.com/package/vscode-languageclient                                                                                       | 10.1.2, `engines.vscode` ^1.91.0 (npm, 2026-10-02) |
+
+## The UX bar
+
+| Source                                                                                                                | Version / date   |
+| --------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| UX guidelines, views — https://code.visualstudio.com/api/ux-guidelines/views                                          | live             |
+| UX guidelines, sidebars — https://code.visualstudio.com/api/ux-guidelines/sidebars                                    | live             |
+| UX guidelines, webviews — https://code.visualstudio.com/api/ux-guidelines/webviews                                    | live             |
+| UX guidelines, walkthroughs — https://code.visualstudio.com/api/ux-guidelines/walkthroughs                            | live             |
+| UX guidelines, quick picks — https://code.visualstudio.com/api/ux-guidelines/quick-picks                              | live             |
+| UX guidelines, context menus — https://code.visualstudio.com/api/ux-guidelines/context-menus                          | live             |
+| UX guidelines, editor actions — https://code.visualstudio.com/api/ux-guidelines/editor-actions                        | live             |
+| UX guidelines, command palette — https://code.visualstudio.com/api/ux-guidelines/command-palette                      | live             |
+| Programmatic language features — https://code.visualstudio.com/api/language-extensions/programmatic-language-features | live             |
+| GitLens README — https://github.com/gitkraken/vscode-gitlens/blob/main/README.md                                      | main, 2026-11-09 |
 
 ## Tools
 

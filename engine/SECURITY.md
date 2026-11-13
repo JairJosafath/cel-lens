@@ -30,7 +30,7 @@ advisory:
 
 ```sh
 curl -s https://api.osv.dev/v1/query \
-  -d '{"package": {"ecosystem": "Go", "name": "stdlib"}, "version": "1.26.10"}'
+  -d '{"package": {"ecosystem": "Go", "name": "stdlib"}, "version": "1.26.11"}'
 ```
 
 [OSV-Scanner](https://google.github.io/osv-scanner/) asks the same for every

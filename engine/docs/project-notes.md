@@ -20,6 +20,41 @@ Run it after a release's tag is published; `--append` adds the new tags to the l
 public tags itself, adds the missing ones to the list, and rewrites the `[X.Y.Z]:` links of
 `CHANGELOG.md` from it, or stops before writing when the public repository can't be read.
 
+## How a release reaches GitHub
+
+Written on 2026-11-13, while v0.28.0 was prepared.
+
+The release is built by the `release.yml` workflow of
+https://github.com/JairJosafath/cel-lens. It is run by hand, with the
+part, `engine`, and the version, right after the change that prepares the
+version is merged there, and it builds from the source under `engine/` at the
+head of that repository's `main`: it takes no commit. It creates the tags
+`engine/vX.Y.Z` and `core-vX.Y.Z` and the release, with the six binaries,
+`checksums.txt`, a build provenance attestation and Sigstore signatures.
+
+So a release goes in this order:
+
+1. `make release RELEASE=X.Y.Z` here, and the release check above on that
+   commit (CI's `full` job on `release-check/vX.Y.Z`).
+2. That source is under `engine/` on the public repository's `main`, and is the
+   head of it when the next step runs.
+3. `release.yml` is run there for `engine` and `X.Y.Z`.
+4. `scripts/public-tags.sh` then finds `core-vX.Y.Z` public; the next
+   `make release` adds it to `testdata/public-core-tags.txt`.
+
+Up to v0.27.0 the release files were built in the factory's Gitea and its
+operator copied them to GitHub; "v0.17.2: release" below is from that time.
+`.gitea/workflows/release.yaml`, the platform's file, still runs `make dist`
+for a `v*` tag pushed here and attaches the files to that Gitea release. Those
+are not the files of the public release, which are the ones `release.yml`
+builds.
+
+Not seen yet: `release.yml` was still being built when this was written (it
+was not on the public `main`, whose workflows were `ci.yml`, `codeql.yml`,
+`scorecard.yml` and `sign-release.yml`), so no release had been built by it.
+When v0.28.0 is released, check what it did against this section and correct
+it.
+
 ## v0.17.2: release
 
 v0.17.2 was tagged at the merge of #18 and published on GitHub as `core-v0.17.2` on
