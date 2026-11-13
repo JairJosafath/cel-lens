@@ -48,6 +48,10 @@ jobs:
       # A second run downloads the signatures of the first along with the
       # files. It signs the files again, uploads over the old signatures, and
       # signs no signature.
+      #
+      # It signs no build provenance either, the .intoto.jsonl file of a
+      # release that release.yml made: that file is an attestation, signed
+      # when it was made.
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -68,7 +72,7 @@ jobs:
           gh release download --repo "$GITHUB_REPOSITORY" --dir assets -- "$TAG"
           signed=0
           for file in assets/*; do
-            if [[ $file == *.sigstore.json ]]; then
+            if [[ $file == *.sigstore.json || $file == *.intoto.jsonl ]]; then
               continue
             fi
             cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"

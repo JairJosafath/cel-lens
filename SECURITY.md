@@ -22,3 +22,14 @@ cosign verify-blob \
 ```
 
 The identity names the workflow at `main` or at a tag, the only refs it signs releases from, so a signature made from any other branch is refused. `Verified OK` says that the file is the one this repository's workflow saw when it signed it, and that nothing changed it since. It is not a statement about how the file was built. Releases published before the workflow existed were signed afterwards, by the same workflow.
+
+The releases after cel-lens core v0.27.0 and cel-lens for VS Code v0.35.0 are built by the [release.yml](.github/workflows/release.yml) workflow of this repository, and each carries the build provenance of its files: one attestation that names every file the workflow built, in the file `provenance.intoto.jsonl` of the release. To check a file, download it and `provenance.intoto.jsonl` into one folder and run the [GitHub CLI](https://cli.github.com/) there. For `checksums.txt` of an engine release:
+
+```sh
+gh attestation verify checksums.txt \
+  --bundle provenance.intoto.jsonl \
+  --repo JairJosafath/cel-lens \
+  --cert-identity https://github.com/JairJosafath/cel-lens/.github/workflows/release.yml@refs/heads/main
+```
+
+The provenance proves what a signature does not: that a run of this repository's `release.yml`, as `main` had it, built the file, and which run that was. The provenance names the workflow run and the head of `main` at the time of the run, not the commit released: a release of a commit before that head has the same provenance. The commit released is the one the release's tags name (`engine/vX.Y.Z` and `core-vX.Y.Z`, or `vscode/vX.Y.Z` and `vscode-vX.Y.Z`), and the log of the run says it too: "Releasing … from <commit>".

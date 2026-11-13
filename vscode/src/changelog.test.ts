@@ -215,6 +215,15 @@ describe('CHANGELOG.md', () => {
     'Its `SECURITY.md` gains "Verifying a release": the `cosign verify-blob` command for a downloaded file',
     "the file is the one the repository's workflow saw when it signed it, not how the file was built",
     'Its README points there from Install',
+    'A release of JairJosafath/cel-lens is built and published by the repository itself, and its files carry build provenance',
+    'gains a `release.yml` workflow, run by hand from `main` with the part (`engine` or `vscode`), the version and, when `main` has later work, the commit to release',
+    'It stops before it builds anything, saying what to do',
+    "It builds the files with the part's own `make dist`, attests their build provenance, keeps the release a draft until it has every file, creates the two tags in one push",
+    "publishes the release with the provenance as `provenance.intoto.jsonl` and the version's changelog section as its notes, the extension's as latest, then starts `sign-release.yml` for the release and waits for it",
+    '`sign-release.yml` signs no provenance file',
+    'A run that fails is finished by re-running its failed jobs, or by a new run with the same inputs when the tags exist at its commit and the release is not published',
+    "Its `SECURITY.md` gains the `gh attestation verify` command for a downloaded file and what provenance proves that a signature does not: that a run of the repository's `release.yml` built the file, and which run",
+    'Its `CONTRIBUTING.md` says how a release is made',
   ])('names %s under Security in the Unreleased section', (text) => {
     expect(unreleasedPart('Security')).toContain(text);
   });
