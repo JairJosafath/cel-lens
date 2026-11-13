@@ -1,0 +1,9 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: small
+  namespace: default
+spec:
+  replicas: 2
+  selector: { matchLabels: { a: b } }
+  template: { metadata: { labels: { a: b } }, spec: { containers: [{ name: c, image: i }] } }

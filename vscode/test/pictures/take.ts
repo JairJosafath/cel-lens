@@ -75,6 +75,16 @@ const LIMIT_EXAMPLES: readonly (readonly [string, string])[] = [
   ['big', 'big.yaml'],
 ];
 const EXAMPLES_FOLDER = 'config/samples';
+/** A ValidatingAdmissionPolicy, which is in the workspace from the start (quick open does not find a file made later), and its bindings, its param and the Deployments it is run on, which are there only for its picture. */
+const DEPLOY_POLICY = 'deploy_policy.yaml';
+const DEPLOY_FILES: readonly (readonly [string, string])[] = [
+  ['deploy_bindings.yaml', 'bindings.yaml'],
+  ['deploy_limits.yaml', 'config/params/limits.yaml'],
+  ['deploy_small.yaml', 'config/deployments/small.yaml'],
+  ['deploy_big.yaml', 'config/deployments/big.yaml'],
+];
+/** The warnings the policy's wrong verdict makes in the status bar: one on the policy and one on the Deployment. */
+const DEPLOY_WARNINGS = 2;
 /** The line of the rule in limit_crd.yaml, and the warnings its wrong verdict makes in the status bar: one on the rule and one on the example. */
 const EXAMPLE_RULE_LINE = 22;
 const EXAMPLE_WARNINGS = 2;
@@ -1004,6 +1014,52 @@ async function takeExampleResults(page: Page, workspace: string): Promise<void> 
   }
 }
 
+/**
+ * example-results-policy.png: the picker opened from the part above a ValidatingAdmissionPolicy's
+ * validation, which two bindings give different verdicts for the Deployment `big.yaml`: refused
+ * under one, warned under the other. It shows what the CRD pictures do not: the binding and the
+ * param each line ran under, the API server's answer, and the verdicts of a policy. The bindings,
+ * the param and the Deployments come and go with this picture, as the examples of the CRD do.
+ */
+async function takePolicyResults(page: Page, workspace: string): Promise<void> {
+  for (const [fixture, file] of DEPLOY_FILES) {
+    await mkdir(dirname(join(workspace, file)), { recursive: true });
+    await cp(join(FIXTURES, fixture), join(workspace, file));
+  }
+  await startPicture(page, DEPLOY_POLICY);
+  await expectCleanStart(page, 'example-results-policy.png', {
+    problems: DEPLOY_WARNINGS,
+    ready: '1 wrong',
+  });
+  await showWholeLines(page, 'example-results-policy.png');
+  await parkMouse(page);
+  await clickWhenReady(
+    page.locator('.codelens-decoration a', { hasText: '1 wrong' }).first(),
+    'the line above the validation to offer its example results',
+  );
+  await waitForState(
+    page.locator('.quick-input-widget .quick-input-title', {
+      hasText: 'Example results of the rule',
+    }),
+    'the picker titled Example results of the rule',
+  );
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row', { hasText: 'deny-limits' }).first(),
+    'the picker to list the example under the binding deny-limits',
+  );
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row', { hasText: 'warn-limits' }).first(),
+    'the picker to list the example under the binding warn-limits',
+  );
+  const picker = await screenshotPage(page, 'example-results-policy.png');
+  await save('example-results-policy.png', picker);
+  await page.keyboard.press('Escape');
+  await waitForQuickInputClosed(page);
+  for (const [, file] of DEPLOY_FILES) {
+    await rm(join(workspace, file));
+  }
+}
+
 async function takePictures(page: Page, workspace: string): Promise<void> {
   await prepare(page);
   await takeInlineInfo(page);
@@ -1130,6 +1186,7 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
   await save('colors.png', await screenshotPage(page, 'colors.png'));
 
   await takeExampleResults(page, workspace);
+  await takePolicyResults(page, workspace);
   await takeGiveType(page);
 }
 
@@ -1160,7 +1217,7 @@ async function main(): Promise<void> {
 
     const workspace = join(work, 'workspace');
     await mkdir(join(workspace, '.vscode'), { recursive: true });
-    for (const name of [CRD, POLICY, PARAMS_POLICY, LIMIT_CRD]) {
+    for (const name of [CRD, POLICY, PARAMS_POLICY, LIMIT_CRD, DEPLOY_POLICY]) {
       await cp(join(FIXTURES, name), join(workspace, name));
     }
     await mkdir(join(workspace, dirname(SAMPLE_IN_WORKSPACE)), { recursive: true });

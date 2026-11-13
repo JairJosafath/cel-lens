@@ -302,6 +302,13 @@ jobs:
   # the ones the command in SECURITY.md accepts. It waits for that run, and
   # fails when that run fails.
   #
+  # The run is not readable at once: GitHub answered the dispatch with the id
+  # of run 43465064181 of core v0.30.0, and gh run watch asked for it and got
+  # HTTP 404, though the run existed and succeeded. So the job first reads the
+  # run until GitHub can answer, 24 reads 5 seconds apart (about 2 minutes),
+  # and only then watches it. A run that stays unreadable fails the job, with
+  # what to do by hand.
+  #
   # When this job fails, the release is published and may lack signatures. A
   # re-run starts sign-release.yml again, which signs every file again and
   # replaces the signatures it finds.
@@ -321,6 +328,21 @@ jobs:
             --jq '.workflow_run_id // empty')
           if [ -z "$run" ]; then
             echo "GitHub started sign-release.yml for $RELEASE_TAG and did not say which run it is. Find the run under Actions; if it failed or is not there, run sign-release.yml by hand from main with the tag $RELEASE_TAG." >&2
+            exit 1
+          fi
+          readable=false
+          answer=
+          for ((n = 1; n <= 24; n++)); do
+            if answer=$(gh run view "$run" --repo "$GITHUB_REPOSITORY" --json status 2>&1); then
+              readable=true
+              break
+            fi
+            if [ "$n" -lt 24 ]; then
+              sleep 5
+            fi
+          done
+          if [ "$readable" != true ]; then
+            echo "GitHub started sign-release.yml for $RELEASE_TAG as run $run, and the run was still not readable after 2 minutes; GitHub answered: $answer. Find the run under Actions; if it failed or is not there, run sign-release.yml by hand from main with the tag $RELEASE_TAG." >&2
             exit 1
           fi
           gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 10

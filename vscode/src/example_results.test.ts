@@ -325,3 +325,238 @@ describe('the lines that say nothing is there', () => {
     expect(failedLine('Show the logs for the reason', true).value).toEqual({ action: 'showLogs' });
   });
 });
+
+/** A result of a ValidatingAdmissionPolicy's expression, as the engine gives it. */
+function policyResult(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    example: example({
+      file: 'config/samples/big.yaml',
+      kind: 'Deployment',
+      apiVersion: 'apps/v1',
+    }),
+    binding: 'warn-limits',
+    param: {
+      uri: 'file:///repo/config/samples/limits.yaml',
+      file: 'config/samples/limits.yaml',
+      line: 1,
+      apiVersion: 'v1',
+      kind: 'ConfigMap',
+      name: 'limits',
+    },
+    result: 'warned',
+    message: 'a deployment may not run more replicas than its limit',
+    admission: {
+      warnings: [
+        "Validation failed for ValidatingAdmissionPolicy 'replica-limit' with binding 'warn-limits': a deployment may not run more replicas than its limit",
+      ],
+      annotations: { 'replica-limit/replicas': '20' },
+    },
+    expected: true,
+    ...over,
+  };
+}
+
+describe('the results of a ValidatingAdmissionPolicy', () => {
+  it('reads the binding and the param an example ran under, and the API server’s answer', () => {
+    const found = parseRuleResults(
+      answer(
+        policyResult(),
+        policyResult({
+          binding: 'deny-limits',
+          result: 'refused',
+          expected: false,
+          wrong: 'rule',
+          admission: {
+            denied:
+              "deployments.apps \"big\" is forbidden: ValidatingAdmissionPolicy 'replica-limit' with binding 'deny-limits' denied request: too many",
+            annotations: { 'replica-limit/replicas': '20' },
+          },
+        }),
+      ),
+      START,
+    );
+
+    expect(found).toMatchObject([
+      {
+        result: 'warned',
+        binding: 'warn-limits',
+        param: 'config/samples/limits.yaml:1',
+        message: 'a deployment may not run more replicas than its limit',
+        admission: { annotations: { 'replica-limit/replicas': '20' } },
+        wrong: false,
+      },
+      {
+        result: 'refused',
+        binding: 'deny-limits',
+        admission: {
+          denied:
+            "deployments.apps \"big\" is forbidden: ValidatingAdmissionPolicy 'replica-limit' with binding 'deny-limits' denied request: too many",
+          warnings: [],
+          annotations: { 'replica-limit/replicas': '20' },
+        },
+        wrong: true,
+      },
+    ]);
+  });
+
+  it.each(['warned', 'audited', 'annotated', 'excluded'])('knows the verdict %s', (verdict) => {
+    expect(parseRuleResults(answer(policyResult({ result: verdict })), START)).toMatchObject([
+      { result: verdict },
+    ]);
+  });
+
+  it('leaves the binding, the param and the answer out of a CRD’s result', () => {
+    const [only] = parseRuleResults(answer({ example: example(), result: 'allowed' }), START) ?? [];
+
+    expect(only).not.toHaveProperty('binding');
+    expect(only).not.toHaveProperty('param');
+    expect(only).not.toHaveProperty('admission');
+  });
+
+  it.each<[string, Partial<ExampleResult>, string, string]>([
+    [
+      'an example the policy warns about',
+      { result: 'warned', binding: 'warn-limits', param: 'config/samples/limits.yaml:1' },
+      '$(megaphone) a.yaml:1 · warn-limits',
+      'warned · allowed, with a warning',
+    ],
+    [
+      'an example the policy audits',
+      { result: 'audited', binding: 'audit-limits' },
+      '$(eye) a.yaml:1 · audit-limits',
+      'audited · allowed, audited',
+    ],
+    [
+      'an audit annotation with a value',
+      { result: 'annotated', binding: 'b' },
+      '$(tag) a.yaml:1 · b',
+      'annotated · an annotation has a value',
+    ],
+    [
+      'an example a match condition excludes',
+      { result: 'excluded', binding: 'b' },
+      '$(filter) a.yaml:1 · b',
+      'excluded · a match condition is false',
+    ],
+    [
+      'an example the policy refuses under a binding, though it expects to be allowed',
+      {
+        result: 'refused',
+        wrong: true,
+        binding: 'deny-limits',
+        param: 'config/samples/limits.yaml:1',
+        operation: 'update',
+      },
+      '$(warning) a.yaml:1 · deny-limits',
+      'refused · expected allowed · as an update',
+    ],
+    [
+      'an example the policy warns about, though it expects to be refused',
+      { result: 'warned', wrong: true, expect: 'refused', binding: 'b' },
+      '$(warning) a.yaml:1 · b',
+      'warned · allowed, with a warning · expected refused',
+    ],
+  ])('shows %s with its own icon and words', (_name, over, label, description) => {
+    expect(resultLine(result(over))).toMatchObject({ label, description });
+  });
+
+  it.each<[string, Partial<ExampleResult>, string | undefined]>([
+    [
+      'what the API server denied with, and the annotations it recorded',
+      {
+        result: 'refused',
+        admission: {
+          denied: 'deployments.apps "big" is forbidden: denied request: too many',
+          warnings: [],
+          annotations: { 'replica-limit/replicas': '20' },
+        },
+      },
+      'denied: too many; annotations: replica-limit/replicas=20',
+    ],
+    [
+      'the warnings the API server sent, without the words that name the policy and the binding',
+      {
+        result: 'warned',
+        admission: {
+          warnings: [
+            "Validation failed for ValidatingAdmissionPolicy 'replica-limit' with binding 'warn-limits': too many",
+            'another',
+          ],
+          annotations: {},
+        },
+      },
+      'warnings: too many; another',
+    ],
+    [
+      'what the API server denied with, as it words it when it does not say a request was denied',
+      {
+        result: 'refused',
+        admission: { denied: 'forbidden for another reason', warnings: [], annotations: {} },
+      },
+      'denied: forbidden for another reason',
+    ],
+    [
+      'the audit annotation of a failure, without the domain of its key',
+      {
+        result: 'audited',
+        admission: {
+          warnings: [],
+          annotations: {
+            'validation.policy.admission.k8s.io/validation_failure': '[{"message":"m"}]',
+          },
+        },
+      },
+      'annotations: validation_failure=[{"message":"m"}]',
+    ],
+    [
+      'the annotations of an example that passes',
+      {
+        admission: { warnings: [], annotations: { 'p/a': '1', 'p/b': '2' } },
+      },
+      'annotations: p/a=1, p/b=2',
+    ],
+    [
+      'the param first, then the answer, so the binding in the description is not cut short by it',
+      {
+        result: 'refused',
+        param: 'config/params/limits.yaml:1',
+        admission: { denied: 'x denied request: too many', warnings: [], annotations: {} },
+      },
+      'param config/params/limits.yaml:1; denied: too many',
+    ],
+    [
+      'the param of an expression for which the API server said nothing',
+      { result: 'annotated', param: 'p.yaml:2', message: '20' },
+      'param p.yaml:2; 20',
+    ],
+    [
+      'the message of an expression for which the API server said nothing',
+      { result: 'annotated', message: '20' },
+      '20',
+    ],
+    [
+      'why a policy did not run',
+      { result: 'not run', note: 'excluded by matchConditions' },
+      'excluded by matchConditions',
+    ],
+    [
+      'a long annotation cut short',
+      { admission: { warnings: [], annotations: { k: 'x'.repeat(100) } } },
+      `annotations: k=${'x'.repeat(59)}…`,
+    ],
+  ])('has %s as its detail', (_name, over, detail) => {
+    expect(resultLine(result(over)).detail).toBe(detail);
+  });
+
+  it('lists the results of one example under two bindings as two lines', () => {
+    const lines = resultLines([
+      result({ result: 'refused', wrong: true, binding: 'deny-limits' }),
+      result({ result: 'warned', binding: 'warn-limits' }),
+    ]);
+
+    expect(lines.filter((line) => !line.separator).map((line) => line.label)).toEqual([
+      '$(warning) a.yaml:1 · deny-limits',
+      '$(megaphone) a.yaml:1 · warn-limits',
+    ]);
+  });
+});

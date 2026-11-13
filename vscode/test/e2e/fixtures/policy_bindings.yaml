@@ -1,0 +1,23 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: deny-limits
+spec:
+  policyName: replica-limit
+  validationActions: [Deny]
+  paramRef:
+    name: limits
+    namespace: default
+    parameterNotFoundAction: Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: warn-limits
+spec:
+  policyName: replica-limit
+  validationActions: [Warn, Audit]
+  paramRef:
+    name: limits
+    namespace: default
+    parameterNotFoundAction: Deny

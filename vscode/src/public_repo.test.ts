@@ -105,8 +105,9 @@ const STAND_IN_END = [
 // marked latest. A tag has one release here, so a draft left behind must be deleted before the
 // next is made, where GitHub would keep both and publish either. Publishing creates the tag at the
 // target when it is missing, as GitHub does. A workflow_dispatch runs the script $SCRIPTS/<file>
-// of the workflow at once, from the branch and with the tag as TAG, and run watch answers how that
-// run ended.
+// of the workflow at once, from the branch and with the tag as TAG; run view answers 404 for the
+// first $UNREADABLE reads of a run, views and watches counted together, as GitHub does for a run
+// it has not yet made readable, and run watch answers how that run ended.
 const GH = [
   ...STAND_IN,
   'command="$1 $2"',
@@ -284,8 +285,14 @@ const GH = [
   '    echo "$run"',
   '  fi',
   '  ;;',
-  "'run watch')",
-  '  if $exit_status; then',
+  "'run view' | 'run watch')",
+  '  reads=$RUNS/${names[0]}/reads',
+  '  echo x >>"$reads"',
+  '  if [ ! -d "$RUNS/${names[0]}" ] || [ "$(wc -l <"$reads")" -le "${UNREADABLE:-0}" ]; then',
+  "    echo 'failed to get run: HTTP 404: Not Found' >&2",
+  '    exit 1',
+  '  fi',
+  '  if [ "$command" = \'run watch\' ] && $exit_status; then',
   '    exit "$(cat "$RUNS/${names[0]}/status")"',
   '  fi',
   '  ;;',
@@ -570,7 +577,13 @@ function publish(files: Record<string, string>, tag = TAG): string {
   sandbox = root;
   mkdirSync(join(root, 'releases', tag), { recursive: true });
   writeFiles(join(root, 'releases', tag), files);
-  writeFiles(join(root, 'bin'), { gh: GH, cosign: COSIGN, git: GIT, make: MAKE });
+  writeFiles(join(root, 'bin'), {
+    gh: GH,
+    cosign: COSIGN,
+    git: GIT,
+    make: MAKE,
+    sleep: [...STAND_IN, ...STAND_IN_END].join('\n'),
+  });
   for (const name of readdirSync(join(root, 'bin'))) {
     chmodSync(join(root, 'bin', name), 0o755);
   }
@@ -855,6 +868,8 @@ interface Mishap {
   attestFails?: boolean;
   verifyStatus?: number;
   runDetails?: boolean;
+  // How many reads of the run of sign-release.yml answer 404 before it can be read.
+  unreadable?: number;
 }
 
 // A run of the release workflow, after an attempt.
@@ -986,6 +1001,7 @@ function execute(
       SCRIPTS: join(run.root, 'scripts'),
       VERIFY_STATUS: String(mishap.verifyStatus ?? 0),
       RUN_DETAILS: String(mishap.runDetails ?? true),
+      UNREADABLE: String(mishap.unreadable ?? 0),
       ...(mishap.fail === undefined ? {} : { FAIL: mishap.fail }),
       ...(mishap.failLate === undefined ? {} : { FAIL_LATE: mishap.failLate }),
     },
@@ -1977,6 +1993,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       `git push --atomic origin ${LATER}:refs/tags/engine/v0.28.0 ${LATER}:refs/tags/core-v0.28.0`,
       `gh release edit core-v0.28.0 --repo ${REPOSITORY} --draft=false --latest=false`,
       `gh api repos/${REPOSITORY}/actions/workflows/sign-release.yml/dispatches --method POST -f ref=main -f inputs[tag]=core-v0.28.0 -F return_run_details=true --jq .workflow_run_id // empty`,
+      `gh run view 1 --repo ${REPOSITORY} --json status`,
       `gh run watch 1 --repo ${REPOSITORY} --exit-status --interval 10`,
     ]);
   });
@@ -2119,6 +2136,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
         `cosign verify-blob --bundle assets/${name}.sigstore.json --certificate-identity ${SIGNER}@${MAIN_REF} --certificate-oidc-issuer ${ISSUER} assets/${name}`,
       ]),
       `gh release upload --repo ${REPOSITORY} --clobber -- core-v0.28.0 ${names.map((name) => `assets/${name}.sigstore.json`).join(' ')}`,
+      `gh run view 1 --repo ${REPOSITORY} --json status`,
       `gh run watch 1 --repo ${REPOSITORY} --exit-status --interval 10`,
     ]);
     expect(verifies(`${SIGNER}@${MAIN_REF}`)).toBe(true);
@@ -2300,6 +2318,50 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       'GitHub started sign-release.yml for core-v0.28.0 and did not say which run it is. Find the run under Actions; if it failed or is not there, run sign-release.yml by hand from main with the tag core-v0.28.0.\n',
     );
     expect(run.calls.filter((call) => call.startsWith('gh run watch'))).toEqual([]);
+  });
+
+  it.each([1, 2, 10, 23])(
+    'waits for the run of sign-release.yml to be readable, as it was not at once in run 43465064181 of core v0.30.0 (#18): %i unreadable reads, 5 seconds apart, then it watches the run and passes',
+    (unreadable) => {
+      const run = release(repository(), ENGINE, { unreadable });
+      const calls = run.calls.filter((call) => /^(sleep|gh run) /.test(call));
+
+      expect(run.stderr).toBe('');
+      expect(run.failed).toBeUndefined();
+      expect(run.passed).toEqual(['check', 'build', 'publish', 'sign']);
+      expect(calls.filter((call) => call.startsWith('gh run view'))).toHaveLength(unreadable + 1);
+      expect(calls.filter((call) => call === 'sleep 5')).toHaveLength(unreadable);
+      expect(calls.at(-1)).toBe(`gh run watch 1 --repo ${REPOSITORY} --exit-status --interval 10`);
+      expect(calls.filter((call) => call.startsWith('gh run watch'))).toHaveLength(1);
+    },
+  );
+
+  it('fails the job that has the release signed, with what to do, when the run of sign-release.yml stays unreadable for 24 reads, about 2 minutes (#18): it never watches the run, and the message has what GitHub answered', () => {
+    const run = release(repository(), ENGINE, { unreadable: 1000 });
+    const calls = run.calls.filter((call) => /^(sleep|gh run) /.test(call));
+
+    expect(run.failed).toBe('sign');
+    expect(run.stderr).toBe(
+      'GitHub started sign-release.yml for core-v0.28.0 as run 1, and the run was still not readable after 2 minutes; GitHub answered: failed to get run: HTTP 404: Not Found. Find the run under Actions; if it failed or is not there, run sign-release.yml by hand from main with the tag core-v0.28.0.\n',
+    );
+    expect(calls.filter((call) => call.startsWith('gh run view'))).toHaveLength(24);
+    expect(calls.filter((call) => call === 'sleep 5')).toHaveLength(23);
+    expect(calls.filter((call) => call.startsWith('gh run watch'))).toEqual([]);
+  });
+
+  it('does not fail the job that has the release signed on a 404 of the run, as run 43462904507 of core v0.30.0 did (#18): the watch of a run that is not readable yet answers 404, and the job waits for the run before it watches', () => {
+    const run = release(repository(), ENGINE, { unreadable: 3 });
+
+    expect(run.stderr).toBe('');
+    expect(run.failed).toBeUndefined();
+    expect(run.passed).toEqual(['check', 'build', 'publish', 'sign']);
+  });
+
+  it('still fails the job that has the release signed when the run of sign-release.yml, once readable, fails', () => {
+    const run = release(repository(), ENGINE, { unreadable: 2, verifyStatus: 1 });
+
+    expect(run.failed).toBe('sign');
+    expect(run.calls).toContain(`gh run watch 1 --repo ${REPOSITORY} --exit-status --interval 10`);
   });
 
   it('says beside each permission a job of the release workflow writes with why it needs it', () => {

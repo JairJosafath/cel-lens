@@ -47,8 +47,25 @@ export function resultsTitle(line: number): string {
   return `Example results of the rule on line ${String(line)}`;
 }
 
-/** What a rule did to an example, as the engine says it. */
-export type Verdict = 'allowed' | 'refused' | 'not run' | 'error';
+/**
+ * What a rule did to an example, as the engine says it. A CRD's rule allows or refuses; a
+ * ValidatingAdmissionPolicy's expression also `warned` (a validation failed under a binding with
+ * `Warn` and no `Deny`: the example is allowed, with a warning), `audited` (under `Audit` alone:
+ * allowed, with an audit annotation), `annotated` (an audit annotation has a value) and `excluded`
+ * (a match condition is false, so the policy does not run on the example).
+ */
+export type Verdict =
+  'allowed' | 'refused' | 'warned' | 'audited' | 'annotated' | 'excluded' | 'not run' | 'error';
+
+/** The API server's answer to an example under a binding, as a ValidatingAdmissionPolicy's result holds it. */
+export interface Admission {
+  /** The error it refuses the example with, when it does. */
+  readonly denied?: string;
+  /** The warnings it sends back. */
+  readonly warnings: readonly string[];
+  /** The audit annotations it records, by key. */
+  readonly annotations: Readonly<Record<string, string>>;
+}
 
 /** One example's verdict from one rule: the example, what it expects and the API server's message. */
 export interface ExampleResult {
@@ -66,11 +83,28 @@ export interface ExampleResult {
   readonly refusals: readonly string[];
   /** Why the rule did not run, or what stopped it. */
   readonly note?: string;
+  /** A policy's failed validation's message, or an audit annotation's value. */
+  readonly message?: string;
+  /** The binding a policy's expression ran under, such as `limits`; none for a CRD's rule. */
+  readonly binding?: string;
+  /** The param the policy ran with, as its file and line, such as `config/samples/limits.yaml:1`. */
+  readonly param?: string;
+  /** What the API server answered a policy's example under the binding. */
+  readonly admission?: Admission;
   /** Whether the verdict is not what the example expects. */
   readonly wrong: boolean;
 }
 
-const VERDICTS: readonly string[] = ['allowed', 'refused', 'not run', 'error'];
+const VERDICTS: readonly string[] = [
+  'allowed',
+  'refused',
+  'warned',
+  'audited',
+  'annotated',
+  'excluded',
+  'not run',
+  'error',
+];
 
 function isVerdict(value: unknown): value is Verdict {
   return typeof value === 'string' && VERDICTS.includes(value);
@@ -83,6 +117,40 @@ function text(value: unknown): string | undefined {
 /** The last two parts of a URI, for an example whose file the engine did not name. */
 function fileOf(uri: string): string {
   return uri.split('/').slice(-2).join('/');
+}
+
+/** The param of a policy's result as its file and line, such as `config/samples/limits.yaml:1`. */
+function paramOf(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const uri = text(value['uri']);
+  const file = text(value['file']) ?? (uri === undefined ? undefined : fileOf(uri));
+  const line = value['line'];
+  return file === undefined
+    ? undefined
+    : `${file}:${String(typeof line === 'number' && Number.isInteger(line) && line >= 1 ? line : 1)}`;
+}
+
+/** The API server's answer of a policy's result: what it denied with, its warnings and its audit annotations. */
+function admissionOf(value: unknown): Admission | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const denied = text(value['denied']);
+  const warnings = Array.isArray(value['warnings'])
+    ? value['warnings'].flatMap((warning) => (text(warning) === undefined ? [] : [String(warning)]))
+    : [];
+  const annotations = isRecord(value['annotations'])
+    ? Object.fromEntries(
+        Object.entries(value['annotations']).flatMap(([key, each]) =>
+          typeof each === 'string' ? [[key, each]] : [],
+        ),
+      )
+    : {};
+  return denied === undefined && warnings.length === 0 && Object.keys(annotations).length === 0
+    ? undefined
+    : { ...(denied !== undefined && { denied }), warnings, annotations };
 }
 
 function parseResult(value: unknown): ExampleResult | undefined {
@@ -104,6 +172,10 @@ function parseResult(value: unknown): ExampleResult | undefined {
     : [];
   const note = text(value['error']) ?? text(value['reason']);
   const expectMessage = text(example['message']);
+  const message = text(value['message']);
+  const binding = text(value['binding']);
+  const param = paramOf(value['param']);
+  const admission = admissionOf(value['admission']);
   return {
     uri,
     file: text(example['file']) ?? fileOf(uri),
@@ -114,6 +186,10 @@ function parseResult(value: unknown): ExampleResult | undefined {
     result: value['result'],
     refusals,
     ...(note !== undefined && { note }),
+    ...(message !== undefined && { message }),
+    ...(binding !== undefined && { binding }),
+    ...(param !== undefined && { param }),
+    ...(admission !== undefined && { admission }),
     wrong: value['expected'] === false || text(value['wrong']) !== undefined,
   };
 }
@@ -205,6 +281,14 @@ function icon(result: ExampleResult): string {
       return '$(error)';
     case 'not run':
       return '$(circle-slash)';
+    case 'warned':
+      return '$(megaphone)';
+    case 'audited':
+      return '$(eye)';
+    case 'annotated':
+      return '$(tag)';
+    case 'excluded':
+      return '$(filter)';
     case 'allowed':
     case 'refused':
       return '$(pass)';
@@ -218,25 +302,93 @@ function expectation(result: ExampleResult): string {
     : `expected ${result.expect}`;
 }
 
-/** The verdict in words: `refused`, `refused · expected allowed`, `allowed · as an update`. */
+/** What the verdicts of a policy that do not refuse mean, after the verdict's own word. */
+const VERDICT_MEANING: Readonly<Partial<Record<Verdict, string>>> = {
+  warned: 'allowed, with a warning',
+  audited: 'allowed, audited',
+  annotated: 'an annotation has a value',
+  excluded: 'a match condition is false',
+};
+
+/**
+ * The verdict in words: `refused`, `refused · expected allowed`, `allowed · as an update`, and for
+ * a policy `warned · allowed, with a warning`.
+ */
 function verdictText(result: ExampleResult): string {
+  const meaning = VERDICT_MEANING[result.result];
   return [
     result.result,
+    ...(meaning === undefined ? [] : [meaning]),
     ...(result.wrong ? [expectation(result)] : []),
     ...(result.operation === 'update' ? ['as an update'] : []),
   ].join(' · ');
 }
 
-/** The API server's message: its refusals, or why the rule did not run or what stopped it. */
-function messageText(result: ExampleResult): string {
-  return [...result.refusals, ...(result.note === undefined ? [] : [result.note])].join('; ');
+/** A value shortened to `length` characters, with an ellipsis, for a line of the picker. */
+function shortened(value: string, length = ANSWER_LENGTH): string {
+  return value.length <= length ? value : `${value.slice(0, length - 1)}…`;
 }
 
-/** The line of one example: its file and line, its verdict, and the API server's message. */
+/** The longest an annotation or a warning of the API server is shown in a line. */
+const ANSWER_LENGTH = 120;
+
+/** What the API server puts before a failed validation's message when it denies a request. */
+const DENIED_PREFIX = /^.*? denied request: /;
+
+/** What it puts before the message of a warning. */
+const WARNING_PREFIX =
+  /^Validation failed for ValidatingAdmissionPolicy '[^']*' with binding '[^']*': /;
+
+/** The domain of the annotation key it records an audited failure under, which says nothing the rest does not. */
+const AUDIT_KEY_DOMAIN = 'validation.policy.admission.k8s.io/';
+
+/**
+ * What a policy's example ran with and the API server's answer, in words: its param, what it
+ * denied with and its warnings
+ * (without the words that name the policy and the binding, which the line already does) and its
+ * audit annotations (`annotations: replica-limit/replicas=20`).
+ */
+function answerText(result: ExampleResult): string[] {
+  const { admission } = result;
+  const param = result.param === undefined ? [] : [`param ${result.param}`];
+  if (admission === undefined) {
+    return [...param, ...(result.message === undefined ? [] : [result.message])];
+  }
+  const annotations = Object.entries(admission.annotations).map(
+    ([key, value]) => `${key.replace(AUDIT_KEY_DOMAIN, '')}=${shortened(value, 60)}`,
+  );
+  const warnings = admission.warnings.map((warning) => warning.replace(WARNING_PREFIX, ''));
+  return [
+    ...param,
+    ...(admission.denied === undefined
+      ? []
+      : [`denied: ${shortened(admission.denied.replace(DENIED_PREFIX, ''))}`]),
+    ...(warnings.length === 0 ? [] : [`warnings: ${shortened(warnings.join('; '))}`]),
+    ...(admission.denied === undefined && warnings.length === 0 && result.message !== undefined
+      ? [result.message]
+      : []),
+    ...(annotations.length === 0 ? [] : [`annotations: ${annotations.join(', ')}`]),
+  ];
+}
+
+/** The API server's message: its refusals, or why the rule did not run or what stopped it. */
+function messageText(result: ExampleResult): string {
+  return [
+    ...result.refusals,
+    ...answerText(result),
+    ...(result.note === undefined ? [] : [result.note]),
+  ].join('; ');
+}
+
+/**
+ * The line of one example: its file and line, and for a policy the binding it ran under (`big.yaml:1
+ * · deny-limits`, in the label, where a long description would cut it), its verdict, and the API
+ * server's message.
+ */
 export function resultLine(result: ExampleResult): PickEntry<ResultPick> {
   const message = messageText(result);
   return {
-    label: `${icon(result)} ${result.file}:${String(result.line)}`,
+    label: `${icon(result)} ${result.file}:${String(result.line)}${result.binding === undefined ? '' : ` · ${result.binding}`}`,
     description: verdictText(result),
     ...(message !== '' && { detail: message }),
     value: { action: 'open', uri: result.uri, file: result.file, line: result.line },

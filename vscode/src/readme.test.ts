@@ -23,8 +23,12 @@ const PICTURES = [
   'quick-fix.png',
   'colors.png',
 ];
-/** The two pictures of the section Example results, which follow those above in the README. */
-const EXAMPLE_RESULTS_PICTURES = ['example-results-line.png', 'example-results-picker.png'];
+/** The pictures of the section Example results, which follow those above in the README. */
+const EXAMPLE_RESULTS_PICTURES = [
+  'example-results-line.png',
+  'example-results-picker.png',
+  'example-results-policy.png',
+];
 
 describe('readmeDefaultKubernetesVersion', () => {
   it.each([
@@ -355,7 +359,7 @@ describe('README.md as the store page', () => {
     expect(colorRow).not.toContain('CONTRIBUTING.md');
   });
 
-  it('says in the Example results section where the examples come from, what one expects, updates, the line, the hover, the warnings and the toggle, in that order', () => {
+  it('says in the Example results section where the examples come from, what one expects, updates, the line, the hover, the warnings and the toggle, in that order, then the admission policies', () => {
     const section = readmeSection(README, 'Example results') ?? '';
     const parts = section.split(/^(?=### )/m).slice(1);
 
@@ -366,6 +370,7 @@ describe('README.md as the store page', () => {
       '### The line above the rule',
       '### The hover and the warnings',
       '### Turn it off',
+      '### Admission policies',
     ]);
   });
 
@@ -393,7 +398,7 @@ describe('README.md as the store page', () => {
     expect(readmeSection(README, 'Example results')).toContain(text);
   });
 
-  it('shows example results in two pictures, each with alt text and one line, and names none to take', () => {
+  it('shows example results in three pictures, each with alt text and one line, and names none to take', () => {
     const section = readmeSection(README, 'Example results') ?? '';
     expect(readmePicturePlaceholders(section)).toEqual([]);
     const lines = section.split('\n');
@@ -406,6 +411,13 @@ describe('README.md as the store page', () => {
     }
   });
 
+  it('says what the picture of a policy shows: two bindings, their params and the API server’s answers', () => {
+    const section = readmeSection(README, 'Example results') ?? '';
+    expect(section).toContain(
+      "`big.yaml` is refused under the binding `deny-limits` and warned about under `warn-limits`, each with its param and the API server's answer, and `small.yaml` passes under both",
+    );
+  });
+
   it('says what the two pictures of example results show: the part and the picker', () => {
     const section = readmeSection(README, 'Example results') ?? '';
     expect(section).toContain(
@@ -416,14 +428,49 @@ describe('README.md as the store page', () => {
     );
   });
 
-  it('keeps dry runs under Not supported yet only for admission policies', () => {
-    const dryRuns =
+  it('lists under Not supported yet only what example results do not cover: MutatingAdmissionPolicy and Kyverno', () => {
+    const line =
       (readmeSection(README, 'Not supported yet') ?? '')
         .split('\n')
-        .find((line) => line.includes('Dry runs')) ?? '';
+        .find((each) => each.includes('Example results for')) ?? '';
 
-    expect(dryRuns).toContain('admission policies');
-    expect(dryRuns).toContain('only the rules of a CRD run on examples so far');
+    expect(line).toContain('MutatingAdmissionPolicy');
+    expect(line).toContain("Kyverno's policies");
+    expect(line).toContain(
+      'only the rules of a CRD and of a ValidatingAdmissionPolicy run on examples so far',
+    );
+    expect(readmeSection(README, 'Not supported yet')).not.toContain('Dry runs');
+  });
+
+  it.each([
+    '`matchConstraints`',
+    '`kubernetes.io/metadata.name`',
+    'ValidatingAdmissionPolicyBinding',
+    '`parameterNotFoundAction: Deny` refuses the example and `Allow` runs nothing (`not run: no params`)',
+    'a failed validation refuses the example under `Deny`',
+    "under `Warn` without `Deny` it allows it, with the API server's warning (`warns 1 example`)",
+    'under `Audit` alone it allows it and records the `validation_failure` audit annotation (`audits 1 example`)',
+    'A match condition that is false excludes the example',
+    '`excludes 1 example`',
+    '`annotates 1 example`',
+    '`under binding limits`, `under 2 bindings` or `under no binding`',
+    '`not run: no binding gives params`',
+    '`not run: reads authorizer`',
+    '`warned · allowed, with a warning`',
+    '`big.yaml:1 · deny-limits`',
+    '`param config/params/limits.yaml:1`',
+    'what it denied with, its warnings and its audit annotations',
+    "a Deployment's `spec.strategy`",
+  ])('says in the section on admission policies: %s', (text) => {
+    const section = readmeSection(README, 'Example results') ?? '';
+    expect(section.split('### Admission policies')[1] ?? '').toContain(
+      text.replace('a failed validation', 'A failed validation'),
+    );
+  });
+
+  it('no longer says that the rules of a ValidatingAdmissionPolicy have no example results', () => {
+    expect(README).not.toContain('have no example results yet');
+    expect(README).not.toContain('only the rules of a CRD run on examples so far');
   });
 
   it('lists Toggle Example Results in the Commands table and the setting with its toggle and status bar entry', () => {
@@ -438,7 +485,7 @@ describe('README.md as the store page', () => {
 
   it('lists what is not supported yet', () => {
     const section = readmeSection(README, 'Not supported yet') ?? '';
-    expect(section).toMatch(/Dry runs/);
+    expect(section).toMatch(/Example results for a MutatingAdmissionPolicy/);
     expect(section).toMatch(/Helm/);
     expect(section).toMatch(/[Kk]ubebuilder/);
   });
