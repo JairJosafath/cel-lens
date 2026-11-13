@@ -20,6 +20,14 @@
 //		API server of the chosen Kubernetes version would. Experimental
 //		features are off unless --experimental names them.
 //
+//	examples [--format text|json] [--kube-version <1.x>] [--fail-on wrong|error|none] [--verbose] [paths...]
+//		Run the rules of the CustomResourceDefinitions and admission
+//		policies in files and folders (the current folder when none is
+//		given) on the examples they find, as the language server's example
+//		results do, print what each rule does to each, and exit 1 when a
+//		verdict is not what its example expects, so that a repository can
+//		run its examples in CI.
+//
 // The flags are:
 //
 //	--version
@@ -43,6 +51,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/examplereport"
 	"github.com/JairJosafath/cel-lens/engine/internal/lsp"
 	"github.com/JairJosafath/cel-lens/engine/internal/procwatch"
 	"github.com/JairJosafath/cel-lens/engine/internal/scan"
@@ -107,6 +116,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitUsage
 	case flags.Arg(0) == "check" && !*showVersion:
 		return runCheck(ctx, flags.Args()[1:], stdout, stderr)
+	case flags.Arg(0) == "examples" && !*showVersion:
+		return runExamples(ctx, flags.Args()[1:], stdout, stderr)
 	case flags.Arg(0) == "lsp" && !*showVersion:
 		return runLSP(ctx, flags.Args()[1:], stdin, stdout, stderr, lspEnv{alive: procwatch.Alive, interval: time.Second})
 	case flags.NArg() > 0:
@@ -187,6 +198,113 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	return exitOK
 }
 
+const examplesHelp = `Usage: %s examples [--format text|json] [--kube-version <1.x>] [--fail-on wrong|error|none] [--verbose] [paths...]
+
+Run every rule of the CustomResourceDefinitions and ValidatingAdmissionPolicies
+in the files and folders on the examples they find, with the API server's own
+validation, and print what each rule does to each example. An example is any
+YAML document of a kind a rule is for; it expects to be allowed unless its path
+(a folder or file name with invalid, bad, refused, rejected or denied in it) or
+a # cel-lens: refused or # cel-lens: allowed comment says otherwise. The
+results are those of the language server's cel-lens.exampleResults, over the
+workspace the paths make up: a folder is walked as the server walks its
+workspace (hidden folders and node_modules are left out, files over 1 MiB too,
+and the files after the first 20000 are not read; the summary says how many
+files were left out), and a file alone is the workspace. With no paths the current folder is used.
+By default the results match Kubernetes %s; --kube-version picks the version
+your cluster runs (supported: %s).
+
+Text lists the wrong verdicts, and the rules that ended in an error, and ends
+with one summary line; --verbose lists every result. --fail-on picks what
+makes the run fail: wrong (the default) a verdict that is not what its example
+expects (a rule that stops with an error on an example that expects to be
+allowed is one), or a problem: the schema refuses an example that expects to be
+allowed, a bad # cel-lens: comment, an example that expects to be refused that
+nothing refuses, or a CustomResourceDefinition, policy or binding the API server
+cannot read (a plain n where a string is wanted, which kubectl reads as a
+boolean); error also a rule that stopped with an error on an example that expects
+to be refused; none never. A rule that did not run never fails. Exit 0: nothing failed;
+1: a verdict failed; 2: usage or read error; 130: interrupted.
+
+Flags may come before, between or after the paths.
+
+Example:
+  %[1]s examples ./config
+
+Flags:
+`
+
+// runExamples runs the examples command on its arguments, after the word
+// examples.
+func runExamples(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet(name+" examples", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	format := flags.String("format", string(examplereport.Text), "output format: text or json")
+	kube := flags.String("kube-version", kubeversion.Default().String(), "Kubernetes version to match: "+kubeversion.Range())
+	flags.StringVar(kube, "kubernetes-version", kubeversion.Default().String(), "the same as --kube-version")
+	failOn := flags.String("fail-on", string(examplereport.FailWrong), "what fails the run: wrong, error or none")
+	verbose := flags.Bool("verbose", false, "list every result, not only the wrong ones and the errors")
+	paths, err := parseInterspersed(flags, args)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		fmt.Fprintf(stdout, examplesHelp, name, kubeversion.Default(), kubeversion.Range())
+		flags.SetOutput(stdout)
+		flags.PrintDefaults()
+		return exitOK
+	case err != nil:
+		fmt.Fprintf(stderr, "%s examples: %v\nRun '%s examples --help' for usage.\n", name, err, name)
+		return exitUsage
+	}
+	f, err := examplereport.ParseFormat(*format)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s examples: %v\nRun '%s examples --help' for usage.\n", name, err, name)
+		return exitUsage
+	}
+	on, err := examplereport.ParseFailOn(*failOn)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s examples: --fail-on: %v\nRun '%s examples --help' for usage.\n", name, err, name)
+		return exitUsage
+	}
+	kv, err := kubeversion.Parse(*kube)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s examples: --kube-version: %v\nRun '%s examples --help' for usage.\n", name, err, name)
+		return exitUsage
+	}
+	if len(paths) == 0 {
+		paths = []string{"."}
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		dir = "" // the paths are shown as they are
+	}
+	report, err := lsp.RunExamples(ctx, paths, kv)
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintf(stderr, "%s examples: interrupted\n", name)
+		return exitInterrupted
+	}
+	if report != nil {
+		for _, note := range report.Notes {
+			fmt.Fprintf(stderr, "%s examples: warning: %s\n", name, note)
+		}
+		if len(report.Rules) == 0 && len(report.Problems) == 0 {
+			fmt.Fprintf(stderr, "%s examples: warning: no CustomResourceDefinition or ValidatingAdmissionPolicy with rules found in %s\n", name, strings.Join(paths, ", "))
+		}
+		if werr := examplereport.Write(stdout, f, report, examplereport.Options{Verbose: *verbose, Dir: dir}); werr != nil {
+			err = errors.Join(err, werr)
+		}
+	}
+	switch {
+	case err != nil:
+		for _, line := range errorLines(err) {
+			fmt.Fprintf(stderr, "%s examples: %s\n", name, line)
+		}
+		return exitUsage
+	case examplereport.Failed(report, on):
+		return exitFail
+	}
+	return exitOK
+}
+
 // knownFeatures returns the names of the experimental features, separated by commas.
 func knownFeatures() string {
 	var names []string
@@ -236,7 +354,7 @@ func errorLines(err error) []string {
 
 // usage writes the help text to w.
 func usage(w io.Writer, flags *flag.FlagSet) {
-	fmt.Fprintf(w, "Usage: %s [flags] [command]\n\nCommands:\n  lsp\tserve CEL language support as a language server on stdin and stdout\n  check\tcheck the CEL in YAML files and folders\n\nFlags:\n", name)
+	fmt.Fprintf(w, "Usage: %s [flags] [command]\n\nCommands:\n  lsp\tserve CEL language support as a language server on stdin and stdout\n  check\tcheck the CEL in YAML files and folders\n  examples\trun the rules on their examples and fail on a wrong verdict\n\nFlags:\n", name)
 	flags.SetOutput(w)
 	flags.PrintDefaults()
 }

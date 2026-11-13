@@ -21,3 +21,4 @@ core-v0.26.0
 core-v0.27.0
 core-v0.28.0
 core-v0.29.0
+core-v0.30.0

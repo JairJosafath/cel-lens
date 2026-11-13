@@ -175,6 +175,9 @@ type PolicyOptions struct {
 	// what Check found, such as a rule of its CustomResourceDefinition that
 	// refuses it.
 	Before func(*Object) string
+	// MaxExamples is the most examples Run runs the policy on; 0 means
+	// maxPolicyExamples.
+	MaxExamples int
 }
 
 // maxPolicyExamples is the most examples of a policy Run runs it on: the
@@ -256,8 +259,9 @@ func (c *PolicyCache) Run(ctx context.Context, p *Policy, rules []*PolicyRule, i
 	var out PolicyRun
 	stored := map[*Object]bool{}
 	matched := 0
+	most := cmp.Or(opts.MaxExamples, maxPolicyExamples)
 	for _, o := range in.Objects {
-		if matched == maxPolicyExamples {
+		if matched == most {
 			break
 		}
 		req, ok := r.request(o, stored)

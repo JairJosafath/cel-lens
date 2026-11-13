@@ -84,6 +84,48 @@ func TestRun(t *testing.T) {
 			wantStderr: "unknown format",
 		},
 		{
+			name:       "examples help",
+			args:       []string{"examples", "--help"},
+			wantCode:   exitOK,
+			wantStdout: "-fail-on string",
+		},
+		{
+			name:       "examples help names both Kubernetes version flags",
+			args:       []string{"examples", "-h"},
+			wantCode:   exitOK,
+			wantStdout: "-kubernetes-version string",
+		},
+		{
+			name:       "examples with a bad format",
+			args:       []string{"examples", "--format", "xml", "x"},
+			wantCode:   exitUsage,
+			wantStderr: "unknown format",
+		},
+		{
+			name:       "examples with a bad fail-on",
+			args:       []string{"examples", "--fail-on", "warning", "x"},
+			wantCode:   exitUsage,
+			wantStderr: "--fail-on:",
+		},
+		{
+			name:       "examples with a bad Kubernetes version",
+			args:       []string{"examples", "--kubernetes-version=1.20", "x"},
+			wantCode:   exitUsage,
+			wantStderr: "1.33, 1.34, 1.35, 1.36, 1.37",
+		},
+		{
+			name:       "examples with an unknown flag",
+			args:       []string{"examples", "x", "--nope"},
+			wantCode:   exitUsage,
+			wantStderr: "flag provided but not defined: -nope",
+		},
+		{
+			name:       "examples with a missing path",
+			args:       []string{"examples", "/nonexistent/x.yaml"},
+			wantCode:   exitUsage,
+			wantStderr: "no such file",
+		},
+		{
 			name:       "check with a missing path",
 			args:       []string{"check", "/nonexistent/x.yaml"},
 			wantCode:   exitUsage,
@@ -416,6 +458,19 @@ func TestRunCheckInterrupted(t *testing.T) {
 		t.Errorf("run(cancelled) = %d, want %d", got, exitInterrupted)
 	}
 	checkOutput(t, "stderr", stderr.String(), name+" check: interrupted\n")
+}
+
+func TestRunExamplesInterrupted(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var stdout, stderr bytes.Buffer
+	got := run(ctx, []string{"examples", t.TempDir()}, strings.NewReader(""), &stdout, &stderr)
+	if got != exitInterrupted {
+		t.Errorf("run(examples, cancelled) = %d, want %d", got, exitInterrupted)
+	}
+	checkOutput(t, "stdout", stdout.String(), "")
+	checkOutput(t, "stderr", stderr.String(), name+" examples: interrupted\n")
 }
 
 func TestRunCheckBadCharacterOnce(t *testing.T) {

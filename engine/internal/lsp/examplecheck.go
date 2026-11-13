@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"io/fs"
 	"maps"
 	"path/filepath"
@@ -94,6 +95,15 @@ type crdsRead struct {
 	text []byte
 	kube kubeversion.Version
 	crds []*examples.CRD
+	// problems are those of the CRDs of text that cannot be read.
+	problems []check.Diagnostic
+}
+
+// unreadableFile is a file with CRDs, admission policies or bindings that the
+// API server cannot read, with the problems of each, found in text.
+type unreadableFile struct {
+	text  []byte
+	diags []check.Diagnostic
 }
 
 // fileRead is what a check read of a file on disk of a size and time:
@@ -138,6 +148,35 @@ type exampleCheck struct {
 	// admission is what the walk of examples found for the admission
 	// policies.
 	admission admissionFound
+	// unread, when not nil, is told of each folder or file of the walk that
+	// cannot be read, big of each file over maxWorkspaceFileSize, which is
+	// not read, and over of each YAML file past limit, which the walk goes on
+	// to count and does not read; the editor sets none.
+	unread func(path string, err error)
+	big    func(path string)
+	over   func()
+	// unreadable are the files, by key, with a CRD, a policy or a binding that
+	// cannot be read, which the check does not run examples on; examples
+	// makes it.
+	unreadable map[string]unreadableFile
+	// maxExamples is the most examples of a CRD, and of a policy, the check
+	// takes; 0 means the default, maxExamples.
+	maxExamples int
+}
+
+// most is the most examples of a CRD the check takes.
+func (c *exampleCheck) most() int {
+	if c.maxExamples > 0 {
+		return c.maxExamples
+	}
+	return maxExamples
+}
+
+// noteUnread tells c.unread, if there is one, that path cannot be read.
+func (c *exampleCheck) noteUnread(path string, err error) {
+	if c.unread != nil {
+		c.unread(path, err)
+	}
 }
 
 // admissionFound are the admission policies a check found, the bindings,
@@ -416,6 +455,17 @@ func (c *exampleCheck) run(ctx context.Context) (map[string]exampleFile, error) 
 			out[key] = exampleFile{text: c.admission.texts[key], diags: warnings}
 		}
 	}
+	for key, u := range c.unreadable {
+		if _, open := c.open[key]; open {
+			continue // the check of the document says so
+		}
+		f := out[key]
+		if f.text == nil {
+			f.text = u.text
+		}
+		f.diags = append(f.diags, u.diags...)
+		out[key] = f
+	}
 	for key, cf := range rules.crds {
 		f, ok := out[key]
 		if !ok {
@@ -445,6 +495,7 @@ func (c *exampleCheck) run(ctx context.Context) (map[string]exampleFile, error) 
 func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []byte, objs []*examples.Object)) ([]*examples.CRD, error) {
 	files := map[string]fileRead{}
 	checked := map[string]checkedFile{}
+	c.unreadable = map[string]unreadableFile{}
 	var listed []walked
 	crdFiles := slices.Clone(c.crdFiles)
 	policyFiles := slices.Clone(c.policyFiles)
@@ -453,7 +504,7 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 			policyFiles = append(policyFiles, key)
 		}
 	}
-	walkYAML(ctx, c.dirFS, c.folders, c.limit, yamlWalk{file: func(dir, rel string, d fs.DirEntry) bool {
+	walkYAML(ctx, c.dirFS, c.folders, c.limit, yamlWalk{unreadable: c.noteUnread, over: c.over, file: func(dir, rel string, d fs.DirEntry) bool {
 		c.wait(ctx)
 		f := walked{dir: dir, rel: rel, d: d, key: crdKey(pathURI(filepath.Join(dir, filepath.FromSlash(rel))))}
 		listed = append(listed, f)
@@ -516,7 +567,7 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 		if policies {
 			c.admission.texts[f.key] = text
 		}
-		open := slices.DeleteFunc(slices.Clone(crds), func(crd *examples.CRD) bool { return taken[crd] >= maxExamples })
+		open := slices.DeleteFunc(slices.Clone(crds), func(crd *examples.CRD) bool { return taken[crd] >= c.most() })
 		cf, ok := c.memo.checked[f.key]
 		if !ok || !bytes.Equal(cf.text, text) || !slices.Equal(cf.crds, open) {
 			found, err := examples.Find(ctx, open, f.key, f.rel, text)
@@ -535,7 +586,7 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 		checked[f.key] = cf
 		objs := slices.DeleteFunc(slices.Clone(cf.found), func(o *examples.Object) bool {
 			taken[o.CRD]++
-			return taken[o.CRD] > maxExamples
+			return taken[o.CRD] > c.most()
 		})
 		for _, o := range objs {
 			if cf.done[o] {
@@ -556,7 +607,7 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 			all := append(slices.Clone(objs), cf.builtIn...)
 			slices.SortStableFunc(all, func(a, b *examples.Object) int { return a.Line - b.Line })
 			c.admission.objects = append(c.admission.objects, all...)
-		} else if !slices.ContainsFunc(crds, func(crd *examples.CRD) bool { return taken[crd] < maxExamples }) {
+		} else if !slices.ContainsFunc(crds, func(crd *examples.CRD) bool { return taken[crd] < c.most() }) {
 			break
 		}
 	}
@@ -565,6 +616,16 @@ func (c *exampleCheck) examples(ctx context.Context, each func(f walked, text []
 	}
 	c.memo.files, c.memo.checked = files, checked
 	return crds, nil
+}
+
+// addUnreadable records the problems of the documents of the file with the
+// key, whose text is text, that cannot be read.
+func (c *exampleCheck) addUnreadable(key string, text []byte, problems []check.Diagnostic) {
+	if len(problems) == 0 || c.unreadable == nil {
+		return
+	}
+	f := c.unreadable[key]
+	c.unreadable[key] = unreadableFile{text: text, diags: append(f.diags, problems...)}
 }
 
 // wait returns once the message loop handles no message, or ctx is done,
@@ -642,12 +703,14 @@ func (c *exampleCheck) crds(ctx context.Context, keys []string, files map[string
 		}
 		r, ok := c.memo.crds[key]
 		if !ok || r.kube != c.kube || !bytes.Equal(r.text, text) {
-			r = crdsRead{text: text, kube: c.kube, crds: examples.Read(ctx, key, text, c.kube)}
+			crds, problems := examples.ReadWithProblems(ctx, key, text, c.kube)
+			r = crdsRead{text: text, kube: c.kube, crds: crds, problems: problems}
 		}
 		if ctx.Err() != nil {
 			return nil
 		}
 		read[key] = r
+		c.addUnreadable(key, text, r.problems)
 		out = append(out, r.crds...)
 	}
 	c.memo.crds = read
@@ -688,6 +751,7 @@ func (c *exampleCheck) read(f walked, words string, files map[string]fileRead) (
 func (c *exampleCheck) load(f walked, words string, files map[string]fileRead) (fileRead, bool) {
 	info, err := f.d.Info()
 	if err != nil {
+		c.noteUnread(filepath.Join(f.dir, filepath.FromSlash(f.rel)), err)
 		return fileRead{}, false
 	}
 	fresh := func(r fileRead, ok bool) bool {
@@ -702,6 +766,14 @@ func (c *exampleCheck) load(f walked, words string, files map[string]fileRead) (
 	}
 	data, err := readIn(f.dir, filepath.FromSlash(f.rel))
 	if err != nil {
+		path := filepath.Join(f.dir, filepath.FromSlash(f.rel))
+		if errors.Is(err, errTooBig) {
+			if c.big != nil {
+				c.big(path)
+			}
+		} else {
+			c.noteUnread(path, err)
+		}
 		return fileRead{}, false
 	}
 	r := fileRead{size: info.Size(), mod: info.ModTime(), words: words, crd: bytes.Contains(data, []byte(crdWord)), policy: examples.HasPolicies(data)}
@@ -729,7 +801,8 @@ func (c *exampleCheck) readPolicies(ctx context.Context, keys []string, files ma
 				continue
 			}
 		}
-		policies := examples.ReadPolicies(ctx, key, text, c.kube)
+		policies, problems := examples.ReadPoliciesWithProblems(ctx, key, text, c.kube)
+		c.addUnreadable(key, text, problems)
 		if len(policies) > 0 {
 			if out.texts == nil {
 				out.texts = map[string][]byte{}
@@ -737,7 +810,9 @@ func (c *exampleCheck) readPolicies(ctx context.Context, keys []string, files ma
 			out.texts[key] = text
 		}
 		out.policies = append(out.policies, policies...)
-		out.bindings = append(out.bindings, examples.ReadBindings(ctx, key, text)...)
+		bindings, problems := examples.ReadBindingsWithProblems(ctx, key, text)
+		c.addUnreadable(key, text, problems)
+		out.bindings = append(out.bindings, bindings...)
 		if ctx.Err() != nil {
 			return admissionFound{}
 		}

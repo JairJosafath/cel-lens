@@ -34,6 +34,7 @@ func (r *reporter) crd(ctx context.Context, node *yaml.Node, exprs map[string]ex
 		return fmt.Errorf("read CustomResourceDefinition: %w", err)
 	}
 	apiextensionsv1.SetObjectDefaults_CustomResourceDefinition(&versioned)
+	r.yaml11Enums(node)
 	base := len(r.diags)
 	if err := r.validateCRD(ctx, node, exprs, &versioned, partial); err != nil {
 		return err

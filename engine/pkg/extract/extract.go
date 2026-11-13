@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 )
 
 // Kind says which field an expression was found in.
@@ -327,7 +329,9 @@ func (f *finder) policyFields(ctx context.Context, spec *yaml.Node, fields []pol
 }
 
 // add records the value of key in mapping m as an expression when it is a
-// non-empty string scalar. It returns ctx's error when ctx is cancelled.
+// non-empty string scalar, which a plain y, n, yes, no, on or off is not: it
+// is the boolean kubectl sends (see yamlfield.PlainBool). It returns ctx's
+// error when ctx is cancelled.
 func (f *finder) add(ctx context.Context, m *yaml.Node, key string, kind Kind, path, field string) error {
 	k, n, err := f.entry(ctx, m, key)
 	if err != nil {
@@ -335,6 +339,9 @@ func (f *finder) add(ctx context.Context, m *yaml.Node, key string, kind Kind, p
 	}
 	n = resolve(n)
 	if n == nil || n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" || n.Value == "" {
+		return nil
+	}
+	if _, boolean := yamlfield.PlainBool(n); boolean {
 		return nil
 	}
 	start, end, ok := f.span(n, k.Column-1)

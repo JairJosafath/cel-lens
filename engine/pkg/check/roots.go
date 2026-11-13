@@ -7,6 +7,7 @@ import (
 	"go.yaml.in/yaml/v3"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -140,7 +141,7 @@ func (r *reporter) policyRoots(ctx context.Context, node *yaml.Node, doc Root) (
 // its variables, and reports whether it could.
 func readPolicy(node *yaml.Node) (*policyVars, bool) {
 	var root map[string]any
-	if node.Decode(&root) != nil {
+	if yamlfield.Decode(node, &root) != nil {
 		return nil, false
 	}
 	p, err := readPolicyVars(root)

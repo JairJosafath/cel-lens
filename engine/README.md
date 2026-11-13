@@ -87,6 +87,67 @@ settings in `initializationOptions` and in the `settings` of
 hides the lines, and one of `exampleResults` what the examples show: at once in a client that refreshes code lenses when asked
 (`workspace/codeLens/refresh`, as VS Code does), else when it next asks for them.
 
+### Run the examples in CI
+
+`cel-lens-core examples [flags] [paths...]` runs every rule of the
+CustomResourceDefinitions and ValidatingAdmissionPolicies in the files and
+folders given (the current folder when there are none) on the examples it finds,
+and exits 1 when a verdict is not what its example expects, so a repository's
+examples are a test. The results are those the editor shows above each rule
+(the `exampleResults` setting; [docs/engine.md](docs/engine.md) says what an
+example is and how it says what it expects): the API server's own validation
+for the Kubernetes version picked, over the workspace the paths make up. A
+folder is walked as the language server walks its workspace, with the same
+limits; a file given alone is the whole workspace, but for the folders given.
+
+```sh
+$ cel-lens-core examples ./config
+config/crd/widget.yaml:22: self.size <= 10  (CustomResourceDefinition widgets.example.com v1 spec)
+  wrong config/samples/huge.yaml:1: refused, expected to be allowed: spec: Invalid value: at most 10
+config/policy/replicas.yaml:9: object.spec.replicas <= 3  (ValidatingAdmissionPolicy replicas, validation)
+  wrong config/samples/deploy.yaml:6: refused under binding "replicas", expected to be allowed: at most 3 replicas
+3 rules, 5 examples: 2 wrong, 3 not run
+$ echo $?
+1
+```
+
+The text lists each rule with a wrong verdict, or a rule that ended in an error,
+and the examples it is wrong for, with the API server's message; paths are
+relative to the working folder, and the last line says what the run found. When
+all is well that line is all it prints. The flags are:
+
+- `--format text|json`: `json` prints one object, the answer of
+  `cel-lens.exampleResults` for every file with rules (`kubernetesVersion` and
+  `rules`) and the `problems` of the examples; the default is text.
+- `--kube-version 1.34` (or `--kubernetes-version 1.34`): the Kubernetes version
+  the results match, as for `check`; the default is 1.37.
+- `--fail-on wrong|error|none`: what fails the run. `wrong`, the default, is a
+  verdict that is not what its example expects, and a problem of an example (the
+  schema refuses an example that expects to be allowed, a `# cel-lens:` comment
+  that says nothing it knows, an example that expects to be refused and that
+  nothing refuses, a CRD, policy or binding the API server cannot read), and a rule that stopped with an error on an example that
+  expects to be allowed, which the API server refuses as it refuses a verdict;
+  `error` also a rule that stopped with an error on an example that expects to
+  be refused; `none` never. A rule that did not run never fails the run.
+- `--verbose`: list every result, not only the wrong ones and the errors.
+
+Exit code 0 means nothing failed under `--fail-on`, 1 that a verdict did, 2 a
+usage or read error (a missing path, a file that is not `.yaml` or `.yml`), 130
+that the run was interrupted. Results go to stdout. The command runs every
+example it finds, but it does not read files over 1 MiB or past the first
+20000 YAML files: it says so on stderr, and the last line says how many files
+were left out (`3 rules, 5 examples: 0 wrong · 1 file left out at the limits`),
+and the exit code is not changed by it. The command is new in v0.31.0; in GitHub
+Actions, with Go on the runner:
+
+```yaml
+- name: Run the examples
+  run: |
+    go install github.com/JairJosafath/cel-lens/engine@v0.31.0
+    mv "$(go env GOPATH)/bin/engine" "$(go env GOPATH)/bin/cel-lens-core"
+    "$(go env GOPATH)/bin/cel-lens-core" examples ./config
+```
+
 ## Supported Kubernetes versions
 
 1.33 to 1.37; the default is **1.37**. An unsupported value fails with exit
@@ -109,6 +170,7 @@ Stable:
 | Checks of CEL | Compiles the CEL of `x-kubernetes-validations`, ValidatingAdmissionPolicy and MutatingAdmissionPolicy in the Kubernetes CEL environment, with the API server's messages and cost rules |
 | Language server | Diagnostics, hover, completion, quick fixes and inline info (a line above each CEL expression) |
 | Command-line check | `cel-lens-core check` on files and folders |
+| Command-line examples | `cel-lens-core examples` runs the rules of CRDs and admission policies on their examples and fails on a wrong verdict |
 | Kubernetes version | Results match the version picked with `--kube-version` or `kubernetesVersion` |
 | Typed `object`, `oldObject` and policy variables | Typed from the built-in kinds a policy matches |
 | Typed `params` of a built-in kind | Typed from `spec.paramKind` when it names a built-in kind |
@@ -150,11 +212,9 @@ ships the engine. See [docs/engine.md](docs/engine.md) for what the server does.
   bundled `k8s.io/api`.
 - Transports other than stdio for the language server.
 - `.cellens` types in `cel-lens-core check`: only the language server reads them.
-- Dry runs from the command line: the language server shows what a CRD's
-  rules and a ValidatingAdmissionPolicy do to the workspace's examples, above
-  each rule, in its hover and as warnings (`exampleResults`), but
-  `cel-lens-core check` does not yet. A MutatingAdmissionPolicy's or a
-  Kyverno policy's dry run is not done either.
+- Dry runs of a MutatingAdmissionPolicy or a Kyverno policy: the language
+  server and `cel-lens-core examples` run what a CRD's rules and a
+  ValidatingAdmissionPolicy do to the workspace's examples, and no other kind.
 
 ## Contributing
 

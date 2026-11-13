@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
@@ -82,48 +83,81 @@ func HasPolicies(data []byte) bool { return bytes.Contains(data, []byte(policyWo
 // spec cannot be read, as the API server would not read it either, or that
 // has no name, is left out. A cancelled ctx gives none.
 func ReadPolicies(ctx context.Context, file string, data []byte, v kubeversion.Version) []*Policy {
+	out, _ := ReadPoliciesWithProblems(ctx, file, data, v)
+	return out
+}
+
+// ReadPoliciesWithProblems is ReadPolicies, with the problems of each policy
+// it leaves out because its YAML cannot be read as the API server reads it:
+// for a field of the wrong type, the problem check gives, at the value (such
+// as `n`, which kubectl reads as a boolean where a string is wanted). A policy
+// with no name is left out without one.
+func ReadPoliciesWithProblems(ctx context.Context, file string, data []byte, v kubeversion.Version) ([]*Policy, []check.Diagnostic) {
 	if !HasPolicies(data) {
-		return nil
+		return nil, nil
 	}
 	docs, _, err := extract.Documents(ctx, file, data)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	var out []*Policy
+	var (
+		out      []*Policy
+		problems []check.Diagnostic
+	)
 	for _, d := range docs {
 		apiVersion, kind, line := typeMeta(d.Node)
 		if apiVersion != admissionV1 || kind != policyKind {
 			continue
 		}
 		var p admissionregistrationv1.ValidatingAdmissionPolicy
-		if !decodeInto(d.Node, &p) || p.Name == "" {
+		if !decodeInto(d.Node, &p) {
+			problems = append(problems, unreadable(ctx, file, data, d.Node, &admissionregistrationv1.ValidatingAdmissionPolicy{}, "the ValidatingAdmissionPolicy cannot be read")...)
+			continue
+		}
+		if p.Name == "" {
 			continue
 		}
 		defaultPolicy(&p)
 		out = append(out, &Policy{File: file, Name: p.Name, Line: line, spec: p, data: data, doc: d.Index, node: d.Node, kube: v})
 	}
-	return out
+	return out, problems
 }
 
 // ReadBindings returns the ValidatingAdmissionPolicyBindings of data, the
 // text of file, in the order of the file; one that cannot be read, or that
 // names no policy, is left out.
 func ReadBindings(ctx context.Context, file string, data []byte) []*Binding {
+	out, _ := ReadBindingsWithProblems(ctx, file, data)
+	return out
+}
+
+// ReadBindingsWithProblems is ReadBindings, with the problems of each binding
+// it leaves out because its YAML cannot be read as the API server reads it,
+// as ReadPoliciesWithProblems gives them. A binding that names no policy is
+// left out without one.
+func ReadBindingsWithProblems(ctx context.Context, file string, data []byte) ([]*Binding, []check.Diagnostic) {
 	if !HasPolicies(data) {
-		return nil
+		return nil, nil
 	}
 	docs, _, err := extract.Documents(ctx, file, data)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	var out []*Binding
+	var (
+		out      []*Binding
+		problems []check.Diagnostic
+	)
 	for _, d := range docs {
 		apiVersion, kind, line := typeMeta(d.Node)
 		if apiVersion != admissionV1 || kind != bindingKind {
 			continue
 		}
 		var b admissionregistrationv1.ValidatingAdmissionPolicyBinding
-		if !decodeInto(d.Node, &b) || b.Spec.PolicyName == "" {
+		if !decodeInto(d.Node, &b) {
+			problems = append(problems, unreadable(ctx, file, data, d.Node, &admissionregistrationv1.ValidatingAdmissionPolicyBinding{}, "the ValidatingAdmissionPolicyBinding cannot be read")...)
+			continue
+		}
+		if b.Spec.PolicyName == "" {
 			continue
 		}
 		if b.Spec.MatchResources != nil {
@@ -131,7 +165,7 @@ func ReadBindings(ctx context.Context, file string, data []byte) []*Binding {
 		}
 		out = append(out, &Binding{File: file, Line: line, Name: b.Name, spec: b})
 	}
-	return out
+	return out, problems
 }
 
 // decodeInto reads the document doc into v as kubectl sends it to the API

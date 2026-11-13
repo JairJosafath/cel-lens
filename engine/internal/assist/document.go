@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
@@ -54,7 +55,7 @@ func Parse(ctx context.Context, file string, data []byte, opts ...Option) *Docum
 			d.roots = append(d.roots, nil)
 		}
 		var root map[string]any
-		if err := doc.Node.Decode(&root); err == nil {
+		if err := yamlfield.Decode(doc.Node, &root); err == nil {
 			if root["apiVersion"] == "apiextensions.k8s.io/v1" && root["kind"] == "CustomResourceDefinition" {
 				assumeInCRD(root, d.assumedFor(root))
 			}

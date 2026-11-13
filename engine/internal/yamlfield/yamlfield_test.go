@@ -31,7 +31,7 @@ func find(ctx context.Context, t *testing.T, src string) (yamlfield.Field, bool,
 		t.Fatalf("parse: %v", err)
 	}
 	var raw any
-	if err := node.Decode(&raw); err != nil {
+	if err := yamlfield.Decode(&node, &raw); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	js, _ := json.Marshal(raw)
@@ -54,7 +54,7 @@ func TestFind(t *testing.T) {
 		{"list item", "items:\n  - size: 1\n  - size: x\n", "items[1].size", 3},
 		{"map entry in key order", "named:\n  b:\n    size: x\n  a:\n    size: true\n", "named[a].size", 5},
 		{"alias", "base: &b\n  size: x\nitems:\n  - *b\n", "items[0].size", 4},
-		{"merge", "base: &b\n  size: x\nitems:\n  - <<: *b\n    name: n\n", "items[0].size", 2},
+		{"merge", "base: &b\n  size: x\nitems:\n  - <<: *b\n    name: nm\n", "items[0].size", 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,7 +85,7 @@ func TestFindManyAliases(t *testing.T) {
 	// Every item stands for the same node, so a search that does not
 	// remember where it has been would visit it items times.
 	var b strings.Builder
-	b.WriteString("base: &b\n  name: n\nitems:\n")
+	b.WriteString("base: &b\n  name: nm\nitems:\n")
 	for range 5000 {
 		b.WriteString("  - *b\n")
 	}
