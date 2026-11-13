@@ -32,8 +32,9 @@ release lists the SHA-256 of every file (`sha256sum -c checksums.txt`).
 
 A release is built on GitHub, by the `release.yml` workflow of
 https://github.com/JairJosafath/cel-lens. A maintainer runs it by hand for the
-engine and the version, and optionally a commit, and it builds from the source
-under `engine/` on that repository's `main`. The workflow creates the release's
+engine and the version, right after the change that prepares the version is
+merged there, and it builds from the source under `engine/` at the head of that
+repository's `main`: it takes no commit. The workflow creates the release's
 tags, `core-vX.Y.Z` and the Go module's own tag for `engine/`, and the release
 with the six binaries, `checksums.txt`, a build provenance attestation and
 Sigstore signatures.

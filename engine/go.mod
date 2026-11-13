@@ -1,6 +1,6 @@
 module github.com/JairJosafath/cel-lens/engine
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/google/cel-go v0.30.0

@@ -26,8 +26,9 @@ Written on 2026-11-13, while v0.28.0 was prepared.
 
 The release is built by the `release.yml` workflow of
 https://github.com/JairJosafath/cel-lens. It is run by hand, with the
-part, `engine`, the version and, optionally, the commit, and it builds from the
-source under `engine/` on that repository's `main`. It creates the tags
+part, `engine`, and the version, right after the change that prepares the
+version is merged there, and it builds from the source under `engine/` at the
+head of that repository's `main`: it takes no commit. It creates the tags
 `engine/vX.Y.Z` and `core-vX.Y.Z` and the release, with the six binaries,
 `checksums.txt`, a build provenance attestation and Sigstore signatures.
 
@@ -35,7 +36,8 @@ So a release goes in this order:
 
 1. `make release RELEASE=X.Y.Z` here, and the release check above on that
    commit (CI's `full` job on `release-check/vX.Y.Z`).
-2. That source is under `engine/` on the public repository's `main`.
+2. That source is under `engine/` on the public repository's `main`, and is the
+   head of it when the next step runs.
 3. `release.yml` is run there for `engine` and `X.Y.Z`.
 4. `scripts/public-tags.sh` then finds `core-vX.Y.Z` public; the next
    `make release` adds it to `testdata/public-core-tags.txt`.
