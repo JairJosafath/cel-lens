@@ -1,0 +1,19 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: container-limit
+spec:
+  paramKind:
+    apiVersion: rules.example.com/v1
+    kind: ContainerLimit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: ['CREATE', 'UPDATE']
+        resources: ['pods']
+  validations:
+    - expression: object.spec.containers.size() <= params.maxContainers
+      message: a pod may not run more containers than its limit
+    - expression: has(object.spec.serviceAccountName)
+      message: a pod names its service account

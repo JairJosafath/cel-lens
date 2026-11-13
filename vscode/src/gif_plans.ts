@@ -32,3 +32,26 @@ export const COMPLETION_HOLDS_MS = {
 export function completionHolds(): number[] {
   return Object.values(COMPLETION_HOLDS_MS);
 }
+
+/** What `give-type.gif` types in the picker: it leaves the workspace's example alone in the list. */
+export const GIVE_TYPE_FILTER = 'limit.yaml';
+
+/** The holds of `give-type.gif`, named by the step they follow. */
+export const GIVE_TYPE_HOLDS_MS = {
+  start: 600,
+  pickerShown: 1400,
+  exampleHighlighted: 1000,
+  afterWrite: 2200,
+} as const;
+
+/** The holds of `give-type.gif` in the order the script plays them: the typing of the filter comes after `pickerShown`. */
+export function giveTypeHolds(): number[] {
+  const { start, pickerShown, exampleHighlighted, afterWrite } = GIVE_TYPE_HOLDS_MS;
+  return [
+    start,
+    pickerShown,
+    ...Array.from(GIVE_TYPE_FILTER, () => GIF_TYPING_MS),
+    exampleHighlighted,
+    afterWrite,
+  ];
+}

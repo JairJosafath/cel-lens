@@ -3,7 +3,6 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: no-latest-tag
 spec:
-  failurePolicy: Fail
   matchConstraints:
     resourceRules:
       - apiGroups: ['']
@@ -16,5 +15,3 @@ spec:
   validations:
     - expression: variables.images.all(image, !image.endsWith(':latest'))
       message: no container may use the latest tag
-    - expression: object.spec.containers.all(c, has(c.resources) && has(c.resources.limits))
-      messageExpression: "'pod ' + object.metadata.name + ' sets no resource limits'"

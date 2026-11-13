@@ -74,9 +74,9 @@ This opens a VS Code window with the extension loaded from `out/`; rebuild and r
 npm run pictures
 ```
 
-The pictures in the README (`images/*.png` and the two GIFs) are taken by a script, so a release can retake them. `npm run pictures` builds the extension, puts the pinned engine in `bin/` (`npm run engine`), packages the extension and installs it in [openvscode-server](https://github.com/gitpod-io/openvscode-server), a VS Code served to a browser, opens the two fixtures of `test/pictures/` (a CRD with `x-kubernetes-validations` and a ValidatingAdmissionPolicy) in headless Chromium driven by Playwright, and writes `problems.png`, `hover.png`, `completion.png`, `quick-fix.png`, `colors.png`, `colors.gif` and `completion.gif` into `images/`. It needs no display.
+The pictures in the README (`images/*.png` and the three GIFs) are taken by a script, so a release can retake them. `npm run pictures` builds the extension, puts the pinned engine in `bin/` (`npm run engine`), packages the extension and installs it in [openvscode-server](https://github.com/gitpod-io/openvscode-server), a VS Code served to a browser, opens the fixtures of `test/pictures/` (a CRD with `x-kubernetes-validations`, a ValidatingAdmissionPolicy, and a ValidatingAdmissionPolicy whose `params` is a custom kind, with a sample of that kind that goes in the workspace as `config/samples/limit.yaml`) in headless Chromium driven by Playwright, and writes `inline-info.png`, `problems.png`, `hover.png`, `completion.png`, `quick-fix.png`, `colors.png`, `colors.gif`, `completion.gif` and `give-type.gif` into `images/`. It needs no display. Each picture starts from a clean editor: the script closes every editor (discarding what is unsaved), opens the picture's file and checks one tab, nothing unsaved, the problems the picture should show in the status bar and no notification, and stops naming the picture otherwise. The browser's screencast gives PNG frames, so a GIF is encoded from exact pixels, with the flat colors of the page (`src/gif_frames.ts`) as palette entries of their own.
 
-It is not part of `make check`, and it needs a network: it downloads openvscode-server (version in `package.json`, under `pictures`) into `node_modules/.cache/` the first time, and Chromium needs `npx playwright install chromium` once (on Linux, `npx playwright install-deps chromium` adds the libraries it needs). Commit the files it wrote; `src/picture_files.test.ts` checks that each is a real PNG or GIF and that each GIF has more than one frame and is under 2 MB. A GIF's clock is the script's pacing, not the wall clock: it plays the sum of the script's holds (`holdFrame`), so it lasts the same on a slow machine as on a fast one. `colors.gif` is planned to play 4.5 seconds and `completion.gif` 3 seconds; the script stops with an error naming the GIF when one is planned to play 8 seconds or more. To change what a picture shows, edit the fixtures or `test/pictures/take.ts`. The `.vsix` carries only `images/icon.png` (`.vscodeignore`).
+It is not part of `make check`, and it needs a network: it downloads openvscode-server (version in `package.json`, under `pictures`) into `node_modules/.cache/` the first time, and Chromium needs `npx playwright install chromium` once (on Linux, `npx playwright install-deps chromium` adds the libraries it needs). Commit the files it wrote; `src/picture_files.test.ts` checks that each is a real PNG or GIF and that each GIF has more than one frame and is under 2 MB. A GIF's clock is the script's pacing, not the wall clock: it plays the sum of the script's holds (`holdFrame`), so it lasts the same on a slow machine as on a fast one. `colors.gif` is planned to play 4.5 seconds, `completion.gif` 3 seconds and `give-type.gif` 6 seconds; the script stops with an error naming the GIF when one is planned to play 8 seconds or more. To change what a picture shows, edit the fixtures or `test/pictures/take.ts`. The `.vsix` carries only `images/icon.png` (`.vscodeignore`).
 
 ## Send a change
 
@@ -89,7 +89,7 @@ Bugs go to <https://github.com/JairJosafath/cel-lens/issues>. Say which Kubernet
 ## How it works
 
 The extension activates on YAML files and starts the bundled cel-lens language
-server, `cel-lens-core` v0.25.1 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
+server, `cel-lens-core` v0.28.0 (`cel-lens-core lsp`), which gives CEL errors, hover and completion inside
 Kubernetes YAML such as CRDs and admission policies. The status bar shows the
 Kubernetes version the server reports; the engine lists the versions it supports, so Pick
 Kubernetes Version offers them; or type a version in the
@@ -119,8 +119,9 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
   **Write a schema in .cellens…**, **Use a Go type…** (a second picker of the
   Go types of the `.cellens`'s workspace folder, with a Back button) and **Write a
   short type in .cellens…**, then the kinds there are; a CRD's value gets `int` and
-  `string` only. An engine that lists no Go types, or refuses `snippet`, is too old:
-  the flow says so, with a button to `cel-lens.serverPath`.
+  `string` only. The bundled engine has all of this; an engine of `cel-lens.serverPath`
+  that lists no Go types, or refuses `snippet`, is older than the extension needs, and
+  the flow says so, with a button to that setting.
   **Remove** removes the entry at once. The extension asks, and the engine writes
   `.cellens`: it runs the engine's commands `cel-lens.typeChoices` (cancelled once the
   flow ends, as the Go walk may still run), `cel-lens.setType` and

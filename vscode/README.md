@@ -4,11 +4,11 @@ Shows CEL errors, hover, completion, quick fixes and colors inside Kubernetes YA
 
 ## What it looks like
 
-<!-- Picture to take: images/inline-info.png, the line above the rules of test/pictures/widget_crd.yaml in a dark theme, such as `self: Widget.spec · compiles` above `- rule: self.replicas >= self.minReplicas`. -->
+![The line above each CEL rule of a ValidatingAdmissionPolicy: what object is and that the rule compiles, and params as dyn with Give it a type](https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/inline-info.png)
 
-The line above each CEL rule: what `self` is, whether the rule compiles, and the values it reads as `dyn`. Click the first part to open the rule's first problem in the problems peek, or its hover when it has none; a part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule. Click **+N more** to pick from the values the line leaves out. **cel-lens: Toggle Inline Info** turns the line off and on.
+The line above each CEL rule: what `self` (or a policy's `object`) is, whether the rule compiles, and the values it reads as `dyn`. Click the first part to open the rule's first problem in the problems peek, or its hover when it has none; a part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule. Click **+N more** to pick from the values the line leaves out. **cel-lens: Toggle Inline Info** turns the line off and on.
 
-<!-- Picture to take: images/give-type.png, the picker titled `Give params a type`, opened from `params: dyn · Give it a type` above a rule of a ValidatingAdmissionPolicy whose spec.paramKind names a custom kind, in a dark theme: `Write a schema in .cellens…`, `Use a Go type…` and `Write a short type in .cellens…` first, then the built-in kinds with their group and version. -->
+![Give it a type: clicked on the line above a rule, an example of the workspace picked in the picker, and the line showing the type it gave params](https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/give-type.gif)
 
 Click **Give it a type** on the line above a rule to give a `dyn` value a type: write a schema or a short type in `.cellens`, opened beside the rule, or pick a Go type of the workspace, a built-in kind or a kind of the workspace's CRDs.
 
@@ -100,7 +100,7 @@ A value of a CRD takes an int or a string: its picker offers `int` and `string` 
 
 ### Edit or remove a type
 
-**Edit** opens the same picker on what the value has. The schema and short type lines open `.cellens` at its entry, with the cursor on the type it has; a Go type, a kind, `int` or `string` replaces it at once. An engine too old for the schema and short type lines or the Go types says so, with a button to `cel-lens.serverPath`. **Remove** removes the entry at once. The engine changes `.cellens` in the editor, so **Undo** in the `.cellens` editor takes a change back.
+**Edit** opens the same picker on what the value has. The schema and short type lines open `.cellens` at its entry, with the cursor on the type it has; a Go type, a kind, `int` or `string` replaces it at once. **Remove** removes the entry at once. The engine changes `.cellens` in the editor, so **Undo** in the `.cellens` editor takes a change back.
 
 ## Commands
 

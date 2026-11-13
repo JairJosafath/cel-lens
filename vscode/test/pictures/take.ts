@@ -1,8 +1,8 @@
 // Takes the pictures of the README: `npm run pictures`.
 //
 // Builds the extension, installs it in openvscode-server (a VS Code served to a
-// browser), opens the two fixtures of this folder in headless Chromium driven by
-// Playwright, and writes five PNGs and two GIFs into images/. Not part of
+// browser), opens the fixtures of this folder in headless Chromium driven by
+// Playwright, and writes six PNGs and three GIFs into images/. Not part of
 // `make check`: it fetches the server and Chromium, so it needs a network, and it
 // is run on purpose. The engine is the pinned one: `npm run engine` puts it in bin/.
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -14,7 +14,6 @@ import { stdout } from 'node:process';
 
 import gifenc from 'gifenc';
 import { chromium, errors, type CDPSession, type Locator, type Page } from 'playwright';
-import jpeg from 'jpeg-js';
 
 import { cursorLineText } from '../../src/cursor_line.ts';
 import { askUntilFixListed } from '../../src/quick_fix_retry.ts';
@@ -24,11 +23,14 @@ import {
   COLORS_TYPED_TEXT,
   COMPLETION_HOLDS_MS,
   GIF_TYPING_MS,
+  GIVE_TYPE_FILTER,
+  GIVE_TYPE_HOLDS_MS,
 } from '../../src/gif_plans.ts';
 import { hideSideBarWithRetry } from '../../src/side_bar_retry.ts';
 import { partHidden } from '../../src/part_hidden.ts';
 import { widgetShown } from '../../src/widget_shown.ts';
 import { indexFrames, type RawFrame } from '../../src/gif_frames.ts';
+import { decodePng } from '../../src/png_frame.ts';
 import {
   checkPlannedLength,
   pickFrames,
@@ -44,8 +46,11 @@ const IMAGES = join(ROOT, 'images');
 const CACHE = join(ROOT, 'node_modules/.cache/cel-lens-pictures');
 
 const VIEWPORT = { width: 1100, height: 640 };
+/** Less than this many pixels of a line at the edge of the editor is the rest of a line scrolled out, not a line cut in half. */
+const SLIVER_PX = 4;
+/** The height of the status bar, which covers the bottom of the window. */
+const STATUS_BAR_HEIGHT = 22;
 const GIF_COLORS = 48;
-const SCREENCAST_QUALITY = 90;
 const GIF_TICK_MS = 100;
 /** How long a state the script waits for may take, on a slow machine. */
 const STATE_TIMEOUT_MS = 30_000;
@@ -57,6 +62,11 @@ const GAVE_UP_PICTURE = 'out/pictures/gave-up.png';
 
 const CRD = 'widget_crd.yaml';
 const POLICY = 'pod_policy.yaml';
+/** A policy whose `params` is a custom kind, so the line above its rule offers Give it a type. */
+const PARAMS_POLICY = 'container_policy.yaml';
+/** A document of that kind: the workspace's example, at the path a person keeps their samples. */
+const SAMPLE = 'limit_sample.yaml';
+const SAMPLE_IN_WORKSPACE = 'config/samples/limit.yaml';
 
 const QUICK_SUGGESTIONS_OFF = { other: 'off', comments: 'off', strings: 'off' };
 
@@ -84,6 +94,10 @@ const SETTINGS = {
   'update.mode': 'none',
   'extensions.autoUpdate': false,
   'editor.minimap.enabled': false,
+  'editor.stickyScroll.enabled': false,
+  // No word of a picture is marked because the cursor was on it a moment ago.
+  'editor.occurrencesHighlight': 'off',
+  'editor.selectionHighlight': false,
   'editor.fontSize': 15,
   'editor.lineHeight': 24,
   'editor.autoClosingBrackets': 'never',
@@ -91,7 +105,7 @@ const SETTINGS = {
   'editor.autoIndent': 'keep',
   'editor.quickSuggestions': QUICK_SUGGESTIONS_OFF,
   'editor.wordWrap': 'off',
-  'editor.scrollBeyondLastLine': false,
+  'editor.scrollBeyondLastLine': true,
   'editor.renderWhitespace': 'none',
   'files.autoSave': 'off',
   'breadcrumbs.enabled': false,
@@ -198,12 +212,6 @@ async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   throw new Error(`openvscode-server did not answer at ${url}.`);
 }
 
-/** The pixels of a JPEG as RGBA bytes. */
-function decode(picture: Buffer): { width: number; height: number; data: Uint8Array } {
-  const image = jpeg.decode(picture, { useTArray: true });
-  return { width: image.width, height: image.height, data: image.data };
-}
-
 /** Page script (the project has no DOM types): notes whether a completion list shows from now on. */
 const WATCH_FOR_LIST = `(() => {
   const seen = { suggest: false };
@@ -258,8 +266,7 @@ class Recording {
     const recording = new Recording(session, page, name);
     await page.evaluate(WATCH_FOR_LIST);
     await session.send('Page.startScreencast', {
-      format: 'jpeg',
-      quality: SCREENCAST_QUALITY,
+      format: 'png',
       everyNthFrame: 1,
     });
     return recording;
@@ -290,7 +297,7 @@ class Recording {
   private encode(): Uint8Array {
     checkPlannedLength(this.name, this.holds);
     const raw: RawFrame[] = pickFrames(this.shots, this.holds, GIF_TICK_MS).map((shown) =>
-      decode(this.shots[shown]?.picture ?? Buffer.alloc(0)),
+      decodePng(this.shots[shown]?.picture ?? Buffer.alloc(0)),
     );
     if (raw.length === 0) {
       throw new Error('The recording has no frames: the page showed nothing to turn into a GIF.');
@@ -546,8 +553,8 @@ async function openFile(page: Page, name: string): Promise<void> {
   await page.keyboard.press('Control+p');
   await page.keyboard.type(name);
   await waitForState(
-    page.locator('.quick-input-list .monaco-list-row', { hasText: name }).first(),
-    `the quick-open list to have a row for ${name}`,
+    page.locator('.quick-input-list .monaco-list-row.focused', { hasText: name }).first(),
+    `the quick-open list to have ${name} highlighted`,
   );
   await page.keyboard.press('Enter');
   await waitForQuickInputClosed(page);
@@ -602,6 +609,20 @@ async function pointAt(page: Page, line: string, word: string): Promise<{ x: num
   }
   const middle = (column + word.length / 2) / text.length;
   return { x: box.x + box.width * middle, y: box.y + box.height / 2 };
+}
+
+/**
+ * Waits until the line above a rule shows `text`, such as `1 problem`. The engine's lines come
+ * after the first diagnostics and push the rules below them down, so a spot measured before they
+ * show is the wrong one by the time the mouse gets there.
+ */
+async function waitForLensLine(page: Page, text: string): Promise<void> {
+  await waitForState(
+    page.locator('.codelens-decoration', { hasText: text }).first(),
+    `the line above a rule to show ${text}`,
+    'visible',
+    60_000,
+  );
 }
 
 async function waitForEngine(page: Page): Promise<void> {
@@ -736,11 +757,187 @@ async function expectSideBarHidden(page: Page, part: string, barName: string): P
   );
 }
 
+/** Closes every editor, and discards what is unsaved in them: no picture keeps another's changes. */
+async function closeAllEditors(page: Page): Promise<void> {
+  const closed = `document.querySelectorAll('.tab').length === 0`;
+  const asks = `document.querySelector('.monaco-dialog-box') !== null`;
+  await page.keyboard.press('Control+k');
+  await page.keyboard.press('Control+w');
+  for (let asked = 0; asked < 3; asked += 1) {
+    await waitForExpression(
+      page,
+      `${closed} || ${asks}`,
+      'the editors to close, or to ask what to do with what is unsaved',
+    );
+    if ((await page.locator('.monaco-dialog-box').count()) === 0) {
+      return;
+    }
+    await clickWhenReady(
+      page.getByRole('button', { name: "Don't Save" }),
+      "the Don't Save button of the dialog about unsaved changes to be clickable",
+    );
+    await waitForState(page.locator('.monaco-dialog-box'), 'the dialog to close', 'hidden');
+  }
+  await waitForExpression(page, closed, 'every editor to close');
+}
+
+/** What a picture starts from: no editor but its own file, whatever the pictures before it did. */
+async function startPicture(page: Page, file: string): Promise<void> {
+  await closeAllEditors(page);
+  await openFile(page, file);
+}
+
+/** The page expression that is true when the status bar counts `problems` problems, errors and warnings together. */
+function problemCountExpression(problems: number): string {
+  return `(() => { const counts = (document.getElementById('status.problems')?.textContent ?? '').match(/\\d+/g) ?? []; return counts.reduce((sum, count) => sum + Number(count), 0) === ${String(problems)}; })()`;
+}
+
+/**
+ * Fails, naming the picture, unless it starts clean: one tab and nothing unsaved in it, the
+ * `problems` the picture should show in the status bar (none that another file leaves behind),
+ * no notification on screen, and the line above a rule that says the engine has answered for
+ * the file (`ready`, such as `compiles`).
+ */
+async function expectCleanStart(
+  page: Page,
+  picture: string,
+  { problems, ready }: { problems: number; ready: string },
+): Promise<void> {
+  await waitForLensLine(page, ready);
+  await waitForExpression(
+    page,
+    `document.querySelectorAll('.tab').length === 1 && document.querySelectorAll('.tab.dirty').length === 0 && document.querySelector('.notifications-toasts.visible') === null && ${problemCountExpression(problems)}`,
+    `${picture} to start from a clean editor: one tab, nothing unsaved, ${String(problems)} problems in the status bar and no notification`,
+  );
+}
+
+/**
+ * Moves the cursor to the end of the file and waits until it is fully on screen. Done once the
+ * lines above the rules show: they push the end down, so a scroll made before them leaves the
+ * last lines below the window, and the line above them cut by its edge.
+ */
+async function scrollToEnd(page: Page, picture: string): Promise<void> {
+  await page.keyboard.press('Control+End');
+  await waitForExpression(
+    page,
+    `(() => { const cursor = document.querySelector('.monaco-editor .cursors-layer .cursor')?.getBoundingClientRect(); return cursor !== undefined && cursor.top > 0 && cursor.bottom < ${String(VIEWPORT.height - STATUS_BAR_HEIGHT)}; })()`,
+    `the end of the file of ${picture} to be on screen`,
+  );
+  await showWholeLines(page, picture);
+}
+
+/**
+ * The page function that gives how much of the editor's first and last visible lines (and of the
+ * lines above the rules) is cut by its edge: the first and then the last such cut, in pixels, 0
+ * when none is. A scroll lands anywhere, as the lines above the rules have a height of their own.
+ */
+const CUT_LINES = `(() => {
+  const SLIVER_PX = ${String(SLIVER_PX)};
+  const area = document.querySelector('.monaco-editor .overflow-guard')?.getBoundingClientRect();
+  if (area === undefined) { return undefined; }
+  let top = 0;
+  let bottom = 0;
+  for (const element of document.querySelectorAll('.monaco-editor .view-lines .view-line, .monaco-editor .codelens-decoration')) {
+    const box = element.getBoundingClientRect();
+    // A line whose last pixels or first pixels show at the edge is out of view, not cut in half.
+    const shown = Math.min(box.bottom, area.bottom) - Math.max(box.top, area.top);
+    if (box.height === 0 || shown < SLIVER_PX) { continue; }
+    top = Math.max(top, area.top - box.top);
+    bottom = Math.max(bottom, box.bottom - area.bottom);
+  }
+  return { top, bottom };
+})()`;
+
+/** Page function: true when no line of the editor is cut by its top or bottom edge. */
+const NO_CUT_LINES = `(() => { const cut = ${CUT_LINES}; return cut !== undefined && cut.top < 1 && cut.bottom < 1; })()`;
+
+/**
+ * Waits until no line is cut by the top or the bottom edge of the editor, and fails naming the
+ * picture when one is: a picture is never taken with half a line at its edge. The fixtures are
+ * short enough to show whole, so nothing has to be scrolled by a few pixels.
+ */
+async function showWholeLines(page: Page, picture: string): Promise<void> {
+  await waitForExpression(
+    page,
+    NO_CUT_LINES,
+    `no line of ${picture} to be cut by the top or the bottom of the editor`,
+  );
+}
+
+/** Moves the mouse where it covers no text and no widget shows a hover: the empty right of the editor. */
+async function parkMouse(page: Page): Promise<void> {
+  // Not a corner of the window: the status bar's bell shows a tooltip there.
+  await page.mouse.move(VIEWPORT.width - 100, VIEWPORT.height / 2);
+  await waitForNoHover(page);
+}
+
+/** inline-info.png: the line above the rules of a policy, with a `dyn` value to give a type. */
+async function takeInlineInfo(page: Page): Promise<void> {
+  await startPicture(page, PARAMS_POLICY);
+  await waitForEditorText(page, 'container-limit');
+  await expectCleanStart(page, 'inline-info.png', { problems: 0, ready: 'Give it a type' });
+  await scrollToEnd(page, 'inline-info.png');
+  await parkMouse(page);
+  await save('inline-info.png', await screenshotPage(page, 'inline-info.png'));
+}
+
+/**
+ * give-type.gif: Give it a type clicked on the line above the rule, the workspace's example
+ * picked, `.cellens` opening beside the rule, and the line now showing the type with Edit.
+ * Starts from the policy alone. Runs last: it writes a `.cellens` into the workspace and opens it
+ * beside the policy.
+ */
+async function takeGiveType(page: Page): Promise<void> {
+  await startPicture(page, PARAMS_POLICY);
+  await expectCleanStart(page, 'give-type.gif', { problems: 0, ready: 'Give it a type' });
+  await scrollToEnd(page, 'give-type.gif');
+  await parkMouse(page);
+  const givingType = await record(page, 'give-type.gif', false, async (recording) => {
+    await holdFrame(recording, GIVE_TYPE_HOLDS_MS.start);
+    await clickWhenReady(
+      page.locator('.codelens-decoration a', { hasText: 'Give it a type' }).first(),
+      'the line above the rule to offer Give it a type',
+    );
+    await waitForState(
+      page.locator('.quick-input-widget .quick-input-title', { hasText: 'Give params a type' }),
+      'the picker titled Give params a type',
+    );
+    const example = page.locator('.quick-input-list .monaco-list-row', {
+      hasText: SAMPLE_IN_WORKSPACE,
+    });
+    await waitForState(example.first(), `the picker to list ${SAMPLE_IN_WORKSPACE} as an example`);
+    await holdFrame(recording, GIVE_TYPE_HOLDS_MS.pickerShown);
+    // The filter leaves the example alone in the list, highlighted, before it is clicked.
+    await typeText(page, recording, GIVE_TYPE_FILTER, GIF_TYPING_MS);
+    await waitForState(
+      page.locator('.quick-input-list .monaco-list-row.focused', {
+        hasText: SAMPLE_IN_WORKSPACE,
+      }),
+      `the example ${SAMPLE_IN_WORKSPACE} to be highlighted in the picker`,
+    );
+    await holdFrame(recording, GIVE_TYPE_HOLDS_MS.exampleHighlighted);
+    await clickWhenReady(example.first(), `the example ${SAMPLE_IN_WORKSPACE} to be clickable`);
+    await waitForQuickInputClosed(page);
+    await waitForState(
+      page.locator('.tab.active', { hasText: '.cellens' }).first(),
+      'the tab of .cellens to open beside the rule',
+    );
+    await waitForState(
+      page.locator('.codelens-decoration a', { hasText: 'Edit' }).first(),
+      'the line above the rule to offer Edit once the value has a type',
+    );
+    await holdFrame(recording, GIVE_TYPE_HOLDS_MS.afterWrite);
+  });
+  await save('give-type.gif', givingType);
+}
+
 async function takePictures(page: Page): Promise<void> {
   await prepare(page);
-  await openFile(page, CRD);
+  await takeInlineInfo(page);
+
+  await startPicture(page, CRD);
   await page.keyboard.press('Control+g');
-  await page.keyboard.type('31');
+  await page.keyboard.type('28');
   await page.keyboard.press('Enter');
   await waitForQuickInputClosed(page);
   await waitForEngine(page);
@@ -750,6 +947,8 @@ async function takePictures(page: Page): Promise<void> {
     'visible',
     60_000,
   );
+  await expectCleanStart(page, 'problems.png', { problems: 1, ready: '1 problem' });
+  await showWholeLines(page, 'problems.png');
 
   // problems.png: the reason of the wrong field, on the wrong field.
   const wrong = await pointAt(page, 'self.replica > 0', 'replica ');
@@ -766,7 +965,20 @@ async function takePictures(page: Page): Promise<void> {
   await askForQuickFix(page);
   await waitForWidgetShown(page, '.action-widget', 'the quick fix list');
   await save('quick-fix.png', await screenshotPage(page, 'quick-fix.png'));
-  await page.keyboard.press('Escape');
+
+  // The fix is taken and saved: the pictures after this one show the rules as they should be.
+  await page.keyboard.press('Enter');
+  await waitForState(
+    page.locator('.monaco-editor .squiggly-error').first(),
+    'the underline to go once the quick fix is applied',
+    'hidden',
+  );
+  await page.keyboard.press('Control+s');
+  await waitForExpression(
+    page,
+    `document.querySelectorAll('.tab.dirty').length === 0`,
+    'the CRD with the fix applied to be saved',
+  );
   await page.keyboard.press('Control+End');
 
   // hover.png: the type and description of a field.
@@ -781,6 +993,8 @@ async function takePictures(page: Page): Promise<void> {
   const lastRuleBefore = await readLastRuleLine();
   await moveToLastRule(page);
   await waitForCursorLineIs(page, lastRuleBefore);
+  await expectCleanStart(page, 'completion.gif', { problems: 0, ready: 'compiles' });
+  await showWholeLines(page, 'completion.gif');
   await startNewRule(page);
   await page.keyboard.type('- rule: ');
   await waitForCursorLine(page, '- rule: ');
@@ -816,12 +1030,12 @@ async function takePictures(page: Page): Promise<void> {
   }
   await save('completion.png', completionPicture);
 
-  // Back to the file as it was.
-  for (let step = 0; step < 40; step += 1) {
-    await page.keyboard.press('Control+z');
-  }
+  // Back to the file as it was saved: what the completion typed is discarded, not undone.
+  await startPicture(page, CRD);
   await moveToLastRule(page);
   await waitForCursorLineIs(page, lastRuleBefore);
+  await expectCleanStart(page, 'colors.gif', { problems: 0, ready: 'compiles' });
+  await showWholeLines(page, 'colors.gif');
 
   // colors.gif: a rule colored as it is typed, with no completion list in the way.
   await startNewRule(page);
@@ -835,11 +1049,14 @@ async function takePictures(page: Page): Promise<void> {
   await save('colors.gif', colors);
 
   // colors.png: a whole policy in color.
-  await openFile(page, POLICY);
+  await startPicture(page, POLICY);
   await waitForEditorText(page, 'no-latest-tag');
-  await page.keyboard.press('Control+End');
-  await page.mouse.move(VIEWPORT.width - 5, VIEWPORT.height - 5);
+  await expectCleanStart(page, 'colors.png', { problems: 0, ready: 'compiles' });
+  await scrollToEnd(page, 'colors.png');
+  await parkMouse(page);
   await save('colors.png', await screenshotPage(page, 'colors.png'));
+
+  await takeGiveType(page);
 }
 
 async function main(): Promise<void> {
@@ -869,9 +1086,11 @@ async function main(): Promise<void> {
 
     const workspace = join(work, 'workspace');
     await mkdir(join(workspace, '.vscode'), { recursive: true });
-    for (const name of [CRD, POLICY]) {
+    for (const name of [CRD, POLICY, PARAMS_POLICY]) {
       await cp(join(FIXTURES, name), join(workspace, name));
     }
+    await mkdir(join(workspace, dirname(SAMPLE_IN_WORKSPACE)), { recursive: true });
+    await cp(join(FIXTURES, SAMPLE), join(workspace, SAMPLE_IN_WORKSPACE));
     await writeFile(join(workspace, '.vscode/settings.json'), JSON.stringify(SETTINGS, null, 2));
     await mkdir(join(work, 'server/data/Machine'), { recursive: true });
     await writeFile(

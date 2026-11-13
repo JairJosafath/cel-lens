@@ -1,0 +1,5 @@
+apiVersion: rules.example.com/v1
+kind: ContainerLimit
+metadata:
+  name: default-limit
+maxContainers: 4

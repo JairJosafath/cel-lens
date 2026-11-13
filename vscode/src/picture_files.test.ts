@@ -97,8 +97,15 @@ const LOCAL_ONLY = Uint8Array.from([
 const MAX_PLAY_MS = 8000;
 const MIN_FRAMES_PER_SECOND = 5;
 
-const PNGS = ['problems.png', 'hover.png', 'completion.png', 'quick-fix.png', 'colors.png'];
-const GIFS = ['colors.gif', 'completion.gif'];
+const PNGS = [
+  'inline-info.png',
+  'problems.png',
+  'hover.png',
+  'completion.png',
+  'quick-fix.png',
+  'colors.png',
+];
+const GIFS = ['colors.gif', 'completion.gif', 'give-type.gif'];
 const TWO_MEGABYTES = 2 * 1024 * 1024;
 
 describe('pictureKind', () => {
@@ -218,7 +225,7 @@ describe('npm run pictures', () => {
     expect(statSync('test/pictures/take.ts').isFile()).toBe(true);
   });
 
-  it.each([['playwright'], ['gifenc'], ['jpeg-js']])('pins %s to an exact version', (name) => {
+  it.each([['playwright'], ['gifenc']])('pins %s to an exact version', (name) => {
     expect(manifest.devDependencies[name]).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
