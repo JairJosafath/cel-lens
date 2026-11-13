@@ -23,6 +23,8 @@ const PICTURES = [
   'quick-fix.png',
   'colors.png',
 ];
+/** The two pictures of the section Example results, which follow those above in the README. */
+const EXAMPLE_RESULTS_PICTURES = ['example-results-line.png', 'example-results-picker.png'];
 
 describe('readmeDefaultKubernetesVersion', () => {
   it.each([
@@ -137,7 +139,9 @@ describe('README.md as the store page', () => {
 
   it('links the picture of the line above the rules and the GIF of Give it a type first, then the two GIFs and the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
-    expect(images.map((image) => image.url)).toEqual(PICTURES.map((name) => IMAGE_BASE + name));
+    expect(images.map((image) => image.url)).toEqual(
+      [...PICTURES, ...EXAMPLE_RESULTS_PICTURES].map((name) => IMAGE_BASE + name),
+    );
     expect(images.every((image) => image.alt.length > 0)).toBe(true);
     const section = readmeSection(README, 'What it looks like') ?? '';
     const lines = section
@@ -389,11 +393,27 @@ describe('README.md as the store page', () => {
     expect(readmeSection(README, 'Example results')).toContain(text);
   });
 
-  it('names the pictures of example results for the release step to take, each by its file', () => {
-    expect(readmePicturePlaceholders(readmeSection(README, 'Example results') ?? '')).toEqual([
-      'images/example-results-line.png',
-      'images/example-results-picker.png',
-    ]);
+  it('shows example results in two pictures, each with alt text and one line, and names none to take', () => {
+    const section = readmeSection(README, 'Example results') ?? '';
+    expect(readmePicturePlaceholders(section)).toEqual([]);
+    const lines = section.split('\n');
+    for (const name of EXAMPLE_RESULTS_PICTURES) {
+      const at = lines.findIndex((line) => line.endsWith(`${IMAGE_BASE}${name})`));
+      expect(at, name).toBeGreaterThanOrEqual(0);
+      expect(lines[at]).toMatch(/^!\[Example results: .+\]\(/);
+      expect(lines[at + 1]).toBe('');
+      expect((lines[at + 2] ?? '').length).toBeGreaterThan(20);
+    }
+  });
+
+  it('says what the two pictures of example results show: the part and the picker', () => {
+    const section = readmeSection(README, 'Example results') ?? '';
+    expect(section).toContain(
+      '`refuses 1 example it should allow · 2 pass`, and the warning on the rule',
+    );
+    expect(section).toContain(
+      "`big.yaml` first, with the API server's message, then the two examples that pass",
+    );
   });
 
   it('keeps dry runs under Not supported yet only for admission policies', () => {

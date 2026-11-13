@@ -67,6 +67,17 @@ const PARAMS_POLICY = 'container_policy.yaml';
 /** A document of that kind: the workspace's example, at the path a person keeps their samples. */
 const SAMPLE = 'limit_sample.yaml';
 const SAMPLE_IN_WORKSPACE = 'config/samples/limit.yaml';
+/** A CRD whose rule is run on the examples of `config/samples/`: two that the rule allows, and one, `big.yaml`, that it refuses though every example expects to be allowed. */
+const LIMIT_CRD = 'limit_crd.yaml';
+const LIMIT_EXAMPLES: readonly (readonly [string, string])[] = [
+  ['small', 'small.yaml'],
+  ['fine', 'fine.yaml'],
+  ['big', 'big.yaml'],
+];
+const EXAMPLES_FOLDER = 'config/samples';
+/** The line of the rule in limit_crd.yaml, and the warnings its wrong verdict makes in the status bar: one on the rule and one on the example. */
+const EXAMPLE_RULE_LINE = 22;
+const EXAMPLE_WARNINGS = 2;
 
 const QUICK_SUGGESTIONS_OFF = { other: 'off', comments: 'off', strings: 'off' };
 
@@ -931,7 +942,69 @@ async function takeGiveType(page: Page): Promise<void> {
   await save('give-type.gif', givingType);
 }
 
-async function takePictures(page: Page): Promise<void> {
+/**
+ * example-results-line.png and example-results-picker.png: a CRD whose rule refuses one of the
+ * three examples of the workspace, which expects to be allowed. The script puts the examples in
+ * `config/samples/` for these two pictures and takes them out again. The first picture shows the
+ * line above the rule with its part and the warning on the rule, with no hover (a hover with three
+ * examples and the warning is taller than VS Code lets one be, and cuts its last row); the second,
+ * the picker the part opens, the example that is not as expected first.
+ */
+async function takeExampleResults(page: Page, workspace: string): Promise<void> {
+  // The examples come and go with these pictures: their wrong verdict is a warning the status bar
+  // counts, and no other picture shows it.
+  await mkdir(join(workspace, EXAMPLES_FOLDER), { recursive: true });
+  for (const [fixture, file] of LIMIT_EXAMPLES) {
+    await mkdir(dirname(join(workspace, EXAMPLES_FOLDER, file)), { recursive: true });
+    await cp(join(FIXTURES, `limit_${fixture}.yaml`), join(workspace, EXAMPLES_FOLDER, file));
+  }
+  await startPicture(page, LIMIT_CRD);
+  await page.keyboard.press('Control+g');
+  await page.keyboard.type(String(EXAMPLE_RULE_LINE));
+  await page.keyboard.press('Enter');
+  await waitForQuickInputClosed(page);
+  await waitForCursorLine(page, '- rule: self.replicas');
+  await expectCleanStart(page, 'example-results-line.png', {
+    problems: EXAMPLE_WARNINGS,
+    ready: 'refuses 1 example it should allow',
+  });
+  await showWholeLines(page, 'example-results-line.png');
+
+  // example-results-line.png: the part of the line above the rule, and the warning on the rule.
+  await parkMouse(page);
+  await save('example-results-line.png', await screenshotPage(page, 'example-results-line.png'));
+
+  // example-results-picker.png: the picker the part opens, the wrong example first.
+  await clickWhenReady(
+    page
+      .locator('.codelens-decoration a', { hasText: 'refuses 1 example it should allow' })
+      .first(),
+    'the line above the rule to offer its example results',
+  );
+  await waitForState(
+    page.locator('.quick-input-widget .quick-input-title', {
+      hasText: 'Example results of the rule',
+    }),
+    'the picker titled Example results of the rule',
+  );
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row', { hasText: 'big.yaml' }).first(),
+    'the picker to list big.yaml as not as expected',
+  );
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row', { hasText: 'small.yaml' }).first(),
+    'the picker to list small.yaml as as expected',
+  );
+  const picker = await screenshotPage(page, 'example-results-picker.png');
+  await save('example-results-picker.png', picker);
+  await page.keyboard.press('Escape');
+  await waitForQuickInputClosed(page);
+  for (const [, file] of LIMIT_EXAMPLES) {
+    await rm(join(workspace, EXAMPLES_FOLDER, file));
+  }
+}
+
+async function takePictures(page: Page, workspace: string): Promise<void> {
   await prepare(page);
   await takeInlineInfo(page);
 
@@ -1056,6 +1129,7 @@ async function takePictures(page: Page): Promise<void> {
   await parkMouse(page);
   await save('colors.png', await screenshotPage(page, 'colors.png'));
 
+  await takeExampleResults(page, workspace);
   await takeGiveType(page);
 }
 
@@ -1086,7 +1160,7 @@ async function main(): Promise<void> {
 
     const workspace = join(work, 'workspace');
     await mkdir(join(workspace, '.vscode'), { recursive: true });
-    for (const name of [CRD, POLICY, PARAMS_POLICY]) {
+    for (const name of [CRD, POLICY, PARAMS_POLICY, LIMIT_CRD]) {
       await cp(join(FIXTURES, name), join(workspace, name));
     }
     await mkdir(join(workspace, dirname(SAMPLE_IN_WORKSPACE)), { recursive: true });
@@ -1130,7 +1204,7 @@ async function main(): Promise<void> {
           'visible',
           WORKBENCH_TIMEOUT_MS,
         );
-        await takePictures(page);
+        await takePictures(page, workspace);
       } catch (error: unknown) {
         await saveGaveUpPicture(page);
         throw error;
