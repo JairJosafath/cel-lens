@@ -318,29 +318,15 @@ const COSIGN = [
   'esac',
   '',
 ].join('\n');
-// A stand-in for git, where the repository is three things: $COMMITS/<hash> holds the files of
-// each commit, $MAIN lists the hashes of main's commits, oldest first, and $TAGS/<tag> holds the
-// hash a tag points at, or, for an annotated tag, "<hash of the tag object> <hash of its commit>".
-// As git does, it answers refs/tags/<tag>^{} only for an annotated tag, with the commit. It knows the five calls the release workflow makes. As git does, it finds
-// a commit by the start of its hash, tells an ancestor by where the two are on main, and pushes
-// both tags or neither: a tag that is at another commit already refuses the whole push.
+// A stand-in for git, where the repository is two things: $COMMITS/<hash> holds the files of each
+// commit, and $TAGS/<tag> holds the hash a tag points at, or, for an annotated tag, "<hash of the
+// tag object> <hash of its commit>". As git does, it answers refs/tags/<tag>^{} only for an
+// annotated tag, with the commit. It knows the three calls the release workflow makes. As git
+// does, it pushes both tags or neither: a tag that is at another commit already refuses the whole
+// push.
 const GIT = [
   ...STAND_IN,
   'case "$1 $2" in',
-  "'rev-parse --verify')",
-  '  found=("$COMMITS/${4%"^{commit}"}"*)',
-  '  if [ "$3" != --quiet ] || [ ${#found[@]} -ne 1 ]; then',
-  '    exit 1',
-  '  fi',
-  '  basename "${found[0]}"',
-  '  ;;',
-  "'merge-base --is-ancestor')",
-  '  commit=$(grep -n -x -- "$3" "$MAIN" | cut -d : -f 1)',
-  '  head=$(grep -n -x -- "$4" "$MAIN" | cut -d : -f 1)',
-  '  if [ -z "$commit" ] || [ -z "$head" ] || [ "$commit" -gt "$head" ]; then',
-  '    exit 1',
-  '  fi',
-  '  ;;',
   "'show '*)",
   '  if [ ! -f "$COMMITS/${2%%:*}/${2#*:}" ]; then',
   "    echo \"fatal: path '${2#*:}' does not exist in '${2%%:*}'\" >&2",
@@ -500,6 +486,18 @@ function writesOf(workflow: Workflow): string[] {
   );
 }
 
+// An expression that takes what it gives from an input of the run, another job or the head of a
+// pull request, which a checkout in a job that can write must never use.
+const INPUT_DERIVED =
+  /\$\{\{[^}]*\b(needs|inputs|github\.event\.inputs|github\.head_ref|github\.event\.pull_request\.head)\b/;
+
+// Whether a job's permissions let it write: `write-all`, or a permission set to write.
+function canWrite(permissions: unknown): boolean {
+  return typeof permissions === 'string'
+    ? permissions === 'write-all'
+    : Object.values(permissions ?? {}).includes('write');
+}
+
 // The part of a Markdown text under the `## heading`, up to the next heading of that level.
 function sectionOf(text: string, heading: string): string {
   return text.split(/^(?=## )/m).find((part) => part.startsWith(`## ${heading}\n`)) ?? '';
@@ -634,14 +632,12 @@ function sign(
   };
 }
 
-// The commits of the stand-in repository: three of main, oldest first, and one main does not hold.
+// The commits of the stand-in repository, the three of main, oldest first.
 const BEFORE = 'b0'.repeat(20);
 const PREPARED = 'c1'.repeat(20);
 const LATER = 'd2'.repeat(20);
-const ELSEWHERE = 'e3'.repeat(20);
 // The hash of the object of an annotated tag; its commit is another hash.
 const TAG_OBJECT = 'f4'.repeat(20);
-const MAIN = [BEFORE, PREPARED, LATER];
 // The versions PREPARED prepares, and their notes.
 const ENGINE_VERSION = '0.28.0';
 const VSCODE_VERSION = '0.36.0';
@@ -690,12 +686,6 @@ const SOURCES: Record<string, Record<string, string>> = {
     'with later work',
     ['## [Unreleased]\n\n### Changed\n\n- Later work.', ENGINE_SECTION],
     ['## [Unreleased]\n\n### Changed\n\n- Later work.', VSCODE_SECTION],
-    VSCODE_VERSION,
-  ),
-  [ELSEWHERE]: sourceOf(
-    'on a branch',
-    ['## [Unreleased]', ENGINE_SECTION],
-    ['## [Unreleased]', VSCODE_SECTION],
     VSCODE_VERSION,
   ),
 };
@@ -834,7 +824,6 @@ function repository(
     writeFiles(join(root, 'commits', commit), files);
   }
   writeFiles(root, {
-    main: `${MAIN.join('\n')}\n`,
     'scripts/sign-release.yml':
       readWorkflow(SIGN_RELEASE_PATH).jobs?.['sign']?.steps?.at(-1)?.run ?? 'exit 64',
     ...(latest === undefined ? {} : { 'meta/latest': `${latest}\n` }),
@@ -872,6 +861,8 @@ interface Mishap {
 interface ReleaseRun {
   root: string;
   ref: string;
+  // The head of main when the run started: the commit it releases.
+  sha: string;
   // The folder of the artifacts its jobs uploaded: a run sees no artifact of another run.
   artifacts: string;
   // What the expressions of the workflow give: the inputs, the token, and what each step and job
@@ -926,7 +917,7 @@ function use(
   run.actions.push(action);
   switch (action) {
     case 'actions/checkout':
-      cpSync(join(run.root, 'commits', setting('ref') || LATER), folder, { recursive: true });
+      cpSync(join(run.root, 'commits', run.sha), folder, { recursive: true });
       return {};
     case 'actions/setup-go':
     case 'actions/setup-node':
@@ -984,11 +975,10 @@ function execute(
       LC_ALL: 'C',
       GITHUB_REPOSITORY: REPOSITORY,
       GITHUB_REF: run.ref,
-      GITHUB_SHA: LATER,
+      GITHUB_SHA: run.sha,
       GITHUB_OUTPUT: output,
       CALLS: join(run.root, 'calls'),
       COMMITS: join(run.root, 'commits'),
-      MAIN: join(run.root, 'main'),
       TAGS: join(run.root, 'tags'),
       RELEASES: join(run.root, 'releases'),
       META: join(run.root, 'meta'),
@@ -1076,23 +1066,23 @@ function attempt(run: ReleaseRun, mishap: Mishap = {}): ReleaseRun {
   return next;
 }
 
-// A new run of the release workflow in the repository, started by hand from the ref with the
-// inputs.
+// A new run of the release workflow in the repository, started by hand from the ref, when main's
+// head is sha, with the inputs.
 function release(
   root: string,
-  inputs: { part: string; version: string; commit?: string },
-  { ref = MAIN_REF, ...mishap }: Mishap & { ref?: string } = {},
+  inputs: { part: string; version: string },
+  { ref = MAIN_REF, sha = LATER, ...mishap }: Mishap & { ref?: string; sha?: string } = {},
 ): ReleaseRun {
   return attempt(
     {
       root,
       ref,
+      sha,
       artifacts: mkdtempSync(join(root, 'artifacts-')),
       context: {
         'github.token': 'a-token',
         'inputs.part': inputs.part,
         'inputs.version': inputs.version,
-        'inputs.commit': inputs.commit ?? '',
       },
       passed: [],
       failed: undefined,
@@ -1114,16 +1104,22 @@ function notVersion(version: string): string {
   return `The version "${version}" is not X.Y.Z. Run this workflow again with the version as three numbers, such as 1.2.3, without a v in front.`;
 }
 
-function notCommit(commit: string): string {
-  return `"${commit}" is not the hash of a commit of this repository. Run this workflow again with the hash of a commit of main, or with no commit for the head of main.`;
-}
-
 function tagAlone(tag: string, version: string): string {
   return `Only the tag ${tag} exists, not the other tag of version ${version}, so this run cannot tell what it was for. Delete the tag if the release was never made, then run this workflow again; or prepare and release the next version.`;
 }
 
+function tagsElsewhere(
+  sourceTag: string,
+  releaseTag: string,
+  at: string,
+  commit: string,
+  version: string,
+): string {
+  return `The tags ${sourceTag} and ${releaseTag} both point at ${at}, not at ${commit}, and the release ${releaseTag} is not published: a run that failed was releasing version ${version} from ${at}. Finish that release by re-running the failed jobs of the run that created the tags, which keeps its commit ${at}; a new run releases only the head of main, so it cannot finish it.`;
+}
+
 function tagElsewhere(tag: string, at: string, commit: string, version: string): string {
-  return `The tag ${tag} points at ${at}, not at ${commit}: version ${version} was released from that commit, or a run that failed was releasing it from there. To finish that run, run this workflow again with the commit ${at}; otherwise prepare and release the next version.`;
+  return `The tag ${tag} points at ${at}, not at ${commit}: version ${version} was released from that commit, or a run that failed was releasing it from there, and a run releases only the head of main. Prepare the next version and release that.`;
 }
 
 function tagAnnotated(tag: string): string {
@@ -1131,7 +1127,7 @@ function tagAnnotated(tag: string): string {
 }
 
 function notInChangelog(part: Part, commit: string, version: string): string {
-  return `${part}/CHANGELOG.md at ${commit} has no "## [${version}]" heading. Prepare the version first: move its notes under that heading in a change of its own, then run this workflow again with the commit that has it.`;
+  return `${part}/CHANGELOG.md at ${commit} has no "## [${version}]" heading. Prepare the version first: move its notes under that heading in a change of its own, then run this workflow again once it is merged to main.`;
 }
 
 describe('markdownTargets', () => {
@@ -1642,7 +1638,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     });
   });
 
-  it('makes a release only by hand, with the part as a choice of engine or vscode, the version, and the commit when it is not the head of main', () => {
+  it('makes a release only by hand, with the part as a choice of engine or vscode and the version, and no other input: it releases the head of main', () => {
     expect(readWorkflow(RELEASE_PATH).on).toEqual({
       workflow_dispatch: {
         inputs: {
@@ -1657,14 +1653,17 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
             required: true,
             type: 'string',
           },
-          commit: {
-            description: 'The commit of main to release; empty for the head of main',
-            required: false,
-            type: 'string',
-          },
         },
       },
     });
+  });
+
+  it('has no input other than the part and the version: a release is always of the commit the run started at, the head of main', () => {
+    const dispatch = readWorkflow(RELEASE_PATH).on?.['workflow_dispatch'] as {
+      inputs?: Record<string, unknown>;
+    };
+
+    expect(Object.keys(dispatch.inputs ?? {}).sort()).toEqual(['part', 'version']);
   });
 
   it('makes one release at a time per part and version, and never cancels a run in progress', () => {
@@ -1687,7 +1686,6 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
           GH_TOKEN: '${{ github.token }}',
           PART: '${{ inputs.part }}',
           RELEASE_VERSION: '${{ inputs.version }}',
-          COMMIT: '${{ inputs.commit }}',
         },
       ],
       ['build', { PART: '${{ inputs.part }}', RELEASE_VERSION: '${{ inputs.version }}' }],
@@ -1716,8 +1714,8 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
   it.each<
     [
       string,
-      { part: string; version: string; commit?: string },
-      { ref?: string; published?: Partial<Published> },
+      { part: string; version: string },
+      { ref?: string; sha?: string; published?: Partial<Published> },
       string,
     ]
   >([
@@ -1766,31 +1764,6 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       {},
       'The part "docs" is not engine or vscode. Run this workflow again with one of the two.',
     ],
-    ['the commit is the name of a branch', { ...ENGINE, commit: 'main' }, {}, notCommit('main')],
-    [
-      'the commit looks like a flag',
-      { ...ENGINE, commit: '--upload-pack=touch' },
-      {},
-      notCommit('--upload-pack=touch'),
-    ],
-    [
-      'the commit is the start of a hash, too short to be sure of',
-      { ...ENGINE, commit: PREPARED.slice(0, 6) },
-      {},
-      notCommit(PREPARED.slice(0, 6)),
-    ],
-    [
-      'the repository has no commit with the hash',
-      { ...ENGINE, commit: 'f'.repeat(40) },
-      {},
-      notCommit('f'.repeat(40)),
-    ],
-    [
-      'the commit is on a branch, not on main',
-      { ...ENGINE, commit: ELSEWHERE },
-      {},
-      `The commit ${ELSEWHERE} is not a commit of main. Merge it to main first, or run this workflow again with a commit that main holds.`,
-    ],
     [
       'the engine tag in the form of its folder is at another commit, and the other tag is missing',
       ENGINE,
@@ -1798,10 +1771,32 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       tagElsewhere('engine/v0.28.0', BEFORE, LATER, ENGINE_VERSION),
     ],
     [
-      'both tags of the engine are at another commit',
+      'both tags of the engine are at another commit and the release is missing',
       ENGINE,
       { published: { tags: { 'engine/v0.28.0': BEFORE, 'core-v0.28.0': BEFORE } } },
-      tagElsewhere('engine/v0.28.0', BEFORE, LATER, ENGINE_VERSION),
+      tagsElsewhere('engine/v0.28.0', 'core-v0.28.0', BEFORE, LATER, ENGINE_VERSION),
+    ],
+    [
+      'both tags of the engine are at another commit and the release is a draft',
+      ENGINE,
+      {
+        published: {
+          tags: { 'engine/v0.28.0': BEFORE, 'core-v0.28.0': BEFORE },
+          releases: { 'core-v0.28.0': releaseOf('engine', BEFORE, true) },
+        },
+      },
+      tagsElsewhere('engine/v0.28.0', 'core-v0.28.0', BEFORE, LATER, ENGINE_VERSION),
+    ],
+    [
+      'both tags of the extension are at another commit and the release is published',
+      VSCODE,
+      {
+        published: {
+          tags: { 'vscode/v0.36.0': BEFORE, 'vscode-v0.36.0': BEFORE },
+          releases: { 'vscode-v0.36.0': releaseOf('vscode', BEFORE) },
+        },
+      },
+      tagElsewhere('vscode/v0.36.0', BEFORE, LATER, VSCODE_VERSION),
     ],
     [
       'the extension tags are at different commits, the first at the commit to release',
@@ -1875,58 +1870,53 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       notInChangelog('engine', LATER, '0.29.0'),
     ],
     [
-      "the engine's changelog gets the heading only after the commit",
-      { ...ENGINE, commit: BEFORE },
-      {},
+      "the engine's changelog gets the heading only after the head of main the run started at",
+      ENGINE,
+      { sha: BEFORE },
       notInChangelog('engine', BEFORE, ENGINE_VERSION),
     ],
     [
       "the extension's package.json names another version",
       { ...VSCODE, version: '0.37.0' },
       {},
-      `vscode/package.json at ${LATER} names version ${VSCODE_VERSION}, not 0.37.0. Release ${VSCODE_VERSION}; or prepare 0.37.0 first, and run this workflow again with the commit that has it.`,
+      `vscode/package.json at ${LATER} names version ${VSCODE_VERSION}, not 0.37.0. Release ${VSCODE_VERSION}; or prepare 0.37.0 first, merge it, and run this workflow again.`,
     ],
     [
       "the extension's package.json names the version and its changelog has no heading for it",
-      { ...VSCODE, commit: BEFORE },
-      {},
+      VSCODE,
+      { sha: BEFORE },
       notInChangelog('vscode', BEFORE, VSCODE_VERSION),
     ],
   ])(
     'stops a release before anything is built when %s, and says what to do',
-    (_when, inputs, { ref, published }, message) => {
+    (_when, inputs, { ref, sha, published }, message) => {
       const root = repository(published);
       const before = publishedIn(root);
-      const run = release(root, inputs, ref === undefined ? {} : { ref });
+      const run = release(root, inputs, {
+        ...(ref === undefined ? {} : { ref }),
+        ...(sha === undefined ? {} : { sha }),
+      });
 
       expect(run.stderr).toBe(`${message}\n`);
       expect(run.failed).toBe('check');
       expect(run.passed).toEqual([]);
       expect(run.actions).toEqual(['actions/checkout']);
       expect(
-        run.calls.filter(
-          (call) => !/^(git (rev-parse|merge-base|ls-remote|show)|gh release list) /.test(call),
-        ),
+        run.calls.filter((call) => !/^(git (ls-remote|show)|gh release list) /.test(call)),
       ).toEqual([]);
       expect(readdirSync(run.artifacts)).toEqual([]);
       expect(publishedIn(root)).toEqual(before);
     },
   );
 
-  it.each<[Part, string, string, string, string]>([
-    ['engine', 'the head of main, given no commit', '', LATER, 'actions/setup-go'],
-    ['engine', 'a commit of main before its head', PREPARED, PREPARED, 'actions/setup-go'],
-    ['vscode', 'the head of main, given no commit', '', LATER, 'actions/setup-node'],
-    [
-      'vscode',
-      'a commit of main given by the start of its hash',
-      PREPARED.slice(0, 7),
-      PREPARED,
-      'actions/setup-node',
-    ],
+  it.each<[Part, string, string, string]>([
+    ['engine', 'the head of main', LATER, 'actions/setup-go'],
+    ['engine', 'a head of main that has no later work yet', PREPARED, 'actions/setup-go'],
+    ['vscode', 'the head of main', LATER, 'actions/setup-node'],
+    ['vscode', 'a head of main that has no later work yet', PREPARED, 'actions/setup-node'],
   ])(
-    'releases the %s from %s: builds the source of that commit with the make dist of the part, tags the commit twice, publishes the release named as the releases are with the files, their provenance and the notes of the version, only the extension as latest, and leaves it signed',
-    (part, _from, commit, source, setup) => {
+    "releases the %s at %s: builds the source of the run's commit with the make dist of the part, tags the commit twice, publishes the release named as the releases are with the files, their provenance and the notes of the version, only the extension as latest, and leaves it signed",
+    (part, _from, source, setup) => {
       const earlier: Published = {
         tags: { 'vscode-v0.35.0': BEFORE },
         releases: {
@@ -1942,7 +1932,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       const root = repository(earlier);
       const version = part === 'engine' ? ENGINE_VERSION : VSCODE_VERSION;
       const [sourceTag, releaseTag] = tagsOf(part);
-      const run = release(root, { part, version, commit });
+      const run = release(root, { part, version }, { sha: source });
 
       expect(run.stderr).toBe('');
       expect(run.failed).toBeUndefined();
@@ -1977,11 +1967,9 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     expect(
       run.calls.filter((call) => !/^(cosign|gh release (download|upload)) /.test(call)),
     ).toEqual([
-      `git rev-parse --verify --quiet ${LATER}^{commit}`,
-      `git merge-base --is-ancestor ${LATER} ${LATER}`,
+      list,
       'git ls-remote --tags origin refs/tags/engine/v0.28.0 refs/tags/engine/v0.28.0^{}',
       'git ls-remote --tags origin refs/tags/core-v0.28.0 refs/tags/core-v0.28.0^{}',
-      list,
       `git show ${LATER}:engine/CHANGELOG.md`,
       'make -C engine dist VERSION=v0.28.0',
       list,
@@ -1993,7 +1981,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     ]);
   });
 
-  it('builds in a job that may write nothing, from the commit the check gave, on the Go version of engine/go.mod or Node 24 as CI does, without a cache', () => {
+  it('builds in a job that may write nothing, from the commit of the run, on the Go version of engine/go.mod or Node 24 as CI does, without a cache', () => {
     const ci = readWorkflow(CI_PATH).jobs ?? {};
     const build = readWorkflow(RELEASE_PATH).jobs?.['build'];
     const steps = build?.steps ?? [];
@@ -2009,10 +1997,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       'a script',
       'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9',
     ]);
-    expect(steps[0]?.with).toEqual({
-      ref: '${{ needs.check.outputs.commit }}',
-      'persist-credentials': false,
-    });
+    expect(steps[0]?.with).toEqual({ 'persist-credentials': false });
     expect(steps[1]).toMatchObject({
       if: "inputs.part == 'engine'",
       uses: setupOf('engine')?.uses,
@@ -2048,7 +2033,7 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
       'a script',
     ]);
     expect(job?.steps?.slice(0, 3).map((step) => step.with)).toEqual([
-      { ref: '${{ needs.check.outputs.commit }}' },
+      undefined,
       { name: 'release', path: 'release' },
       { 'subject-path': 'release/files/*' },
     ]);
@@ -2058,6 +2043,57 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     ]);
     // The dotfile of dist/ is no file of the release, and so not attested.
     expect(files[PROVENANCE]).toBe(provenanceOf(Object.keys(built('engine', LATER))));
+  });
+
+  it("checks out the run's own commit in every job of every workflow: no checkout passes a ref, and none of a job that can write takes a repository or a path from an input, a job or a pull request", () => {
+    const checkouts = WORKFLOW_PATHS.flatMap((path) =>
+      Object.entries(readWorkflow(path).jobs ?? {}).flatMap(([name, job]) =>
+        (job.steps ?? [])
+          .filter((step) => step.uses?.startsWith('actions/checkout@') === true)
+          .map((step) => ({
+            where: `${basename(path)} ${name}`,
+            writes: canWrite(job.permissions),
+            settings: step.with ?? {},
+          })),
+      ),
+    );
+    const derived = checkouts
+      .filter(({ writes: canWrite }) => canWrite)
+      .filter(({ settings }) =>
+        ['ref', 'repository', 'path'].some((key) => {
+          const value = settings[key];
+          return typeof value === 'string' && INPUT_DERIVED.test(value);
+        }),
+      )
+      .map(({ where }) => where);
+
+    expect(checkouts.length).toBeGreaterThan(0);
+    expect(checkouts.filter(({ settings }) => 'ref' in settings).map(({ where }) => where)).toEqual(
+      [],
+    );
+    expect(derived).toEqual([]);
+  });
+
+  it('has the guard against a checkout taken from an input see a job that writes with `write-all`, and the head of a pull request as an input', () => {
+    expect([canWrite('write-all'), canWrite('read-all'), canWrite(undefined)]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect([canWrite({ contents: 'write' }), canWrite({ contents: 'read' })]).toEqual([
+      true,
+      false,
+    ]);
+    expect(
+      [
+        '${{ needs.check.outputs.commit }}',
+        '${{ inputs.commit }}',
+        '${{ github.event.inputs.commit }}',
+        '${{ github.head_ref }}',
+        '${{ github.event.pull_request.head.sha }}',
+        '${{ github.sha }}',
+      ].map((value) => INPUT_DERIVED.test(value)),
+    ).toEqual([true, true, true, true, true, false]);
   });
 
   it('leaves the release signed with nobody starting a second workflow: it starts sign-release.yml from main for the tag and waits for that run, and the command in SECURITY.md accepts its signatures; the provenance gets none', () => {
@@ -2155,15 +2191,15 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     const root = repository();
     const [sourceTag, releaseTag] = tagsOf('engine');
     const failed = release(root, ENGINE, { fail: 'git push' });
-    const run = release(root, { ...ENGINE, commit: PREPARED });
+    const run = release(root, ENGINE);
 
     expect(failed.failed).toBe('publish');
     expect(run.stderr).toBe('');
     expect(run.failed).toBeUndefined();
     expect(run.calls).toContain(`gh release delete ${releaseTag} --repo ${REPOSITORY} --yes`);
     expect(publishedIn(root)).toEqual({
-      tags: { [sourceTag]: PREPARED, [releaseTag]: PREPARED },
-      releases: { [releaseTag]: signedFrom(releaseOf('engine', PREPARED)) },
+      tags: { [sourceTag]: LATER, [releaseTag]: LATER },
+      releases: { [releaseTag]: signedFrom(releaseOf('engine', LATER)) },
       latest: undefined,
     });
   });
@@ -2193,33 +2229,49 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     });
   });
 
-  it('lets a new run finish a release whose commit is before the head of main, when both tags are at that commit (#1)', () => {
+  it('lets a new run finish a release whose draft was deleted by hand after a run pushed both tags: both plain tags are at its commit and no release exists, so it makes the release, publishes it and has it signed', () => {
     const root = repository();
     const [sourceTag, releaseTag] = tagsOf('engine');
-    const failed = release(root, { ...ENGINE, commit: PREPARED }, { fail: 'gh release edit' });
-    const fresh = release(root, { ...ENGINE, commit: PREPARED });
+    const failed = release(root, ENGINE, { fail: 'gh release edit' });
+    rmSync(join(root, 'releases', releaseTag), { recursive: true });
+    rmSync(join(root, 'meta', releaseTag), { recursive: true });
+    const fresh = release(root, ENGINE);
 
     expect(failed.failed).toBe('publish');
+    expect(publishedIn(root).tags).toEqual({ [sourceTag]: LATER, [releaseTag]: LATER });
     expect(fresh.stderr).toBe('');
     expect(fresh.failed).toBeUndefined();
+    expect(fresh.calls.filter((call) => call.startsWith('gh release delete'))).toEqual([]);
+    expect(publishedIn(root)).toEqual({
+      tags: { [sourceTag]: LATER, [releaseTag]: LATER },
+      releases: { [releaseTag]: signedFrom(releaseOf('engine', LATER)) },
+      latest: undefined,
+    });
+  });
+
+  it('stops a new run that starts after main has moved on from the commit of a run that pushed both tags and failed before publishing (#1): it says to re-run the failed jobs of that run, naming its commit, and changes nothing; the re-run, which keeps its commit, finishes the release', () => {
+    const root = repository();
+    const [sourceTag, releaseTag] = tagsOf('engine');
+    const failed = release(root, ENGINE, { fail: 'gh release edit', sha: PREPARED });
+    const half = publishedIn(root);
+    const fresh = release(root, ENGINE);
+
+    expect(failed.failed).toBe('publish');
+    expect(fresh.stderr).toBe(
+      `${tagsElsewhere(sourceTag, releaseTag, PREPARED, LATER, ENGINE_VERSION)}\n`,
+    );
+    expect(fresh.failed).toBe('check');
+    expect(publishedIn(root)).toEqual(half);
+
+    const rerun = attempt(failed);
+
+    expect(rerun.stderr).toBe('');
+    expect(rerun.failed).toBeUndefined();
     expect(publishedIn(root)).toEqual({
       tags: { [sourceTag]: PREPARED, [releaseTag]: PREPARED },
       releases: { [releaseTag]: signedFrom(releaseOf('engine', PREPARED)) },
       latest: undefined,
     });
-  });
-
-  it('stops a new run that has another commit than the failed run, and leaves everything as the failed run left it', () => {
-    const root = repository();
-    const [sourceTag] = tagsOf('engine');
-    const failed = release(root, ENGINE, { fail: 'gh release edit' });
-    const half = publishedIn(root);
-    const fresh = release(root, { ...ENGINE, commit: PREPARED });
-
-    expect(failed.failed).toBe('publish');
-    expect(fresh.stderr).toBe(`${tagElsewhere(sourceTag, LATER, PREPARED, ENGINE_VERSION)}\n`);
-    expect(fresh.failed).toBe('check');
-    expect(publishedIn(root)).toEqual(half);
   });
 
   it('creates both tags or neither: when one of them appears at another commit after the check, it creates none and publishes nothing', () => {
@@ -2457,7 +2509,8 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     'A release of the engine or of the extension is made by the [release.yml](.github/workflows/release.yml) workflow, from the source on `main`',
     "Prepare the version in a change of its own: the heading `## [X.Y.Z]` with its notes in the part's `CHANGELOG.md`, and for the extension the `version` in `vscode/package.json` too.",
     'run the workflow by hand from `main` (**Actions**, **Release**, **Run workflow**) with the part (`engine` or `vscode`) and the version',
-    'Give it the commit that prepared the version when `main` has later work the release should not carry.',
+    'Right after that change is merged, run the workflow by hand from `main`',
+    'It always releases the head of `main`: if other changes landed after yours, prepare the release again, or release them too.',
     "it builds the files with the part's `make dist`",
     'creates the tags (`engine/vX.Y.Z` and `core-vX.Y.Z`, or `vscode/vX.Y.Z` and `vscode-vX.Y.Z`)',
     "publishes the release with the files, their build provenance and the version's changelog section as its notes, and has the files signed",
@@ -2502,8 +2555,8 @@ describe.skipIf(!HAS_FOLDER)('public-repo/', () => {
     '--repo JairJosafath/cel-lens',
     '--cert-identity https://github.com/JairJosafath/cel-lens/.github/workflows/release.yml@refs/heads/main',
     "The provenance proves what a signature does not: that a run of this repository's `release.yml`, as `main` had it, built the file, and which run that was.",
-    'The provenance names the workflow run and the head of `main` at the time of the run, not the commit released',
-    "The commit released is the one the release's tags name",
+    'The provenance names the workflow run and the commit it released, the head of `main` when the run started (the `sha` of the run)',
+    "which is also the commit the release's tags name",
     'the log of the run says it too: "Releasing … from <commit>"',
   ])('says in SECURITY.md how a release is verified: %s', (text) => {
     const security = readFileSync(`${FOLDER}/SECURITY.md`, 'utf8');

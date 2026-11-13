@@ -216,7 +216,7 @@ describe('CHANGELOG.md', () => {
     "the file is the one the repository's workflow saw when it signed it, not how the file was built",
     'Its README points there from Install',
     'A release of JairJosafath/cel-lens is built and published by the repository itself, and its files carry build provenance',
-    'gains a `release.yml` workflow, run by hand from `main` with the part (`engine` or `vscode`), the version and, when `main` has later work, the commit to release',
+    'gains a `release.yml` workflow, run by hand from `main` with the part (`engine` or `vscode`) and the version, and always releases the head of `main`, the commit the run started at; it takes no commit',
     'It stops before it builds anything, saying what to do',
     "It builds the files with the part's own `make dist`, attests their build provenance, keeps the release a draft until it has every file, creates the two tags in one push",
     "publishes the release with the provenance as `provenance.intoto.jsonl` and the version's changelog section as its notes, the extension's as latest, then starts `sign-release.yml` for the release and waits for it",

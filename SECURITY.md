@@ -32,4 +32,4 @@ gh attestation verify checksums.txt \
   --cert-identity https://github.com/JairJosafath/cel-lens/.github/workflows/release.yml@refs/heads/main
 ```
 
-The provenance proves what a signature does not: that a run of this repository's `release.yml`, as `main` had it, built the file, and which run that was. The provenance names the workflow run and the head of `main` at the time of the run, not the commit released: a release of a commit before that head has the same provenance. The commit released is the one the release's tags name (`engine/vX.Y.Z` and `core-vX.Y.Z`, or `vscode/vX.Y.Z` and `vscode-vX.Y.Z`), and the log of the run says it too: "Releasing … from <commit>".
+The provenance proves what a signature does not: that a run of this repository's `release.yml`, as `main` had it, built the file, and which run that was. The provenance names the workflow run and the commit it released, the head of `main` when the run started (the `sha` of the run), which is also the commit the release's tags name (`engine/vX.Y.Z` and `core-vX.Y.Z`, or `vscode/vX.Y.Z` and `vscode-vX.Y.Z`), and the log of the run says it too: "Releasing … from <commit>".
