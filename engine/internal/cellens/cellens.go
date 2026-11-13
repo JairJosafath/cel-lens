@@ -41,6 +41,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/crdschema"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // FileName is the name of the files this package reads.
@@ -530,18 +531,18 @@ func schemaProblems(key, node *yaml.Node, problems []crdschema.Problem) []Proble
 	return out
 }
 
-// CheckSchemas returns entries without those whose schema the API server
-// would refuse as a CustomResourceDefinition's schema, and a problem for each
-// thing it would refuse, in its words, at the key of the schema it is about
-// (see package crdschema): Parse reads a schema, but does not apply the API
-// server's rules, which may compile CEL and so take ctx. The entries without a
-// schema are kept as they are.
-func CheckSchemas(ctx context.Context, entries []Entry) ([]Entry, []Problem) {
+// CheckSchemas returns entries without those whose schema the API server of
+// version v would refuse as a CustomResourceDefinition's schema, and a
+// problem for each thing it would refuse, in its words, at the key of the
+// schema it is about (see package crdschema): Parse reads a schema, but does
+// not apply the API server's rules, which may compile CEL and so take ctx.
+// The entries without a schema are kept as they are.
+func CheckSchemas(ctx context.Context, v kubeversion.Version, entries []Entry) ([]Entry, []Problem) {
 	var out []Entry
 	var problems []Problem
 	for _, e := range entries {
 		if e.Schema != nil && e.Schema.key != nil {
-			if ps := crdschema.Validate(ctx, e.Schema.node, e.Schema.Value); len(ps) > 0 {
+			if ps := crdschema.Validate(ctx, v, e.Schema.node, e.Schema.Value); len(ps) > 0 {
 				problems = append(problems, schemaProblems(e.Schema.key, e.Schema.node, ps)...)
 				continue
 			}
@@ -553,8 +554,9 @@ func CheckSchemas(ctx context.Context, entries []Entry) ([]Entry, []Problem) {
 
 // ReadSchema reads a schema written as JSON, or YAML, as schema: takes it, and
 // checks it as CheckSchemas does. It returns the schema, or what is wrong with
-// it, each problem saying where in the schema; ctx is as for CheckSchemas.
-func ReadSchema(ctx context.Context, data []byte) (*Schema, []string) {
+// it, each problem saying where in the schema; ctx and v are as for
+// CheckSchemas.
+func ReadSchema(ctx context.Context, v kubeversion.Version, data []byte) (*Schema, []string) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, []string{"the schema is not JSON: " + strings.TrimPrefix(err.Error(), "yaml: ")}
@@ -565,7 +567,7 @@ func ReadSchema(ctx context.Context, data []byte) (*Schema, []string) {
 	n := doc.Content[0]
 	value, problems := crdschema.Read(n)
 	if len(problems) == 0 {
-		problems = crdschema.Validate(ctx, n, value)
+		problems = crdschema.Validate(ctx, v, n, value)
 	}
 	if len(problems) > 0 {
 		msgs := make([]string, len(problems))

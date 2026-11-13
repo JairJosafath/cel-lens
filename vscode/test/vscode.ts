@@ -95,6 +95,9 @@ export const notificationChoices: (string | undefined)[] = [];
 /** The messages shown with window.showInformationMessage, oldest first. */
 export const shownInfos: string[] = [];
 
+/** The buttons of each message in `shownInfos`, in the same order. */
+export const shownInfoButtons: string[][] = [];
+
 /** The button the user "clicks" in the next information message, if any. */
 export const infoChoice: { next: string | undefined } = { next: undefined };
 
@@ -740,6 +743,7 @@ export const window = {
     ...buttons: T[]
   ): Promise<T | undefined> {
     shownInfos.push(message);
+    shownInfoButtons.push(buttons);
     return Promise.resolve(buttons.find((button) => button === infoChoice.next));
   },
   tabGroups: {
@@ -1120,6 +1124,7 @@ export function reset(): void {
   registry.clear();
   shownErrors.length = 0;
   shownInfos.length = 0;
+  shownInfoButtons.length = 0;
   shownWarnings.length = 0;
   warningChoice.next = undefined;
   notificationChoices.length = 0;

@@ -15,6 +15,7 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // marker marks the position in the texts of these tests.
@@ -534,7 +535,7 @@ func TestSetTypeSnippet(t *testing.T) {
 				t.Errorf("setType makes\n%s(%s %s), want\n%s", sel, r.Cellens, r.Change, tt.want)
 			}
 			entries, problems := cellens.Parse([]byte(got))
-			if _, more := cellens.CheckSchemas(t.Context(), entries); len(entries) != 1 || len(problems)+len(more) > 0 {
+			if _, more := cellens.CheckSchemas(t.Context(), kubeversion.Default(), entries); len(entries) != 1 || len(problems)+len(more) > 0 {
 				t.Errorf("the .cellens setType makes has %d entries, problems %v %v; want one entry and none", len(entries), problems, more)
 			}
 		})

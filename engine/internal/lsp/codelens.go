@@ -24,9 +24,12 @@ import (
 // and only the first expression whose key is on a line gets one. There are no
 // lenses while the setting inlineInfo is false, nor for a document that is
 // not open. The problems counted are those of the last check of the document
-// as it is now; it is checked only if no check of this version completed. The
-// lenses are kept until the document is checked again or a .cellens file
-// changes, so asking again costs nothing. Asking marks the document shown:
+// as it is now; it is checked only if no check of this version completed.
+// What a CRD's rule does to the examples is what the last check of the
+// examples found of the rule (see ruleExamples), never waited for. The
+// lenses are kept until the document is checked again, a .cellens file
+// changes or the check of the examples finds something new, so asking
+// again costs nothing. Asking marks the document shown:
 // a refresh is owed it when its lenses change (see lensesOwed), and once
 // none is owed, the refresh set to be sent again is not (see armRetry).
 func (ss *session) codeLens(ctx context.Context, params json.RawMessage) (any, error) {
@@ -56,10 +59,13 @@ func (ss *session) codeLens(ctx context.Context, params json.RawMessage) (any, e
 	if err != nil {
 		return nil, err
 	}
-	summaries, err := ss.assist.Summaries(ctx, doc.parse(ctx, uri))
+	parsed := doc.parse(ctx, uri)
+	summaries, err := ss.assist.Summaries(ctx, parsed)
 	if err != nil {
 		return nil, err
 	}
+	key := crdKey(uri)
+	known := ss.knowsRules(key)
 	lines := doc.runes()
 	lenses := []any{}
 	used := map[int]bool{}
@@ -72,6 +78,11 @@ func (ss *session) codeLens(ctx context.Context, params json.RawMessage) (any, e
 		rule := inline.Rule{
 			Subject: s.Subject, SubjectType: s.SubjectType, Problems: problemsIn(diags, s), Values: ss.inlineValues(uri, s.Values),
 			Location: map[string]any{"uri": uri, "range": toRange(lines, s.Start, s.End)},
+		}
+		if known {
+			if e, ok := parsed.Expression(s.Start); ok {
+				rule.Examples = ss.ruleExamples(key, e)
+			}
 		}
 		r := lineRange(lines, line)
 		for _, part := range inline.Line(rule) {

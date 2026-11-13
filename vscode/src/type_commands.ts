@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { OPEN_ENGINE_SETTING_LABEL, SHOW_LOGS_LABEL } from './button_labels';
-import { openCellens } from './cellens_editor';
+import { openBesideRule } from './cellens_editor';
 import type { ExampleEditors, ExampleNotes } from './example_editor';
 import { EXPERIMENTAL_SETTING } from './experimental';
 import { readInlineInfo } from './inline_info_setting';
@@ -42,7 +42,7 @@ function shownItem<T>(line: PickLine<T>): ShownItem<T> {
  * Lines still to come show the first ones at once, busy until the others are there. The filter
  * starts with what the request gives, and a step after another has a Back button to it.
  */
-function pick<T>(request: PickRequest<T>): Promise<Picked<T> | typeof BACK | undefined> {
+export function pick<T>(request: PickRequest<T>): Promise<Picked<T> | typeof BACK | undefined> {
   return new Promise((resolve) => {
     const quickPick = vscode.window.createQuickPick<ShownItem<T>>();
     const isActive = request.active;
@@ -114,7 +114,7 @@ export function typeUi(
 ): TypeUi {
   return {
     pick,
-    openCellens,
+    openCellens: openBesideRule,
     workspaceFolder(uri) {
       return vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(uri))?.uri.toString();
     },

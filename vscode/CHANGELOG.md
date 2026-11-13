@@ -6,6 +6,12 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Example results: what each rule of a CRD's `x-kubernetes-validations` does to the example objects of the workspace, with the engine running the API server's own validator. The engine shows a last part on the line above the rule (`3 examples pass`, or the wrong verdicts first, `refuses 1 example it should allow · 2 pass`); clicking it opens a picker titled after the rule's line, such as "Example results of the rule on line 16", that lists the examples that are not as expected first and then the others, each with its verdict, its file and line, and the API server's message. The picker opens at once and says the results are being computed until the engine answers; picking an example opens it at its line beside the rule (in the editor group that already shows it, if one does). A part whose rule changed since the line was drawn says so and asks for a click on its part again, and never shows another rule's results. With the setting off, the part says so and offers a button that turns it on. These need an engine that has them: the one this extension ships does not yet, so nothing shows until the engine it carries is updated.
+- The setting `cel-lens.exampleResults` (on by default, resource scope) and the command **cel-lens: Toggle Example Results** turn example results off and on, as for the inline info: the part, the hover's section, the warnings and the engine's check of the examples; open editors follow at once, without a reload. The status bar menu shows **Example results: on** or **off** and flips it. The toggle writes the scope that sets the value in force for the open file, or the user settings. A workspace folder that turns the results off loses the part of the line and gets the off message from the picker; the engine has one switch for the window, so the hover and the warnings stay while another folder has them on.
+- The README describes example results: how the examples are found, how one says it expects to be refused (a folder or a word of its file name, or `# cel-lens: refused "…"` or `# cel-lens: allowed`), updates, the line, the hover, the warnings and the toggle, with the pictures still to take marked. Dry runs stay under _Not supported yet_ for admission policies only.
+
 ## [0.36.0] - 2026-11-13
 
 ### Added

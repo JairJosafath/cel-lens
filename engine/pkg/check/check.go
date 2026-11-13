@@ -68,6 +68,12 @@ type Diagnostic struct {
 	// FixesTogether is true when the fixes solve the problem only all at once,
 	// and false when each of them does alone.
 	FixesTogether bool
+	// CostTotal is true for a problem that is, or includes, the estimated
+	// cost of all the rules of a CustomResourceDefinition schema together
+	// being over the budget of one schema: the API server then refuses the
+	// CustomResourceDefinition for its rules together, not for the one rule
+	// the diagnostic is placed on.
+	CostTotal bool
 }
 
 // Check finds the CEL expressions in data, a YAML file with any number of

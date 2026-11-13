@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // entry reads an entry of the value fields name, with the type typ, or the
@@ -480,7 +481,7 @@ func TestSetSchemaAndGo(t *testing.T) {
 	params := map[string]string{"file": "p.yaml", "document": "ValidatingAdmissionPolicy p", "variable": "params"}
 	withSchema := func(js string) cellens.Entry {
 		e := entry(t, params, "int", "")
-		s, problems := cellens.ReadSchema(t.Context(), []byte(js))
+		s, problems := cellens.ReadSchema(t.Context(), kubeversion.Default(), []byte(js))
 		if len(problems) > 0 {
 			t.Fatalf("ReadSchema(%s) problems = %v", js, problems)
 		}

@@ -35,6 +35,10 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // Problem is something the API server would refuse in a schema: Node is the
@@ -371,9 +375,14 @@ const wrapped = "spec.validation.openAPIV3Schema.properties[value]"
 // one whose schema has schema, read from node by Read, as the schema of a
 // field, and returns a problem for each of its errors, on the key of node
 // the error is about, or on node when it names none there. ctx is passed to
-// that validation, which uses it for the CEL of default values. An empty
-// result means the API server would take the schema.
-func Validate(ctx context.Context, node *yaml.Node, schema map[string]any) []Problem {
+// that validation, which uses it for the CEL of default values. It runs
+// under check.UnderVersion for the Kubernetes version v, as that
+// validation reads the version from a setting of the whole process: what
+// it says of a schema without rules is the same for every version, and the
+// language server passes the version it checks everything else for, so
+// the validation never waits for its checks. An empty result means the API
+// server would take the schema.
+func Validate(ctx context.Context, v kubeversion.Version, node *yaml.Node, schema map[string]any) []Problem {
 	props, err := internalSchema(schema)
 	if err != nil {
 		return []Problem{{Node: node, Message: err.Error()}}
@@ -394,8 +403,12 @@ func Validate(ctx context.Context, node *yaml.Node, schema map[string]any) []Pro
 		},
 		Status: apiextensions.CustomResourceDefinitionStatus{StoredVersions: []string{"v1"}},
 	}
+	var errs field.ErrorList
+	if err := check.UnderVersion(v, func() { errs = validation.ValidateCustomResourceDefinition(ctx, crd) }); err != nil {
+		return []Problem{{Node: node, Message: err.Error()}}
+	}
 	var out []Problem
-	for _, fe := range validation.ValidateCustomResourceDefinition(ctx, crd) {
+	for _, fe := range errs {
 		rest, ok := strings.CutPrefix(fe.Field, wrapped)
 		if !ok {
 			// Only an error of the whole schema has no place in it, such as

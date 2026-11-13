@@ -24,6 +24,7 @@ import {
 } from '../test/vscode';
 import { activate, deactivate } from './extension';
 import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
+import { SHOW_EXAMPLE_RESULTS_COMMAND, TOGGLE_EXAMPLE_RESULTS_COMMAND } from './example_results';
 import { TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
 import { LIST_VALUES_COMMAND, SHOW_RULE_COMMAND } from './rule_parts';
 import { GIVE_TYPE_COMMAND, GIVE_VALUE_TYPE_COMMAND, REMOVE_TYPE_COMMAND } from './value_types';
@@ -164,7 +165,14 @@ describe('activate', () => {
       expect(client.notifications).toEqual([
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '1.36', experimental: [], inlineInfo: true } },
+          params: {
+            settings: {
+              kubernetesVersion: '1.36',
+              experimental: [],
+              inlineInfo: true,
+              exampleResults: true,
+            },
+          },
         },
       ]);
     });
@@ -187,7 +195,12 @@ describe('activate', () => {
         {
           method: 'workspace/didChangeConfiguration',
           params: {
-            settings: { kubernetesVersion: '', experimental: ['kyverno'], inlineInfo: true },
+            settings: {
+              kubernetesVersion: '',
+              experimental: ['kyverno'],
+              inlineInfo: true,
+              exampleResults: true,
+            },
           },
         },
       ]);
@@ -209,7 +222,14 @@ describe('activate', () => {
       expect(client.notifications).toEqual([
         {
           method: 'workspace/didChangeConfiguration',
-          params: { settings: { kubernetesVersion: '', experimental: [], inlineInfo: false } },
+          params: {
+            settings: {
+              kubernetesVersion: '',
+              experimental: [],
+              inlineInfo: false,
+              exampleResults: true,
+            },
+          },
         },
       ]);
     });
@@ -242,6 +262,67 @@ describe('activate', () => {
     expect(settingUpdates).toEqual([
       { name: 'cel-lens.inlineInfo', value: false, target: ConfigurationTarget.Global },
     ]);
+  });
+
+  it('sends the example results setting to the running server when it changes', async () => {
+    settings.set('cel-lens.serverPath', process.execPath);
+    changeActiveEditor('yaml');
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    await vi.waitFor(() => {
+      expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
+    });
+
+    settings.set('cel-lens.exampleResults', false);
+    changeConfiguration('cel-lens.exampleResults');
+
+    await vi.waitFor(() => {
+      expect(client.notifications).toEqual([
+        {
+          method: 'workspace/didChangeConfiguration',
+          params: {
+            settings: {
+              kubernetesVersion: '',
+              experimental: [],
+              inlineInfo: true,
+              exampleResults: false,
+            },
+          },
+        },
+      ]);
+    });
+  });
+
+  it('turns example results off in the user settings from the toggle command', async () => {
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+
+    await runCommand(TOGGLE_EXAMPLE_RESULTS_COMMAND);
+
+    expect(settingUpdates).toEqual([
+      { name: 'cel-lens.exampleResults', value: false, target: ConfigurationTarget.Global },
+    ]);
+  });
+
+  it('asks the engine for the results of the rule when the part of its line runs, and shows them in a picker', async () => {
+    settings.set('cel-lens.serverPath', process.execPath);
+    changeActiveEditor('yaml');
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    await vi.waitFor(() => {
+      expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
+    });
+    const rule = {
+      uri: 'file:///workspace/crd.yaml',
+      range: { start: { line: 15, character: 30 }, end: { line: 15, character: 52 } },
+    };
+
+    await runCommand(SHOW_EXAMPLE_RESULTS_COMMAND, rule);
+
+    expect(client.requests).toEqual([
+      {
+        method: 'workspace/executeCommand',
+        params: { command: 'cel-lens.exampleResults', arguments: [rule] },
+      },
+    ]);
+    expect(quickPicks.created).toMatchObject([{ title: 'Example results of the rule on line 16' }]);
   });
 
   it('contributes the experimental setting as an empty list of the three known names', () => {
@@ -351,7 +432,11 @@ describe('activate', () => {
     const subscriptions: vscode.Disposable[] = [];
     activate({ subscriptions, extensionPath: '/ext', globalState: memento() });
     expect(await commands.getCommands()).toEqual(
-      expect.arrayContaining([SHOW_RULE_COMMAND, LIST_VALUES_COMMAND]),
+      expect.arrayContaining([
+        SHOW_RULE_COMMAND,
+        LIST_VALUES_COMMAND,
+        SHOW_EXAMPLE_RESULTS_COMMAND,
+      ]),
     );
 
     for (const subscription of subscriptions) {

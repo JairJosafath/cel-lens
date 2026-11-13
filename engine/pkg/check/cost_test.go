@@ -171,6 +171,9 @@ func TestCostTotal(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("Check(%s) = %d diagnostics, want 1: %v", tt.file, len(got), got)
 			}
+			if !got[0].CostTotal {
+				t.Errorf("Check(%s)[0].CostTotal = false, want true for the total", tt.file)
+			}
 			for _, want := range tt.wants {
 				if !strings.Contains(got[0].Message, want) {
 					t.Errorf("Check(%s) = %q, want it to contain %q", tt.file, got[0].Message, want)
