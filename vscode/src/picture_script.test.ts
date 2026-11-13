@@ -212,6 +212,7 @@ describe('the picture script', () => {
     expect(SOURCE).not.toMatch(/the page to be captured/);
     const files = [...SOURCE.matchAll(/screenshotPage\(page, '([^']+)'\)/g)].map((m) => m[1]);
     expect(files).toEqual([
+      'inline-info.png',
       'problems.png',
       'quick-fix.png',
       'hover.png',
@@ -262,7 +263,7 @@ describe('the picture script', () => {
 
   it('waits for the quick input to close after the go-to-line Enter, before the engine', () => {
     expect(SOURCE).toMatch(
-      /type\('31'\);\s+await page\.keyboard\.press\('Enter'\);\s+await waitForQuickInputClosed\(page\);\s+await waitForEngine\(page\);/,
+      /type\('28'\);\s+await page\.keyboard\.press\('Enter'\);\s+await waitForQuickInputClosed\(page\);\s+await waitForEngine\(page\);/,
     );
   });
 
@@ -270,9 +271,10 @@ describe('the picture script', () => {
     expect(SOURCE).not.toMatch(/waitForEditorLineCount|countEditorLines/);
   });
 
-  it('waits after the undos for the last rule by the cursor line, not by a count', () => {
+  it('waits after discarding what the completion typed for the last rule by the cursor line, not by a count', () => {
+    expect(SOURCE).not.toMatch(/Control\+z/);
     expect(SOURCE).toMatch(
-      /Control\+z[\s\S]*?moveToLastRule\(page\);\s+await waitForCursorLineIs\(page, lastRuleBefore\);/,
+      /startPicture\(page, CRD\);\s+await moveToLastRule\(page\);\s+await waitForCursorLineIs\(page, lastRuleBefore\);/,
     );
   });
 
@@ -361,6 +363,81 @@ describe('the picture script', () => {
     expect(body).toMatch(/widgetShown\.toString\(\)/);
     expect(body).toMatch(/\.lightBulbWidget/);
     expect(body).toMatch(/the light bulb to be fully shown on the cursor line/);
+  });
+});
+
+describe('the settings of the pictures', () => {
+  it.each([
+    [
+      'sticky scroll off, so no line of a picture is cut in half under its header',
+      'editor.stickyScroll.enabled',
+    ],
+    ['the highlight of the word the cursor was on off', 'editor.occurrencesHighlight'],
+  ])('turn %s: %s', (_name, setting) => {
+    const settings = SOURCE.slice(
+      SOURCE.indexOf('const SETTINGS = {'),
+      SOURCE.indexOf('\n};', SOURCE.indexOf('const SETTINGS = {')),
+    );
+    expect(settings).toMatch(new RegExp(`'${setting.replaceAll('.', '\\.')}': (false|'off')`));
+  });
+});
+
+describe('the pictures start clean', () => {
+  it.each([
+    'inline-info.png',
+    'problems.png',
+    'completion.gif',
+    'colors.gif',
+    'colors.png',
+    'give-type.gif',
+  ])('checks that %s starts from a clean editor, and fails naming it when it does not', (name) => {
+    expect(SOURCE).toContain(`expectCleanStart(page, '${name}', {`);
+    const start = SOURCE.indexOf('async function expectCleanStart(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toMatch(/`\$\{picture\} to start from a clean editor: /);
+  });
+
+  it('checks one tab, nothing unsaved, the problem count of the status bar and no notification', () => {
+    const start = SOURCE.indexOf('async function expectCleanStart(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toContain(".tab').length === 1");
+    expect(body).toContain(".tab.dirty').length === 0");
+    expect(body).toContain('.notifications-toasts.visible');
+    expect(body).toContain('problemCountExpression(problems)');
+    expect(SOURCE).toContain("getElementById('status.problems')");
+  });
+
+  it.each([
+    'inline-info.png',
+    'give-type.gif',
+    'colors.png',
+    'problems.png',
+    'completion.gif',
+    'colors.gif',
+  ])(
+    'checks that no line of %s is cut by an edge of the editor, and fails naming it when one is',
+    (name) => {
+      expect(SOURCE).toMatch(
+        new RegExp(`(scrollToEnd|showWholeLines)\\(page, '${name.replace('.', '\\.')}'\\)`),
+      );
+    },
+  );
+
+  it('measures the cut of the first and last visible lines, and of the lines above the rules', () => {
+    const start = SOURCE.indexOf('const CUT_LINES = ');
+    const body = SOURCE.slice(start, SOURCE.indexOf('})()`;', start));
+    expect(body).toContain('.view-line');
+    expect(body).toContain('.codelens-decoration');
+    expect(body).toContain('area.top - box.top');
+    expect(body).toContain('box.bottom - area.bottom');
+  });
+
+  it('starts each picture group from startPicture, which closes every editor and discards what is unsaved', () => {
+    const start = SOURCE.indexOf('async function closeAllEditors(');
+    const body = SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    expect(body).toContain("Don't Save");
+    expect(SOURCE.match(/startPicture\(page, /g)?.length).toBeGreaterThanOrEqual(5);
+    expect(SOURCE).not.toMatch(/await openFile\(page, (CRD|POLICY|PARAMS_POLICY)\)/);
   });
 });
 

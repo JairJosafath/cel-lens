@@ -13,6 +13,8 @@ import {
 const README = readFileSync('README.md', 'utf8');
 const IMAGE_BASE = 'https://raw.githubusercontent.com/JairJosafath/cel-lens/main/vscode/images/';
 const PICTURES = [
+  'inline-info.png',
+  'give-type.gif',
   'colors.gif',
   'completion.gif',
   'problems.png',
@@ -132,7 +134,7 @@ describe('README.md as the store page', () => {
     expect(row).not.toContain('logs each skipped file');
   });
 
-  it('links the two GIFs, then the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
+  it('links the picture of the line above the rules and the GIF of Give it a type first, then the two GIFs and the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(PICTURES.map((name) => IMAGE_BASE + name));
     expect(images.every((image) => image.alt.length > 0)).toBe(true);
@@ -143,27 +145,33 @@ describe('README.md as the store page', () => {
     expect(lines).toHaveLength(PICTURES.length + readmePicturePlaceholders(section).length);
   });
 
-  it('names the picture of the line above each rule in a placeholder for a person to take, with its line', () => {
+  it('shows the line above the rules of a policy with a dyn value first, with its line', () => {
     const section = readmeSection(README, 'What it looks like') ?? '';
-    expect(readmePicturePlaceholders(section)).toEqual([
-      'images/inline-info.png',
-      'images/give-type.png',
-    ]);
-    const [placeholder, , line] = section.trimStart().split('\n');
-    expect(placeholder).toMatch(/^<!-- Picture to take: images\/inline-info\.png, .+ -->$/);
+    const [picture, , line] = section.trimStart().split('\n');
+    expect(picture).toMatch(
+      /^!\[The line above each CEL rule of a ValidatingAdmissionPolicy: .*params as dyn with Give it a type\]\(.+\/inline-info\.png\)$/,
+    );
     expect(line).toContain('cel-lens: Toggle Inline Info');
     expect(line).toContain(
       'a part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule',
     );
   });
 
-  it('names the picture of the type picker in a placeholder for a person to take, with its line', () => {
+  it('shows Give it a type from an example of the workspace next, with its line', () => {
     const lines = (readmeSection(README, 'What it looks like') ?? '').trimStart().split('\n');
-    const [placeholder, , line] = lines.slice(4);
-    expect(placeholder).toMatch(
-      /^<!-- Picture to take: images\/give-type\.png, the picker titled `Give params a type`.+`Write a schema in \.cellens…`, `Use a Go type…` and `Write a short type in \.cellens…` first.+ -->$/,
+    const [picture, , line] = lines.slice(4);
+    expect(picture).toMatch(
+      /^!\[Give it a type: .*an example of the workspace picked.*the line showing the type it gave params\]\(.+\/give-type\.gif\)$/,
     );
     expect(line).toContain('**Give it a type**');
+  });
+
+  it('names no picture to take in the first section, and none of the line above a rule or the picker anywhere', () => {
+    expect(readmePicturePlaceholders(readmeSection(README, 'What it looks like') ?? '')).toEqual(
+      [],
+    );
+    expect(readmePicturePlaceholders(README)).not.toContain('images/inline-info.png');
+    expect(readmePicturePlaceholders(README)).not.toContain('images/give-type.png');
   });
 
   it.each([
@@ -178,7 +186,6 @@ describe('README.md as the store page', () => {
     'A schema, a short type, a Go type or a kind would not fit it',
     'of the workspace folder of the `.cellens`',
     'its **Back** button returns to the first',
-    'with a button to `cel-lens.serverPath`',
     'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; when the engine writes another `.cellens`, nothing is saved',
     '**Edit** opens the same picker on what the value has',
     'open `.cellens` at its entry',
@@ -247,6 +254,13 @@ describe('README.md as the store page', () => {
   ])('says how to give a type from an example: %s', (text) => {
     const example = (readmeSection(README, 'Give a value a type') ?? '').split('### An example')[1];
     expect(example?.split('### A kind')[0]).toContain(text);
+  });
+
+  it('tells nobody to set cel-lens.serverPath, or that an engine is too old, to give a value a type', () => {
+    const section = readmeSection(README, 'Give a value a type') ?? '';
+    expect(section).not.toContain('serverPath');
+    expect(section).not.toContain('too old');
+    expect(README).not.toMatch(/too old/);
   });
 
   it('says where the palette shows the commands, as their when clauses in package.json do', () => {

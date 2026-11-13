@@ -112,75 +112,147 @@ describe('CHANGELOG.md', () => {
     expect(engineVersions(text)).toEqual(found);
   });
 
-  it('has an Unreleased section and a released version for every section', () => {
+  it('has an Unreleased section, empty, and a released version for every other section', () => {
     expect(sections[0]?.version).toBe('Unreleased');
+    expect(sections[0]?.kinds).toEqual([]);
     expect(sections.length).toBeGreaterThan(1);
   });
 
-  /** The part of the Unreleased section under the heading of `kind`. */
-  function unreleasedPart(kind: string): string | undefined {
-    const unreleased = CHANGELOG.split(/^(?=## \[)/m)[1] ?? '';
-    return unreleased.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
+  const RELEASE = '0.36.0';
+  const release =
+    CHANGELOG.split(/^(?=## \[)/m).find((text) => text.startsWith(`## [${RELEASE}]`)) ?? '';
+
+  /** The part of the section of the release under the heading of `kind`. */
+  function releasePart(kind: string): string | undefined {
+    return release.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
   }
+
+  it('has the notes of 0.36.0 under its heading with the date of its preparation', () => {
+    expect(release).toMatch(/^## \[0\.36\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(CHANGELOG.indexOf('## [0.36.0]')).toBe(
+      CHANGELOG.indexOf('## [Unreleased]') + '## [Unreleased]\n\n'.length,
+    );
+    const version = (
+      JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
+    ).version;
+    expect(version).toBe(RELEASE);
+  });
+
+  it('lists the kinds of the release in order: Added, Changed, Fixed, Security', () => {
+    expect(sections.find(({ version }) => version === RELEASE)?.kinds).toEqual([
+      'Added',
+      'Changed',
+      'Fixed',
+      'Security',
+    ]);
+  });
+
+  it('says nothing twice: no entry, and no sentence of some length, is repeated', () => {
+    const entries = release.split('\n').filter((line) => line.startsWith('- '));
+    expect(new Set(entries).size).toBe(entries.length);
+    const sentences = entries.flatMap((entry) =>
+      entry
+        .slice(2)
+        .split(/(?<=[.:;])\s+/)
+        .filter((sentence) => sentence.length > 60),
+    );
+    expect(sentences.filter((sentence, at) => sentences.indexOf(sentence) !== at)).toEqual([]);
+  });
+
+  it('describes nothing added and then changed in this release as two things: the line above a rule and Give it a type are Added only', () => {
+    expect(releasePart('Changed')).not.toContain('Give it a type');
+    expect(releasePart('Changed')).not.toContain('inlineInfo');
+    expect(releasePart('Fixed')).not.toContain('Give it a type');
+  });
 
   it.each([
     '`cel-lens.inlineInfo`',
     '**cel-lens: Toggle Inline Info**',
+    '**+N more**',
+    '`self: Widget.spec · compiles`',
+    "the problems peek at the rule's first problem",
+    '`.cellens`, a file that says what a value is where Kubernetes gives it no type',
+    '`go: ./api/v1#QuotaSpec`',
+    '`kind: apps/v1 Deployment`',
     '**Give it a type**',
     '**Write a schema in .cellens…** (OpenAPI), **Use a Go type…** and **Write a short type in .cellens…** first',
     'open `.cellens` beside the rule',
     'in the editor group that already shows it',
-    "with the engine's completion, hover and problems",
     'each with its folder and doc comment',
     'A Go type or a kind is written at once',
-    'the Go struct types of the workspace folder of the `.cellens`',
     'has a **Back** button to it',
     'A value of a CRD is offered `int` and `string` only',
-    'says so once, with a button to `cel-lens.serverPath`',
-    'where the two lines that write in `.cellens` open it at the entry',
+    '**Edit** opens the same picker on what the value has',
     '**Remove** removes the entry at once',
+    '**Undo** there takes a change back',
     '**cel-lens: Give a Value a Type…**',
-    'how to give a type in each form',
     '**Give it a type** can take an example',
     'Under **Examples in the workspace**',
     '`config/samples/limit.yaml` with `rules.example.com/v1 ReplicaLimit` and the line it starts at',
     '**Paste an example…** opens an editor beside the rule, named after the value (such as **Example of params.yaml**) and kept in memory, so closing it never asks to save',
     '**Use this example as the type** above it and in its editor title',
     '**cel-lens: Use This Example as the Type** in the Command Palette, on that editor only',
-    "writes it as the value's `schema:`, and `.cellens` opens beside the rule at the entry",
     'shows once as an information problem at its key in `.cellens`',
-    'Using a pasted example closes its editor; closing it writes nothing, even while the engine works on it, and a window reload closes the examples of the window before',
-    "A whole resource of the value's kind pasted for a value inside it, such as a ReplicaLimit for `params.spec.config`, gives the schema of that value, also from a YAML list of resources",
+    'values that disagree are merged as Kubernetes accepts both, or left without a type with a note naming the field and the kinds',
+    "A schema is checked as the API server checks a CRD's",
+    'A Go type is read from the files of its package without building or running anything',
+    'a window reload closes the examples of the window before',
+    "A whole resource of the value's kind pasted for a value inside it",
     'a resource of another kind, such as an object reference, is the value itself',
-    "which the engine tells from the value's kinds and says in a note; when it does not know them, a paste with `apiVersion` and `kind` at its root is read as a resource",
-    'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; nothing is saved when the engine writes another `.cellens`',
-    'An engine too old to work out a type from an example says so, whenever the example is used',
     'An example over 1 MiB, the most the engine reads, is refused before anything reads it',
-    'A part whose type comes from `.cellens`, such as `variables.limit: int`, opens that entry beside the rule, selected',
-  ])('names %s under Added in the Unreleased section', (text) => {
-    expect(unreleasedPart('Added')).toContain(text);
+    'is saved when the `.cellens` the line names had no unsaved edits and nothing but that write changed it; nothing is saved when the engine writes another `.cellens`',
+  ])('names %s under Added in the notes of 0.36.0', (text) => {
+    expect(releasePart('Added')).toContain(text);
   });
 
   it.each(['input box', 'Write a struct…', 'Pick a kind…', 'untitled', 'Use the whole'])(
-    'names no %s, which no release had, in the Unreleased section',
+    'names no %s, which no release had, in the notes of 0.36.0',
     (text) => {
-      expect(unreleasedPart('Added')).not.toContain(text);
+      expect(releasePart('Added')).not.toContain(text);
     },
   );
 
+  it('tells nobody under Added to set cel-lens.serverPath, or that an engine is too old, to get Give it a type', () => {
+    expect(releasePart('Added')).not.toContain('serverPath');
+    expect(releasePart('Added')).not.toContain('too old');
+  });
+
   it.each([
+    'The extension ships `cel-lens-core` v0.28.0',
+    'with nothing to set in `cel-lens.serverPath`',
+    'types `object` and `oldObject` of a Kyverno ValidatingPolicy from a workspace CRD, with `kyverno` and `crd-typed-policies` on',
+    'its hover says `crd-typed-policies` is off when a workspace CRD would type `object`',
+    'every other picture is retaken with the v0.28.0 engine',
     'take the minor and patch updates Dependabot proposed',
     '`@vscode/vsce` 4.1.0, eslint 10.14.0, playwright 1.65.0, prettier 3.9.10, tinybench 6.2.3, typescript-eslint 8.72.1, vitest 5.1.0 and `vscode-languageserver-protocol` 3.18.5',
     '`@types/vscode` stays 1.100.0, the VS Code that `engines.vscode` asks for',
     'None of them is part of the extension',
-    'pin `github/codeql-action` v4.39.3, `actions/checkout` v7.0.1, `actions/setup-go` v7.0.0 and `actions/setup-node` v7.1.0, each at the commit of its release',
-    'Its Dependabot configuration no longer proposes `@types/vscode`, which moves by hand with `engines.vscode`',
-    "nor a major of `@types/node`, which moves by hand with the Node of VS Code's extension host",
-  ])('names %s under Changed in the Unreleased section', (text) => {
-    expect(unreleasedPart('Changed')).toContain(text);
+  ])('names %s under Changed in the notes of 0.36.0', (text) => {
+    expect(releasePart('Changed')).toContain(text);
   });
 
   it.each([
+    '`object.spec.replicaz` for a Deployment',
+    "says it is cel-lens's own check",
+    'Hover said such a variable does not compile and nothing said why',
+    'read only regular files of at most 1 MiB inside the workspace folder',
+    'a symbolic link to `/dev/zero`, to a pipe, out of the folder or to a bigger file is skipped, where before it could hold the engine or fill its memory',
+    "is published once, when the scan of that folder ends, with that folder's CRDs",
+    'Repeated notifications of created folders keep the progress of the scan they start',
+  ])('names %s under Fixed in the notes of 0.36.0', (text) => {
+    expect(releasePart('Fixed')).toContain(text);
+  });
+
+  it.each([
+    'The bundled engine is built with Go 1.26.11 and newer modules',
+    'which is what a vulnerability scanner of the `.vsix` sees',
+    'GO-2026-6599',
+    'GO-2026-6866 in `golang.org/x/net`',
+    'GO-2026-5932 in `golang.org/x/crypto`',
+    "GO-2026-6505 in OpenTelemetry's SDK and trace exporters",
+    'GO-2026-6865 in `github.com/klauspost/compress`',
+    'GO-2025-3615, GO-2026-5337 and GO-2026-5594, do not apply',
+    'what the engine reports does not change',
     'Vite 8.3.7 replaces 8.3.2',
     'qs 6.17.1 replaces 6.16.0',
     '`@azure/msal-node` 7.2.1 (with `@azure/identity` 4.14.1) replaces 6.0.1',
@@ -199,33 +271,22 @@ describe('CHANGELOG.md', () => {
     "a denial of service through a glob pattern an attacker chooses, and the client matches only the extension's own patterns and the ones the engine registers",
     '`osv-scanner.toml` ignores it for that copy until 2027-03-01',
     '`npm audit` still reports it, as 2 moderate vulnerabilities',
-    'The front page of JairJosafath/cel-lens (`public-repo/`) gains a CodeQL workflow',
-    "analyses the engine's Go, the extension's JavaScript and TypeScript, and the workflows on every push to `main`, on every pull request and every week",
-    "a Dependabot configuration, which proposes updates every week for the engine's Go modules, the extension's npm packages and the GitHub Actions",
-    'the minor and patch updates of each in one pull request and each major update in its own',
-    'a `govulncheck` job in CI, with the Go version of `engine/go.mod`, which fails on a call into code with a known vulnerability that `engine/osv-scanner.toml` does not leave aside',
-    'govulncheck has no ignore list, and an advisory without symbols marks every call into its module, so a script reads its JSON output against that file',
-    "the bump is made in the maintainers' source, the next published release carries it, and the pull request is not merged on GitHub",
-    'Its `SECURITY.md` says how the code and its dependencies are watched',
-    'The files of each release of JairJosafath/cel-lens get a signature',
-    'gains a `sign-release.yml` workflow, which runs when a release is published, and by hand with a `tag` for the releases already out',
-    "signs each with Sigstore under the workflow's own identity, so there is no key to keep, verifies each signature it made, and uploads them beside the files, each named after its file with `.sigstore.json` after it",
-    'A second run replaces the signatures and signs none of them, and a release without a file to sign fails the run',
-    'So does a run by hand from a branch other than `main`: the command in its `SECURITY.md` accepts a signature made from `main` or from a tag only',
-    'Its `SECURITY.md` gains "Verifying a release": the `cosign verify-blob` command for a downloaded file',
-    "the file is the one the repository's workflow saw when it signed it, not how the file was built",
-    'Its README points there from Install',
-    'A release of JairJosafath/cel-lens is built and published by the repository itself, and its files carry build provenance',
-    'gains a `release.yml` workflow, run by hand from `main` with the part (`engine` or `vscode`) and the version, and always releases the head of `main`, the commit the run started at; it takes no commit',
-    'It stops before it builds anything, saying what to do',
-    "It builds the files with the part's own `make dist`, attests their build provenance, keeps the release a draft until it has every file, creates the two tags in one push",
-    "publishes the release with the provenance as `provenance.intoto.jsonl` and the version's changelog section as its notes, the extension's as latest, then starts `sign-release.yml` for the release and waits for it",
-    '`sign-release.yml` signs no provenance file',
-    'A run that fails is finished by re-running its failed jobs, or by a new run with the same inputs when the tags exist at its commit and the release is not published',
-    "Its `SECURITY.md` gains the `gh attestation verify` command for a downloaded file and what provenance proves that a signature does not: that a run of the repository's `release.yml` built the file, and which run",
-    'Its `CONTRIBUTING.md` says how a release is made',
-  ])('names %s under Security in the Unreleased section', (text) => {
-    expect(unreleasedPart('Security')).toContain(text);
+    'The files of a release can be checked',
+    "signed with Sigstore by the repository's own `sign-release.yml` workflow, under the workflow's own identity, so there is no key to keep",
+    'a signature made from a branch other than `main` is refused by the command',
+    "a release is built and published by the repository's own `release.yml` workflow, and its files carry build provenance in `provenance.intoto.jsonl`",
+    '"Verifying a release"',
+    'the `cosign verify-blob` command for a signature',
+    "the file is the one the repository's workflow saw when it signed it and not how it was built",
+    'the `gh attestation verify` command for the provenance',
+    'a run of `release.yml` built the file, and which run',
+    "CodeQL analyses the engine's Go, the extension's JavaScript and TypeScript and the workflows on every push to `main`, every pull request and every week",
+    "Dependabot proposes updates every week for the engine's Go modules, the extension's npm packages and the GitHub Actions",
+    "its pull request is not merged on GitHub, as the bump is made in the maintainers' source and the next published release carries it",
+    '`github/codeql-action` v4.39.3, `actions/checkout` v7.0.1, `actions/setup-go` v7.0.0 and `actions/setup-node` v7.1.0, each at the commit of its release',
+    'a `govulncheck` job in CI fails on a call into code with a known vulnerability that `engine/osv-scanner.toml` does not leave aside',
+  ])('names %s under Security in the notes of 0.36.0', (text) => {
+    expect(releasePart('Security')).toContain(text);
   });
 
   it.each(

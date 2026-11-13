@@ -3,7 +3,7 @@
 // stand-in. A test that gets no answer fails when vitest's time limit passes
 // (vitest.e2e.config.mts); an engine that exits fails it at once, with its error output.
 import type { ChildProcess } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -27,8 +27,10 @@ import {
   type CompletionItem,
   type CompletionList,
   type Diagnostic,
+  type CodeLens,
   type Registration,
   type Hover,
+  type WorkspaceEdit,
   type ProtocolConnection,
 } from 'vscode-languageserver-protocol/node';
 
@@ -102,6 +104,47 @@ interface SessionOptions {
   /** Tells the engine the client registers file watchers. */
   readonly dynamicRegistration?: boolean;
   readonly experimental?: readonly string[];
+  /** Whether the engine draws the line above each rule: the extension's `cel-lens.inlineInfo`. */
+  readonly inlineInfo?: boolean;
+  /** Tells the engine the client applies the edits that write `.cellens`, and applies them to disk. */
+  readonly writesCellens?: boolean;
+}
+
+/** The offset in `text` of an LSP position (characters count UTF-16 code units, as JavaScript's do). */
+function offsetOf(text: string, position: { line: number; character: number }): number {
+  let offset = 0;
+  for (let line = 0; line < position.line; line += 1) {
+    offset = text.indexOf('\n', offset) + 1;
+  }
+  return offset + position.character;
+}
+
+/**
+ * Applies what the engine asks of the editor to write `.cellens`: create the file, and change
+ * its text. A test never changes two ranges that touch, so applying them last to first is enough.
+ */
+async function applyEditToDisk(edit: WorkspaceEdit): Promise<void> {
+  for (const change of edit.documentChanges ?? []) {
+    if ('kind' in change) {
+      if (change.kind !== 'create') {
+        throw new Error(`The engine asked for a ${change.kind}, which the test does not apply.`);
+      }
+      await writeFile(fileURLToPath(change.uri), '');
+      continue;
+    }
+    const path = fileURLToPath(change.textDocument.uri);
+    let text = await readFile(path, 'utf8');
+    const edits = change.edits.flatMap((each) => ('newText' in each ? [each] : []));
+    for (const { range, newText } of edits.sort(
+      (a, b) => offsetOf(text, b.range.start) - offsetOf(text, a.range.start),
+    )) {
+      text =
+        text.slice(0, offsetOf(text, range.start)) +
+        newText +
+        text.slice(offsetOf(text, range.end));
+    }
+    await writeFile(path, text);
+  }
 }
 
 /** Starts the engine as the extension does and initializes a session. */
@@ -145,6 +188,12 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
   connection.onRequest(RegistrationRequest.type, (params) => {
     registrations.push(...params.registrations);
   });
+  if (options.writesCellens) {
+    connection.onRequest('workspace/applyEdit', async (params: { edit: WorkspaceEdit }) => {
+      await applyEditToDisk(params.edit);
+      return { applied: true };
+    });
+  }
   connection.listen();
   const initialized = await Promise.race([
     connection.sendRequest(InitializeRequest.type, {
@@ -155,10 +204,21 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
         options.folder === undefined
           ? null
           : [{ uri: pathToFileURL(options.folder).href, name: 'workspace' }],
-      capabilities: options.dynamicRegistration
-        ? { workspace: { didChangeWatchedFiles: { dynamicRegistration: true } } }
-        : {},
-      initializationOptions: serverOptions('', undefined, options.experimental),
+      capabilities: {
+        workspace: {
+          ...(options.dynamicRegistration && {
+            didChangeWatchedFiles: { dynamicRegistration: true },
+          }),
+          ...(options.writesCellens && {
+            applyEdit: true,
+            workspaceEdit: { documentChanges: true, resourceOperations: ['create'] },
+          }),
+        },
+      },
+      initializationOptions: {
+        ...serverOptions('', undefined, options.experimental),
+        inlineInfo: options.inlineInfo ?? true,
+      },
     }),
     exited,
   ]);
@@ -206,6 +266,39 @@ async function open(name: string): Promise<{ uri: string; text: string }> {
     textDocument: { uri, languageId: 'yaml', version: 1, text },
   });
   return { uri, text };
+}
+
+/** The lines above the rules of an open document, as VS Code shows them: the title and the command of each. */
+async function lensesOf(uri: string): Promise<{ title: string; command: string }[]> {
+  const found = await running().connection.sendRequest<CodeLens[] | null>('textDocument/codeLens', {
+    textDocument: { uri },
+  });
+  return (found ?? []).flatMap((lens) =>
+    lens.command === undefined
+      ? []
+      : [{ title: lens.command.title, command: lens.command.command }],
+  );
+}
+
+/** What the engine answers `cel-lens.<name>` with, for the argument of a line above a rule. */
+async function runCommand(command: string, argument: unknown): Promise<unknown> {
+  return running().connection.sendRequest('workspace/executeCommand', {
+    command,
+    arguments: [argument],
+  });
+}
+
+/** The argument of the part of the line above a rule that runs `command`, such as `cel-lens.giveType`. */
+async function lensArgument(uri: string, command: string): Promise<Record<string, unknown>> {
+  const found = await running().connection.sendRequest<CodeLens[] | null>('textDocument/codeLens', {
+    textDocument: { uri },
+  });
+  const argument: unknown = found?.find((lens) => lens.command?.command === command)?.command
+    ?.arguments?.[0];
+  if (typeof argument !== 'object' || argument === null) {
+    throw new Error(`No line above a rule has a part that runs ${command}.`);
+  }
+  return { ...argument };
 }
 
 beforeAll(async () => {
@@ -262,6 +355,45 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
 
     expect(running().defaultVersion).toBeDefined();
     expect(stated).toBe(running().defaultVersion);
+  });
+
+  it('draws the line above each rule: what self is, and that the rule compiles', async () => {
+    const { uri } = await open('valid_crd.yaml');
+    await diagnosticsFor(uri, () => true);
+
+    expect(await lensesOf(uri)).toEqual([
+      { title: 'self: Widget.spec · compiles', command: 'cel-lens.showRule' },
+    ]);
+  });
+
+  it('draws, above a rule that reads a value of a custom paramKind, a Give it a type for the dyn value', async () => {
+    const { uri } = await open('replica_policy.yaml');
+    await diagnosticsFor(uri, () => true);
+
+    expect(await lensesOf(uri)).toEqual([
+      { title: 'object: apps/v1 Deployment · compiles', command: 'cel-lens.showRule' },
+      { title: 'params: dyn · Give it a type', command: 'cel-lens.giveType' },
+    ]);
+  });
+
+  it('draws no line above a rule while inlineInfo is off, and draws them again when it is on', async () => {
+    const quiet = await startEngine(await checkedExtensionPath(), { inlineInfo: false });
+    const shared = engine;
+    engine = quiet;
+    try {
+      const { uri } = await open('replica_policy.yaml');
+      await diagnosticsFor(uri, () => true);
+      expect(await lensesOf(uri)).toEqual([]);
+
+      await quiet.connection.sendNotification(DidChangeConfigurationNotification.type, {
+        settings: { ...serverOptions('', undefined, []), inlineInfo: true },
+      });
+
+      expect(await lensesOf(uri)).toHaveLength(2);
+    } finally {
+      await stopEngine(quiet);
+      engine = shared;
+    }
   });
 
   it('shows a cel-lens error on a broken x-kubernetes-validations rule', async () => {
@@ -405,6 +537,8 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
       expect(watched?.registerOptions).toMatchObject({
         watchers: [
           { globPattern: '**/*.{yaml,yml}' },
+          { globPattern: '**/.cellens' },
+          { globPattern: '**/*.go' },
           { globPattern: '**', kind: CREATE_DELETE_WATCH_KIND },
         ],
       });
@@ -415,6 +549,92 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
       });
 
       expect(await diagnosticsFor(uri, (list) => list.length === 0)).toEqual([]);
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the dyn value a type from an example of the workspace, and the line above the rule shows it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    await mkdir(join(root, 'config/samples'), { recursive: true });
+    await copyFile(join(FIXTURES, 'replica_policy.yaml'), join(root, 'policy.yaml'));
+    await copyFile(
+      join(FIXTURES, 'replica_limit_sample.yaml'),
+      join(root, 'config/samples/limit.yaml'),
+    );
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      dynamicRegistration: true,
+      writesCellens: true,
+    });
+    const shared = engine;
+    engine = session;
+    try {
+      const uri = pathToFileURL(join(root, 'policy.yaml')).href;
+      const text = await readFile(join(root, 'policy.yaml'), 'utf8');
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+      await diagnosticsFor(uri, () => true);
+      const value = await lensArgument(uri, 'cel-lens.giveType');
+      expect(value).toMatchObject({ variable: 'params', file: 'policy.yaml' });
+
+      // The picker lists the example under the value's kind ...
+      const choices = await runCommand('cel-lens.typeChoices', value);
+      expect(choices).toMatchObject({
+        examples: [
+          {
+            file: 'config/samples/limit.yaml',
+            line: 1,
+            apiVersion: 'rules.example.com/v1',
+            kind: 'ReplicaLimit',
+          },
+        ],
+      });
+      expect(choices).toHaveProperty('goTypes');
+      expect(choices).toHaveProperty('builtIn');
+
+      // ... the engine works a schema out of it ...
+      const sample = await readFile(join(root, 'config/samples/limit.yaml'), 'utf8');
+      const inferred = await runCommand('cel-lens.inferType', { text: sample, line: 1 });
+      expect(inferred).toMatchObject({
+        schema: { type: 'object', properties: { maxReplicas: { type: 'integer' } } },
+      });
+
+      // ... and writes it as the value's entry in a new .cellens.
+      const schema = (inferred as { schema: unknown }).schema;
+      const written = await runCommand('cel-lens.setType', { ...value, schema });
+      expect(written).toMatchObject({ change: 'created' });
+      expect(await readFile(join(root, '.cellens'), 'utf8')).toContain('maxReplicas:');
+      await session.connection.sendNotification(DidChangeWatchedFilesNotification.type, {
+        changes: [
+          { uri: pathToFileURL(join(root, '.cellens')).href, type: FileChangeType.Created },
+        ],
+      });
+
+      const typed = await lensesOf(uri);
+      expect(typed).toEqual([
+        { title: 'object: apps/v1 Deployment · compiles', command: 'cel-lens.showRule' },
+        { title: 'params: {apiVersion, …} · Edit', command: 'cel-lens.editType' },
+        { title: 'Remove', command: 'cel-lens.removeType' },
+      ]);
+
+      // Remove takes the entry out, and the line asks to give the value a type again.
+      const editValue = await lensArgument(uri, 'cel-lens.removeType');
+      expect(await runCommand('cel-lens.removeType', editValue)).toMatchObject({
+        cellens: pathToFileURL(join(root, '.cellens')).href,
+      });
+      expect(await readFile(join(root, '.cellens'), 'utf8')).not.toContain('maxReplicas');
+      await session.connection.sendNotification(DidChangeWatchedFilesNotification.type, {
+        changes: [
+          { uri: pathToFileURL(join(root, '.cellens')).href, type: FileChangeType.Changed },
+        ],
+      });
+      expect((await lensesOf(uri)).map((lens) => lens.title)).toContain(
+        'params: dyn · Give it a type',
+      );
     } finally {
       await stopEngine(session);
       engine = shared;
