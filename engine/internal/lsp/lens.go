@@ -84,7 +84,7 @@ func (ss *session) putLens(ctx context.Context, uri string, text []byte, open bo
 		return false
 	}
 	entries, problems := cellens.Parse(text)
-	entries, refused := cellens.CheckSchemas(ctx, entries)
+	entries, refused := cellens.CheckSchemas(ctx, ss.kube, entries)
 	if len(refused) > 0 {
 		problems = append(problems, refused...)
 		slices.SortStableFunc(problems, func(a, b cellens.Problem) int { return cmp.Or(a.Line-b.Line, a.Column-b.Column) })
@@ -313,8 +313,12 @@ func readIn(dir, rel string) ([]byte, error) {
 
 // readFile reads the file at p with readIn, within the workspace folder it is
 // in, or, outside every one, within its own folder.
-func (ss *session) readFile(p string) ([]byte, error) {
-	for _, dir := range ss.folders {
+func (ss *session) readFile(p string) ([]byte, error) { return readUnder(ss.folders, p) }
+
+// readUnder reads the file at p with readIn, within the folder of folders it
+// is in, or, outside every one, within its own folder.
+func readUnder(folders []string, p string) ([]byte, error) {
+	for _, dir := range folders {
 		if rel, err := filepath.Rel(dir, p); err == nil && filepath.IsLocal(rel) {
 			return readIn(dir, rel)
 		}

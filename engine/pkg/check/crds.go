@@ -251,6 +251,15 @@ func (c *CRDs) ForgetUnder(dir string, keep func(file string) bool) bool {
 	return changed
 }
 
+// Files returns the names of the files c has CustomResourceDefinitions for,
+// sorted. A nil c has none.
+func (c *CRDs) Files() []string {
+	if c == nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(c.files))
+}
+
 // Schema returns the OpenAPI schema, as YAML decodes it, of the custom
 // resource kind with the given API version, such as "example.com/v1". When
 // several files define it, the one whose name sorts first wins. The returned

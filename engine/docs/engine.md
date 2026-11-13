@@ -106,11 +106,19 @@ number also brings the total under its budget). No fix is offered when there is 
   `editor.action.triggerSuggest`, for its struct types to show at once.
   `go test -bench GoCompletion ./internal/lsp/` measures the completion and
   the listing on 2,000 Go files. See [cellens.md](cellens.md#editing-a-cellens).
+- **Examples of a CRD**: the documents of the workspace of a version a
+  CustomResourceDefinition the server knows serves, what each expects, and
+  the problems its schema finds in each, as errors on the example; and what
+  each of its rules does to each: a part of the line above the rule, a
+  section of its hover, a warning on the rule and on the example for each
+  wrong verdict, and, on request, every result. The setting
+  `exampleResults` turns it all off. See
+  [Examples of a CustomResourceDefinition](#examples-of-a-customresourcedefinition).
 - **Commands** (`workspace/executeCommand`): the type choices for a `dyn`
   value, with the workspace's examples of its kind, the check of a type as it
   is typed, a schema worked out from examples, and setting or removing a
-  `.cellens` entry through `workspace/applyEdit`, or adding one to fill in.
-  See [Commands](#commands).
+  `.cellens` entry through `workspace/applyEdit`, or adding one to fill in,
+  and what a CRD's rules do to its examples. See [Commands](#commands).
 
 - **Inline info**: `textDocument/codeLens` (the server declares
   `codeLensProvider`, without `resolveProvider`: each lens comes with its
@@ -161,6 +169,13 @@ number also brings the total under its budget). No fix is offered when there is 
     its arguments, each one's parts as protocol Commands with whole names, for
     the client to list. Two expressions whose keys share a line give the line
     to the first.
+  - last, above a CustomResourceDefinition's rule with examples, what the
+    rule does to them: `3 examples pass`, or the wrong verdicts first,
+    `refuses 1 example it should allow · 2 pass`, which runs
+    `cel-lens.showExampleResults` with the rule's location (see [What the
+    editor shows of the results](#what-the-editor-shows-of-the-results)).
+    When the line is too long, this part is shortened first (`1 wrong · 2
+    pass`, then `1 wrong`), before the values are.
 
   The commands run in the client (the server executes none).
   `cel-lens.showRule` takes `{"uri": "<the document>", "range": <the
@@ -215,13 +230,15 @@ exit code 2. `lsp --help` lists them.
 
 ## Commands
 
-`initialize` declares five commands under `executeCommandProvider`, which a
+`initialize` declares six commands under `executeCommandProvider`, which a
 client runs with `workspace/executeCommand`. The VS Code extension runs them
 from the lines above a rule: their parts run its own commands
 `cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, which ask
 the person for a type and pass these commands the same argument, with the
-type or kind chosen. Each but `cel-lens.inferType` takes one argument, an
-object with these keys:
+type or kind chosen. `cel-lens.exampleResults` is described with the
+examples it is about, in [What the rules do to the
+examples](#what-the-rules-do-to-the-examples). Each of the others but
+`cel-lens.inferType` takes one argument, an object with these keys:
 
 | Key | What it is |
 | --- | --- |
@@ -420,7 +437,8 @@ object with these keys:
   given), is refused with `InvalidParams` (-32602) and what is wrong, with the
   line for YAML that does not parse.
 
-Commands in the background: `typeChoices` and `inferType` do their work off
+Commands in the background: `typeChoices`, `inferType` and
+`exampleResults` do their work off
 the server's message loop, so the server answers other messages meanwhile,
 such as an edit and its diagnostics, and the command answers when its work
 ends. A request with the same arguments as one still running waits for the
@@ -462,6 +480,378 @@ API server would refuse, a Go type that cannot be read or a struct for an
 `x-kubernetes-int-or-string` value, is refused before any edit with
 `InvalidParams` (-32602) and the reason. A Go type that leaves fields out is
 written: its entry gets the warning.
+
+## Examples of a CustomResourceDefinition
+
+For each CustomResourceDefinition it knows, the language server knows its
+examples, what each expects, and whether the CRD's schema accepts it, and
+shows the schema's problems on the example. The CRDs it knows here are
+those of the open documents and of the YAML files of the workspace, found
+by the walk that finds the examples, whatever the experimental features:
+`crd-typed-policies` only decides whether a policy's `params` and the like
+are typed from them. The check also runs the CRD's CEL rules on its
+examples, and the editor shows what each does to each above the rule, in
+its hover and as warnings (see [What the editor shows of the
+results](#what-the-editor-shows-of-the-results)); the command
+`cel-lens.exampleResults` answers every result (see [What the rules do to
+the examples](#what-the-rules-do-to-the-examples)). The setting
+`exampleResults` turns all of it off, the schema's problems on the
+examples included.
+
+**An example** is a YAML document of the workspace whose `apiVersion` and
+`kind` are a version the CRD serves: its group, a version with `served:
+true`, and its kind. They are found as `cel-lens.typeChoices` finds its
+`examples`: the walk of the workspace folders skips hidden folders and
+`node_modules`, files over 1 MiB and what a symbolic link leads to outside
+the folder, and stops after 20,000 YAML files; an open file counts with the
+editor's text; a file whose text does not have the kind's name is not
+parsed. A CRD has at most 100 examples, the first in the order of the files'
+paths. A document in the CRD's own file is none of its examples, and nor is
+a `.cellens`, which is no YAML file. An open file outside every workspace
+folder is not walked, and so is no example.
+
+**What it expects.** An example expects the API server to allow it, unless:
+
+- a folder of its path below its workspace folder, or a word of its file
+  name split at `-`, `_` and `.`, is `invalid`, `bad`, `refused`, `rejected`
+  or `denied`, in any case: then it expects to be refused
+  (`testdata/invalid/big.yaml`, `config/samples/widget-bad.yaml`, but not
+  `badge.yaml`);
+- a comment at the top of the document says what it expects, which wins over
+  the path: `# cel-lens: refused`, `# cel-lens: refused "part of the
+  message"`, a double-quoted string, or `# cel-lens: allowed`. The comments
+  read are the comment lines directly above the document's first key, with
+  no blank line between, and, after a `---`, the comment on that line and the
+  comment lines directly after it. The first that reads is taken. A
+  `# cel-lens:` comment there that is none of the three forms is an error on
+  that comment: `this # cel-lens: comment is none of # cel-lens: allowed, #
+  cel-lens: refused and # cel-lens: refused "part of the message"`.
+
+**Updates.** Two examples of one kind (its group and kind, in any version),
+namespace and `metadata.name` in one file are an update: the first is
+created, each later one is an update from the one before, as `kubectl apply
+-f` of the file does. A namespaced example without a namespace is in
+`default`; the namespace of a cluster-scoped one does not count; an example
+without a name is always a create. The schema check below pairs an example
+with the one before it when the schema accepts that one; the rules pair it
+by what the API server would have stored (see [What the rules do to the
+examples](#what-the-rules-do-to-the-examples)).
+
+**The schema check.** Each example is checked as the API server checks a
+custom resource before its CEL rules, with its own code
+(`k8s.io/apiextensions-apiserver`), for the version the example names:
+
+1. decoding, with the strict field validation `kubectl` asks for by default:
+   a field the schema does not have is pruned and is a problem, `unknown
+   field "spec.extra"`; `metadata` the API server cannot read is the only
+   problem;
+2. the CRD's defaults;
+3. what the API server does before validating: the namespace `default` for a
+   namespaced example that names none, and none for a cluster-scoped one, a
+   name for a `generateName` (it ends with `xxxxx`), and, with the status
+   subresource, no status on a create and the old one on an update;
+4. the validation of `metadata`, of the schema (types, `required`, `enum`,
+   `maximum`, `pattern`, `format` as the Kubernetes version picked validates
+   formats, and the rest), of embedded resources and of
+   `x-kubernetes-list-type` lists. An update is checked as an update from
+   the example before it, with the API server's ratcheting: a field left as
+   it was is not refused again. When the schema refuses the example before
+   it, there is nothing to update, and it is checked as a create, as
+   `kubectl apply -f` would create it.
+
+The scale subresource's check of the replicas is not run. Each problem is a
+diagnostic on the example, severity error (1), source `cel-lens`, with the
+API server's message, such as `spec.size: Invalid value: 20: spec.size in
+body should be less than or equal to 10`, at the key of the field it names,
+or of the nearest field above it the document has (`spec` for `spec.size:
+Required value`), or at an item of a list (`spec.ports[1]: Duplicate
+value`), and at the document's first key for its root. An example that
+expects to be refused gets no diagnostic for the schema's problems: it is
+right to be refused. One the schema accepts gets none either: what its rules
+do to it is a warning when it is wrong (see [What the editor shows of the
+results](#what-the-editor-shows-of-the-results)). A CRD the API
+server would refuse, for anything but its rules, has no example diagnostics:
+its problems are already on it. A rule that does not compile leaves the
+schema as it is, so its examples are still checked.
+
+**When.** The examples are found and checked in the background, never on the
+message loop, so hover, completion and the lines above the rules wait for
+nothing. Opening, editing or closing an example or a CRD, a change on disk
+the client reports (`workspace/didChangeWatchedFiles`: a YAML file or a
+folder created, changed or deleted), the end of a workspace scan that
+changed the CRDs, and a change of `kubernetesVersion` stop the check running;
+the next starts once nothing changed for 250 ms, so checks run when typing
+pauses. A `.cellens` starts none: it gives types to the values CEL reads to
+check expressions, and the schema check, like the API server's validation
+of an object, never reads them. While the server handles a message, the
+check waits between two steps of its work (an example, a file), so a
+request that comes during a check takes no time from it. When a check ends and nothing changed meanwhile, the diagnostics of
+each file whose example problems changed are sent. An open example's
+diagnostics are its document's own and its example problems: after an edit
+its own are sent at once, and its example problems join them when the check
+of the new text ends. A file that is not open gets its example problems at
+its file URI, and an empty list once it has none; closing an example sends
+the problems of the file on disk. A file on disk is read again when its size
+or time changed, or the client reported a change, and a CRD when its text or
+the Kubernetes version did; the examples of a file are found and checked
+again only when its text or the CRDs read changed. `go test -bench Examples ./internal/lsp/`
+measures hover, completion and the code lenses on a 1,000-line CRD as it is
+typed, 260 ms after each change, with no example and with 100, and
+`go test -bench ExampleCheckRunning ./internal/lsp/` the same requests while
+a check of 100 examples is in progress and while none is.
+
+### What the rules do to the examples
+
+`cel-lens.exampleResults` runs each `x-kubernetes-validations` rule of the
+CustomResourceDefinitions of a file on each of their examples, with the API
+server's own CEL validator, and answers what each rule does to each
+example. Its one argument is `{"uri": ...}`, the file, for every rule of
+it, or `{"uri": ..., "range": ...}`, a rule's location as the line above
+the rule gives it to `cel-lens.showRule`, for that rule alone: the rule
+whose text, or whose `messageExpression`, has the range's start. The file
+is read as the editor has it, else from disk, and its CRDs count whatever
+the experimental features; the examples are found and checked as above. A
+CRD the API server would refuse for anything but its rules has none, and a
+file without a CRD answers `"rules": []`. Another argument is refused with
+`InvalidParams` (-32602), a file that cannot be read with `RequestFailed`
+(-32803).
+
+**How a rule runs**, all with the API server's code
+(`k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel`); nothing about
+what a rule means is the engine's own:
+
+1. A rule for which the API server refuses the whole CustomResourceDefinition
+   does not run: no object is ever validated with it. That is what the
+   engine's own check of the CRD file (the diagnostics of the file, for the
+   Kubernetes version picked) finds on the rule's `x-kubernetes-validations`
+   entry: a rule or `messageExpression` that does not compile, a cost
+   estimated over the limit of one rule, a `fieldPath` that is not a path of
+   the schema, `oldSelf` where the schema cannot correlate an old value,
+   `optionalOldSelf` on a rule that does not read `oldSelf`, and the rest
+   the API server says of a rule. The reason gives that check's message, the
+   one the line above the rule shows. When the estimated cost of all the
+   rules of a schema together is over the limit of one schema, the API
+   server refuses the whole CRD, naming its four most expensive rules
+   (fewer when it has fewer) as having contributed to the total, so no rule
+   of the CRD runs, with that message. For a CRD the editor has open, the
+   check is the one the server made of its text for its diagnostics; for
+   another, the command checks it, off the message loop.
+2. It runs on the object the schema check above made (decoded, its defaults
+   applied and prepared as for the API server), with the validator the
+   API server builds for the version's structural schema (`NewValidator`,
+   the limit of one call `PerCallLimit`, 1,000,000), holding this rule
+   alone, and its `Validate` with the budget of one object
+   (`RuntimeCELCostBudget`, 10,000,000). The validator walks the object: a
+   rule under a list or a map runs once for each item or value, and each
+   refusal has its own path. `message`, `messageExpression`, `reason` and
+   `fieldPath` give the message as the API server gives it.
+3. An example is an update exactly when an example before it in its file,
+   of the same object (see **Updates** above), would have been stored by
+   the API server, its schema and each of its rules accepting it, as a
+   create or an update itself: it is then an update from the last such
+   example, so `oldSelf` is that example's value. Otherwise it is a create.
+   That is what `kubectl apply -f` of the file does: an example the API
+   server refuses changes nothing, so the next one is created when none
+   was stored, and else updates what was. An example the schema check above
+   paired otherwise is checked against the schema again, as the create or
+   update it is, for its results; its diagnostics stay those of the schema
+   check. A rule that reads `oldSelf` runs only where the update has an old
+   value, unless it sets `optionalOldSelf`: then it runs on creates and
+   updates. An update has the API server's validation ratcheting, on by
+   default since 1.30 and always on since 1.33, so in every supported
+   version: a refusal of a value the update left as it was is ignored, and
+   the result says so. As an update is only ever from an example the same
+   rules allowed, that does not happen with these examples.
+4. As the API server, no rule runs on an example it cannot decode, one with
+   an unknown field (`kubectl` asks for strict field validation), or one
+   whose schema problems include one the API server stops at (a missing
+   required field, a wrong type, an unsupported value, a string or list
+   too long).
+5. Where a rule runs is found with a probe: a rule at the same place that is
+   `false` wherever it runs (`[oldSelf].size() == 0` for a rule that reads
+   `oldSelf`, with its `optionalOldSelf`), which the same validator refuses
+   once for each value it runs on. The probe has none of the rule's
+   meaning.
+6. The rules of one version share the API server's budget of one object:
+   when, on an example, they cost more together, or one hits a limit,
+   after which the API server runs no further rule, each that ran is an
+   `error`, as which of them the API server runs before it stops depends on
+   the order it visits the object's fields in.
+
+The answer has the Kubernetes version and, for each rule, in the order of
+the file, its name as the line above it and a `.cellens` entry name it
+(`document`, `version`, `path`: field names separated by dots, `[]` for the
+items of a list, `[*]` for the values of a map, `""` for the root), its
+`index` in that node's `x-kubernetes-validations`, its text, its
+`location` and its `results`, one for each example of its version, in the
+order of the files' paths:
+
+```json
+{
+  "kubernetesVersion": "1.37",
+  "rules": [{
+    "document": "CustomResourceDefinition widgets.example.com", "version": "v1",
+    "path": "spec.ports[]", "index": 0, "rule": "self.name.size() <= 3",
+    "location": {"uri": "file:///repo/crd.yaml", "range": {"start": {"line": 38, "character": 30}, "end": {"line": 38, "character": 51}}},
+    "results": [{
+      "example": {"uri": "file:///repo/config/samples/widget.yaml", "file": "config/samples/widget.yaml",
+                  "line": 1, "apiVersion": "example.com/v1", "kind": "Widget", "name": "w",
+                  "operation": "create", "expect": "allowed"},
+      "result": "refused",
+      "refusals": [{"path": "spec.ports[2]", "message": "spec.ports[2]: Invalid value: port name https is too long"}],
+      "ran": ["spec.ports[0]", "spec.ports[1]", "spec.ports[2]"],
+      "expected": false, "wrong": "rule"
+    }]
+  }]
+}
+```
+
+| Key of a result | What it is |
+| --- | --- |
+| `example` | The example: its file's `uri` and its `file` below the workspace folder, the `line` its content starts at, from 1, its `apiVersion`, `kind`, `namespace` (left out when it has none) and `name`, the `operation` the rule ran as, `create` or `update`, what it `expect`s, `allowed` or `refused`, and the part of the `message` it expects, when it gives one |
+| `result` | `allowed`, `refused`, `not run` or `error` |
+| `refusals` | For `refused`, and for an `error` that refused values before it stopped: each refusal, its `path` as the API server writes it (`""` for the root) and its `message`, the API server's, the path first (`<nil>` for the root, as the API server writes it) |
+| `ignored` | The messages of refusals ratcheting ignored, on an update |
+| `ran` | The paths of the values the rule ran on |
+| `reason` | Why a rule did `not run`: `the API server refuses the CustomResourceDefinition for this rule, so it validates no object with it: ...` (also for a rule that does not compile for the Kubernetes version picked), `the API server refuses the CustomResourceDefinition for the estimated cost of its rules together, so it validates no object with any of them: ...`, `the rule's field is absent from the example`, `the example is not an update and the rule needs oldSelf` (followed, for a create after a refused example, by `: the API server refuses the example before it, so kubectl apply -f creates this one`), `the rule needs oldSelf, and the update has no old value where the rule is`, or what keeps the API server from running any rule on it (above) |
+| `error` | What stopped an `error`: the API server's runtime error (`division by zero evaluating rule: ...`), a cost limit, or the budget the rules share |
+| `expected`, `wrong` | Whether the result is what the example expects, and, when not, where that shows: `rule` or `example` |
+
+**What the example expects.** An example that expects to be allowed
+expects every rule to allow it or not to run: a rule that refuses it, or
+fails on it, is `wrong` at the `rule`. An example that expects to be
+refused is right when the schema or at least one rule refuses it (an
+`error` counts, as the API server refuses the object with it), with the
+message part it gives in that refusal's message when it gives one; then
+each of its results is `expected`, and otherwise none is, and each is
+`wrong` on the `example`.
+
+**When.** The rules run in the background, off the message loop: the
+request waits, while hover, completion and the lines above the rules are
+answered meanwhile. While the setting `exampleResults` is `false` the
+command runs nothing and is refused with `RequestFailed` (-32803), saying
+so. A request for the same file and location waits for the
+same work; one for the same file and another location stops it, and so
+does `$/cancelRequest` when no other request waits for it (see "Commands in
+the background" above). A change of `kubernetesVersion` stops it too, as
+its answer would be for the old version, and answers its requests with
+`RequestCancelled`. What each rule did to each example is kept, for
+each file asked about, until the rule, the version's schema, the example
+(its object after the schema check, or the object it updates) or the
+Kubernetes version changes: asking again runs only what changed, and what
+the file's rules and examples no longer have is dropped. The command
+finds the examples with the walk of the check above, and takes what the
+last check kept when no check runs: the examples of a file whose text and
+CRDs did not change are not checked again. While the server handles a
+message, the command waits between two steps of its work, as the check
+does. `go test
+-bench ExampleResults ./internal/lsp/` measures a CRD of 50 rules with 100
+examples: with its schema changed, so every rule runs again, with one rule
+changed, and unchanged.
+
+### What the editor shows of the results
+
+The check of the examples above also runs every rule of each CRD on its
+examples, as `cel-lens.exampleResults` does, sharing what it keeps, and
+shows what it found where a person looks. The words are in one place,
+package `inline`, whose tests hold each of them.
+
+**The line above the rule** gains a last part, which runs
+`cel-lens.showExampleResults` with the rule's location, the argument
+`cel-lens.showRule` takes: a client command, which the server does not
+run and `initialize` does not declare. It counts the examples of the rule's
+version, a refused example that expects to be refused counting as
+passing, the wrong verdicts first:
+
+| What the rule does | The part |
+| --- | --- |
+| every example as it expects | `3 examples pass`, `1 example passes` |
+| refuses examples that expect to be allowed | `refuses 1 example it should allow · 2 pass` |
+| refuses an example that expects another message (`# cel-lens: refused "..."`) and that nothing refuses with it | `refuses 1 example with another message · 2 pass` |
+| allows an example that expects to be refused and that nothing refuses | `allows 1 example it should refuse` |
+| fails on examples (a runtime error or a cost limit), whatever they expect | `1 example errors`, `2 examples error`; after a wrong verdict `1 error` |
+| runs on none of them | `not run: CRD refused` (the API server refuses the CRD for the rule), `not run: needs an update example` (the rule reads `oldSelf` and every example is a create), `not run: no old value in the updates`, `not run: field absent from the examples`, `not run: examples refused before the rules` (decoding, or a schema problem the API server stops at); `not run on 3 examples` for several of these |
+| has no example | no part |
+
+The first count names the examples and those after it do not
+(`refuses 2 examples it should allow · allows 1 it should refuse · 1
+error · 3 pass`). An example the rule did not run on is left out, but
+when it ran on none. The line keeps its 80 characters: the part is
+shortened first, to the wrong verdicts as one count (`2 wrong · 3 pass`),
+then to its first count (`2 wrong`), and only then are the values before
+it cut or left to `+N more`, and last the subject's type.
+
+**The rule's hover** gains a section below what the place under the cursor
+is, or alone where that is nothing: the part in words, then each example,
+linked to its file and line (`file:///...#L3`), with its verdict, `as an
+update` for an update, what it expected when the verdict is wrong, and the
+API server's message (its refusals, its error, or why the rule did not
+run). The `#L<line>` at the end of a link is VS Code's convention, which
+opens the file at that line; the protocol has none, and another client
+may open the file at its top. The wrong verdicts come first, then the
+errors, then the others in the order of the files' paths; at most 10,
+then `and N more`.
+
+**A wrong verdict is a warning**, severity 2, source `cel-lens`: the API
+server would accept the CRD, and it is the example that disagrees.
+
+- A rule that refuses, or fails on, an example that expects to be allowed:
+  on the rule, `refuses config/samples/big.yaml:3, which expects to be
+  allowed: <the API server's message>`, and on the example, at its first
+  key, `expected to be allowed, but the rule "self.size <= 10" refuses it:
+  <message>` (the rule on one line, cut past 60 characters).
+- An example that expects to be refused and that neither the schema nor a
+  rule refuses: on the example, `expected to be refused, but nothing
+  refuses it`, or, with a message part, `expected to be refused with "at
+  most 10", but nothing refuses it with that message`.
+
+They are sent as the schema's problems on the examples are (see **When**
+above): with an open file's own diagnostics, for the text they were found
+in, and at the URI of a file that is not open, the file of the CRD
+included; they change, and clear, when the check of the new text ends.
+
+**When.** The rules run in the check of the examples, once typing pauses,
+off the message loop, waiting while the loop handles a message before each
+run of a rule; a rule, its schema, an example and the Kubernetes version
+that did not change keep their results. For an open CRD the check takes
+the server's own check of its text, as the command does; for a CRD that is
+not open it checks the file itself, once per text and version. That
+check, the command's and the server's own check of an open document all
+validate a CRD with the API server's code, which reads the Kubernetes
+version from a setting of the whole process; checks for the same version
+share it and run at once, so the server's checks never wait for the
+others. The one exception is the moment after a change of
+`kubernetesVersion`, which stops the check of the examples and every
+`cel-lens.exampleResults` running: the CRD each of them is validating for
+the old version as the change comes is validated to its end, and the
+server's checks for the new version wait for it (about 45 ms for one of 50
+rules); neither validates another. `go test -bench
+ClosedCRDs ./internal/lsp/` measures a person typing in a small open CRD
+while 20 CRDs that are not open, of 50 rules with 5 examples each, are
+checked: the longest wait is the same as without the examples. Hover,
+completion and the lines never wait for the results: they show the last
+results a check found for the Kubernetes version in use, and the server
+asks the client to refresh the lines (`workspace/codeLens/refresh`) when a
+check finds others. The line and the hover find a rule's results by its
+document, field path and text, so an edit elsewhere in the CRD keeps them
+above the rule until the check of the new text ends, and a rule whose text
+changed has none until then. After a change of `kubernetesVersion` the
+lines show none until the check for the new version ends.
+
+**The setting** `exampleResults` (`initializationOptions` or the
+`settings` of `workspace/didChangeConfiguration`; default `true`) turns
+off the part, the hover's section, the warnings and the schema's problems
+on the examples, and the check of the examples itself: off, nothing about
+the examples is read, checked or run, and `cel-lens.exampleResults` is
+refused. Turning it off sends empty diagnostics where any were shown and
+refreshes the lines; turning it on starts a check, without a restart.
+
+`go test -bench ExampleLine ./internal/lsp/` measures hover and the code
+lenses of an open CRD of 50 rules with 100 examples, 255 ms after a change,
+as the check of the examples starts; it runs on a server without any of
+this too. `go test -bench ExampleRulesRunning ./internal/lsp/` measures the
+same requests while the check runs every rule on every example again, from
+an empty cache, and while no check runs.
 
 ## Typed `object` and `oldObject`
 

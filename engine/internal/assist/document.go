@@ -64,6 +64,17 @@ func Parse(ctx context.Context, file string, data []byte, opts ...Option) *Docum
 	return d
 }
 
+// Expression returns the CEL expression of d whose text has pos, its ends
+// included, as package extract finds it, and false when there is none.
+func (d *Document) Expression(pos extract.Position) (extract.Expression, bool) {
+	for _, e := range d.exprs {
+		if !before(pos, e.Start) && !before(e.End, pos) {
+			return e, true
+		}
+	}
+	return extract.Expression{}, false
+}
+
 func splitText(data []byte) []string {
 	return strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 }

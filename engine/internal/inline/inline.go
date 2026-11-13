@@ -1,13 +1,16 @@
 // Package inline writes the inline info of cel-lens: the quiet line above
 // each CEL expression, as GitLens shows one above each block. The line says
-// what the expression is about, whether it compiles, and which values it reads
+// what the expression is about, whether it compiles, which values it reads
 // that Kubernetes leaves dyn, each with the command that gives it a type, kept
-// in a .cellens file.
+// in a .cellens file, and, for a CustomResourceDefinition's rule, what the
+// rule does to the examples of the CRD.
 //
 // A line is a list of parts, each with the client command it runs when
 // clicked: every part acts. The language server sends each part as a code
 // lens; VS Code shows the parts of a line side by side with Separator between
-// them. Every word of the line is written here, and only here.
+// them. Every word of the line is written here, and only here, and so are
+// the words of the section of a rule's hover about its examples and of the
+// warnings a wrong verdict gives.
 package inline
 
 import (
@@ -69,6 +72,10 @@ type Rule struct {
 	// Values are the dyn values the expression reads, in the order it reads
 	// them.
 	Values []Value
+	// Examples are what the rule, a CustomResourceDefinition's, does to each
+	// of the CRD's examples, as far as that is known; none for another
+	// expression, or while nothing is known.
+	Examples []Example
 }
 
 // Value is a dyn value an expression reads, or a policy variable that
@@ -145,9 +152,35 @@ type Part struct {
 // of the first two values, as long as the line stays within MaxWidth,
 // cutting a long name in the middle ("object.…valueFrom") and a long type to
 // fewer fields when that makes it fit; then "+N more" for the values left
-// out, whose command lists them.
+// out, whose command lists them; then, for a rule with examples, what it
+// does to them (see examplesTitles), which runs ShowExampleResults. That
+// part is shortened first, down to a word or two ("2 wrong", "3 pass"),
+// before the parts before it are, to keep the line within MaxWidth.
 func Line(r Rule) []Part {
-	parts := []Part{{Title: r.Subject + ": " + shortType(r.SubjectType, maxType) + dot + status(r.Problems), Command: ShowRule, Arguments: []any{r.Location}}}
+	parts := line(r, MaxWidth, maxType)
+	titles := examplesTitles(r.Examples)
+	if titles == nil {
+		return parts
+	}
+	sep := titleWidth(Separator)
+	for _, t := range titles {
+		if Width(parts)+sep+titleWidth(t) <= MaxWidth {
+			return append(parts, examplesPart(r, t))
+		}
+	}
+	last := titles[len(titles)-1]
+	room := MaxWidth - sep - titleWidth(last)
+	for typ := maxType; ; typ-- {
+		if p := line(r, room, typ); Width(p) <= room || typ <= 1 {
+			return append(p, examplesPart(r, last))
+		}
+	}
+}
+
+// line is the line above r without the part about examples, within limit
+// characters as far as its values go, the subject's type cut past typ.
+func line(r Rule, limit, typ int) []Part {
+	parts := []Part{{Title: r.Subject + ": " + shortType(r.SubjectType, typ) + dot + status(r.Problems), Command: ShowRule, Arguments: []any{r.Location}}}
 	var rest []Value
 	shown := 0
 	for i, v := range r.Values {
@@ -155,7 +188,7 @@ func Line(r Rule) []Part {
 			rest = append(rest, v)
 			continue
 		}
-		p, ok := fit(parts, v, len(r.Values)-i-1)
+		p, ok := fit(parts, v, len(r.Values)-i-1, limit)
 		if !ok {
 			rest = append(rest, v)
 			continue
@@ -192,16 +225,16 @@ func status(n int) string {
 	return strconv.Itoa(n) + " problems"
 }
 
-// fit returns the parts of v that fit after parts within MaxWidth, with room
+// fit returns the parts of v that fit after parts within limit, with room
 // for a "+N more" when left values come after it: with its whole name and
 // type when they fit, else with the name cut in the middle, and then with the
 // type cut to the room left. It is false when even the shortest do not fit.
-func fit(parts []Part, v Value, left int) ([]Part, bool) {
+func fit(parts []Part, v Value, left, limit int) ([]Part, bool) {
 	tail := 0
 	if left > 0 {
 		tail = utf8.RuneCountInString(Separator) + utf8.RuneCountInString(moreTitle(left))
 	}
-	room := func(p []Part) int { return MaxWidth - tail - Width(append(append([]Part(nil), parts...), p...)) }
+	room := func(p []Part) int { return limit - tail - Width(append(append([]Part(nil), parts...), p...)) }
 	typ := shortType(v.Type, maxType)
 	names := shorterNames(v.Name, root(v))
 	for _, name := range names {

@@ -176,7 +176,7 @@ func TestExecuteCommandProvider(t *testing.T) {
 	if err := json.Unmarshal(res, &r); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"cel-lens.typeChoices", "cel-lens.checkType", "cel-lens.setType", "cel-lens.removeType", "cel-lens.inferType"}
+	want := []string{"cel-lens.typeChoices", "cel-lens.checkType", "cel-lens.setType", "cel-lens.removeType", "cel-lens.inferType", "cel-lens.exampleResults"}
 	if got := r.Capabilities.ExecuteCommandProvider.Commands; !slices.Equal(got, want) {
 		t.Errorf("executeCommandProvider.commands = %v, want %v", got, want)
 	}

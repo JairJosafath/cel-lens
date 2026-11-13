@@ -71,7 +71,7 @@ func (r *reporter) validateCRD(ctx context.Context, node *yaml.Node, exprs map[s
 		cancel()
 		wait()
 	}()
-	if err := withCompatibility(r.version, func() { problems = validation.ValidateCustomResourceDefinition(ctx, &internal) }); err != nil {
+	if err := UnderVersion(r.version, func() { problems = validation.ValidateCustomResourceDefinition(ctx, &internal) }); err != nil {
 		return err
 	}
 	problems = slices.DeleteFunc(problems, r.ruleOfGuessedSchema)

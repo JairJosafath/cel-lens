@@ -875,7 +875,7 @@ func (r *reporter) reportTotal(ctx context.Context, exprs map[string]extract.Exp
 			}
 			for _, d := range mine {
 				d.Message = ruleMessage(top, ex) + sentence
-				d.Fixes, d.FixesTogether = ex.fixes, ex.together
+				d.Fixes, d.FixesTogether, d.CostTotal = ex.fixes, ex.together, true
 			}
 			return true, nil
 		}
@@ -889,6 +889,6 @@ func (r *reporter) reportTotal(ctx context.Context, exprs map[string]extract.Exp
 	msg := fmt.Sprintf("estimated cost %s of all rules together is over the budget of %s for one CustomResourceDefinition schema. The rules that add the most: %s. %s%s",
 		count(total.Total), count(validation.StaticEstimatedCRDCostLimit), strings.Join(lines, ", "), ex.why, ex.advice)
 	e := found[0]
-	r.diags = append(r.diags, Diagnostic{File: r.file, Message: msg, Severity: SeverityError, Start: e.Start, End: e.End, Fixes: ex.fixes, FixesTogether: ex.together})
+	r.diags = append(r.diags, Diagnostic{File: r.file, Message: msg, Severity: SeverityError, Start: e.Start, End: e.End, Fixes: ex.fixes, FixesTogether: ex.together, CostTotal: true})
 	return true, nil
 }

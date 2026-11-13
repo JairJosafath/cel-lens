@@ -3,6 +3,7 @@ package check_test
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -104,6 +105,65 @@ func TestCheckVersionsTogether(t *testing.T) {
 			}
 			if err != nil || len(got) != want {
 				errs <- fmt.Sprintf("Check(%s) = %v, %v, want %d problems", ver, got, err, want)
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+}
+
+// defaultsCRD has a rule only 1.34 on compiles and a default its own rule
+// accepts, so the API server's validation reads the compatibility version
+// for the rules and again to validate the default.
+const defaultsCRD = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+spec:
+  versions:
+    - name: v1
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            name:
+              type: string
+              default: ok
+              x-kubernetes-validations:
+                - rule: self.size() < 3
+            version:
+              type: string
+              maxLength: 10
+              x-kubernetes-validations:
+                - rule: isSemver(self)
+`
+
+// TestCheckSameVersionsTogether runs many checks of one version at once,
+// and of others beside them, as the language server's message loop and
+// its checks in the background do (#14): each reports what it reports
+// alone, and -race finds unguarded shared state.
+func TestCheckSameVersionsTogether(t *testing.T) {
+	t.Parallel()
+	alone := map[string][]check.Diagnostic{}
+	for _, ver := range kubeversion.Supported() {
+		got, err := check.Check(t.Context(), "f.yaml", []byte(defaultsCRD), check.WithVersion(ver))
+		if err != nil {
+			t.Fatalf("Check(%s) error = %v", ver, err)
+		}
+		alone[ver.String()] = got
+	}
+	var wg sync.WaitGroup
+	errs := make(chan string, 32)
+	for i := range 32 {
+		ver := kubeversion.Default()
+		if i%4 == 0 {
+			ver = kubeversion.Supported()[i/4%len(kubeversion.Supported())]
+		}
+		wg.Go(func() {
+			got, err := check.Check(t.Context(), "f.yaml", []byte(defaultsCRD), check.WithVersion(ver))
+			if want := alone[ver.String()]; err != nil || !reflect.DeepEqual(got, want) {
+				errs <- fmt.Sprintf("Check(%s) together = %v, %v, want %v as alone", ver, got, err, want)
 			}
 		})
 	}

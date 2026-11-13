@@ -76,14 +76,15 @@ walked for `.yaml` and `.yml` files).
 | `--format text\|json` | | `json` prints an array of `{file, start, end, severity, message}` instead of lines; the default is text |
 | `--experimental name,name` | `experimental` | Turns on experimental features (below) |
 | | `inlineInfo` | The line above each CEL expression (code lenses): its subject, whether it compiles, and `Give it a type` for a `dyn` value; `false` turns it off; the default is `true` |
+| | `exampleResults` | What a CRD's rules do to the workspace's examples, above each rule, in its hover and as warnings, and the schema's problems on the examples; `false` turns it off and evaluates nothing; the default is `true` |
 
 Exit code 0 means no errors (warnings do not count), 1 that errors were found,
 2 a usage or read error, 130 that the run was interrupted. Results go to
 stdout, diagnostics about the run to stderr. The language server takes its
 settings in `initializationOptions` and in the `settings` of
 `workspace/didChangeConfiguration`; a change of `kubernetesVersion` or
-`experimental` re-checks every open document, and one of `inlineInfo` shows or
-hides the lines: at once in a client that refreshes code lenses when asked
+`experimental` re-checks every open document, one of `inlineInfo` shows or
+hides the lines, and one of `exampleResults` what the examples show: at once in a client that refreshes code lenses when asked
 (`workspace/codeLens/refresh`, as VS Code does), else when it next asks for them.
 
 ## Supported Kubernetes versions
@@ -149,6 +150,10 @@ ships the engine. See [docs/engine.md](docs/engine.md) for what the server does.
   bundled `k8s.io/api`.
 - Transports other than stdio for the language server.
 - `.cellens` types in `cel-lens-core check`: only the language server reads them.
+- Dry runs of admission policies against example objects, and dry runs from
+  the command line: the language server shows what a CRD's rules do to the
+  workspace's examples, above each rule, in its hover and as warnings
+  (`exampleResults`), but not yet what a policy does.
 
 ## Contributing
 

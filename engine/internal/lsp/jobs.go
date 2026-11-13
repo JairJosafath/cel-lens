@@ -190,6 +190,19 @@ func (ss *session) cancelOne(j *job, why string) error {
 	return nil
 }
 
+// cancelJobs cancels every job of command that a request still waits for,
+// as cancelOne does, for the reason why.
+func (ss *session) cancelJobs(command, why string) error {
+	for _, seq := range slices.Sorted(maps.Keys(ss.jobs)) {
+		if j := ss.jobs[seq]; !j.cancelled && j.spec.command == command {
+			if err := ss.cancelOne(j, why); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // stopJobs cancels the jobs and waits for them to end. It returns the
 // requests still waiting for an answer, in the order the jobs started.
 func (ss *session) stopJobs() []json.RawMessage {

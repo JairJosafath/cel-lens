@@ -331,6 +331,9 @@ func (ss *session) finishScan(ctx context.Context, found *check.CRDs, batches []
 	}
 	reread := ss.rereadSkipped(ctx, found)
 	own := ss.crds.Fill(found) || reread
+	if own {
+		ss.examplesChanged()
+	}
 	return ss.settle(ctx, batches, own && ss.features.Has(feature.CRDTypedPolicies), false)
 }
 
@@ -639,6 +642,14 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 	lensChanged, aboutLens := false, false
 	var lensFolders []string
 	for _, c := range p.Changes {
+		// A YAML file, or a folder that may hold some, may be or hold an
+		// example or a CRD.
+		switch key := crdKey(c.URI); {
+		case isYAML(key):
+			ss.forgetExample(key)
+		case c.Type != fileChanged && !isLens(c.URI) && !strings.HasSuffix(key, ".go"):
+			ss.examplesChanged()
+		}
 		aboutLens = aboutLens || isLens(c.URI)
 		// A .go file, or a folder that may hold some, makes the listing of
 		// the Go types out of date (see goFresh).

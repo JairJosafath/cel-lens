@@ -25,6 +25,7 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // The commands of workspace/executeCommand, which the VS Code extension calls
@@ -36,11 +37,14 @@ const (
 	commandSetType     = "cel-lens.setType"
 	commandRemoveType  = "cel-lens.removeType"
 	commandInferType   = "cel-lens.inferType"
+	// commandExampleResults answers what the rules of a CRD do to its
+	// examples (see answerExampleResults).
+	commandExampleResults = "cel-lens.exampleResults"
 )
 
 // commandNames are the commands the server runs, as initialize declares them.
 func commandNames() []string {
-	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType}
+	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType, commandExampleResults}
 }
 
 // editCaps are what the client can do with a workspace/applyEdit.
@@ -125,7 +129,8 @@ func failed(msg string) error { return &rpcError{jsonrpc.CodeRequestFailed, msg}
 // executeCommand runs a command of workspace/executeCommand. checkType
 // answers at once. typeChoices answers once the Go types of the workspace
 // are listed and, with a value, its examples are found, and inferType once
-// its work ends: both run in a goroutine (see startJob). setType and removeType send the client a workspace/applyEdit
+// its work ends, and exampleResults once its rules ran: they run in a
+// goroutine (see startJob). setType and removeType send the client a workspace/applyEdit
 // and answer when it answers (see answered): nothing is written to disk but
 // by the client.
 func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, reply func(any, error) error) error {
@@ -137,7 +142,7 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 		return reply(nil, badParams("workspace/executeCommand", err))
 	}
 	var a valueArgs
-	if len(p.Arguments) > 0 && p.Command != commandInferType {
+	if len(p.Arguments) > 0 && p.Command != commandInferType && p.Command != commandExampleResults {
 		if err := json.Unmarshal(p.Arguments[0], &a); err != nil {
 			return reply(nil, badParams(p.Command, err))
 		}
@@ -147,6 +152,8 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 	switch p.Command {
 	case commandTypeChoices:
 		return ss.answerTypeChoices(ctx, msg, a, reply)
+	case commandExampleResults:
+		return ss.answerExampleResults(ctx, msg, p.Arguments, reply)
 	case commandInferType:
 		kinds, err := ss.inferKinds(ctx, p.Arguments)
 		if err != nil {
@@ -360,7 +367,7 @@ func (ss *session) checkType(ctx context.Context, a valueArgs) (*typeProblem, er
 		}
 		e.Type = t
 	case "schema":
-		s, problems := cellens.ReadSchema(ctx, a.Schema)
+		s, problems := cellens.ReadSchema(ctx, ss.kube, a.Schema)
 		if len(problems) > 0 {
 			return &typeProblem{Message: "schema: " + strings.Join(problems, "; schema: ")}, nil
 		}
@@ -595,7 +602,7 @@ func (ss *session) setType(ctx context.Context, a valueArgs) (*workspaceEdit, er
 		}
 	case "schema":
 		var problems []string
-		if e.Schema, problems = cellens.ReadSchema(ctx, a.Schema); len(problems) > 0 {
+		if e.Schema, problems = cellens.ReadSchema(ctx, ss.kube, a.Schema); len(problems) > 0 {
 			return nil, invalid(commandSetType + ": schema: " + strings.Join(problems, "; schema: "))
 		}
 	case "go":
@@ -922,8 +929,9 @@ type snippet struct {
 // integer, selected; in a policy an empty struct, with the cursor in it, or
 // a schema in block style, type: object and properties: without a value,
 // which is no properties, as in a CRD, with the cursor on the line below,
-// where the first property goes.
-func snippetFor(ctx context.Context, kind, document string) (snippet, error) {
+// where the first property goes. A schema is checked as the API server of
+// version v checks one.
+func snippetFor(ctx context.Context, v kubeversion.Version, kind, document string) (snippet, error) {
 	crd := document == cellens.CRDKind
 	switch kind {
 	case "type":
@@ -940,7 +948,7 @@ func snippetFor(ctx context.Context, kind, document string) (snippet, error) {
 			sn = snippet{text: "type: integer", cursor: len("type: "), selected: len("integer")}
 			yml = "type: integer\n"
 		}
-		s, problems := cellens.ReadSchema(ctx, []byte(yml))
+		s, problems := cellens.ReadSchema(ctx, v, []byte(yml))
 		if len(problems) > 0 {
 			return snippet{}, fmt.Errorf("the schema of the snippet: %s", strings.Join(problems, "; "))
 		}
@@ -959,7 +967,7 @@ func (ss *session) setSnippet(ctx context.Context, a valueArgs) (*workspaceEdit,
 	if err != nil {
 		return nil, err
 	}
-	sn, err := snippetFor(ctx, *a.Snippet, v.entry.Document.Kind)
+	sn, err := snippetFor(ctx, ss.kube, *a.Snippet, v.entry.Document.Kind)
 	if err != nil {
 		return nil, err
 	}

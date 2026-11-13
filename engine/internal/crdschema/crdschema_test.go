@@ -5,12 +5,15 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/crdschema"
+	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // node returns the mapping of text, a YAML document.
@@ -30,7 +33,7 @@ func problemsOf(t *testing.T, text string) []string {
 	n := node(t, text)
 	s, problems := crdschema.Read(n)
 	if len(problems) == 0 {
-		problems = crdschema.Validate(t.Context(), n, s)
+		problems = crdschema.Validate(t.Context(), kubeversion.Default(), n, s)
 	}
 	out := make([]string, len(problems))
 	for i, p := range problems {
@@ -66,7 +69,7 @@ required: [team]
 	if s["type"] != "object" || maxReplicas["minimum"] != float64(0) || !reflect.DeepEqual(s["required"], []any{"team"}) {
 		t.Errorf("Read = %v, want the schema as JSON values", s)
 	}
-	if got := crdschema.Validate(t.Context(), node(t, text), s); len(got) > 0 {
+	if got := crdschema.Validate(t.Context(), kubeversion.Default(), node(t, text), s); len(got) > 0 {
 		t.Errorf("Validate = %v, want no problems: the API server takes this schema", got)
 	}
 }
@@ -155,7 +158,7 @@ func FuzzRead(f *testing.F) {
 			return
 		}
 		if s, problems := crdschema.Read(doc.Content[0]); len(problems) == 0 {
-			_ = crdschema.Validate(t.Context(), doc.Content[0], s)
+			_ = crdschema.Validate(t.Context(), kubeversion.Default(), doc.Content[0], s)
 		}
 	})
 }
@@ -213,5 +216,84 @@ description: d
 	}}
 	if got, _ := crdschema.JSON(crdschema.Arrange(unknown)); string(got) != `{"type":"string","x-other":1}` {
 		t.Errorf("JSON(Arrange(a key that is no keyword)) = %s, want it after the keywords", got)
+	}
+}
+
+// semverRule is a schema with a rule only Kubernetes 1.34 on compiles.
+// Read refuses rules in a schema, so it is given to Validate as it is: the
+// problems of a schema without rules are the same for every version, and
+// only a rule shows which version the validation ran for.
+var semverRule = map[string]any{
+	"type":                     "string",
+	"x-kubernetes-validations": []any{map[string]any{"rule": "isSemver(self)"}},
+}
+
+// rulesCRD is a CustomResourceDefinition with rules, which check.Check
+// validates for its version.
+const rulesCRD = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+spec:
+  versions:
+    - name: v1
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            a: {type: string, maxLength: 10}
+            b: {type: array, maxItems: 10, items: {type: integer}}
+          x-kubernetes-validations:
+            - rule: self.a.size() < 5 && self.b.all(x, x > 0)
+            - rule: self.b.exists(x, x == 1) || self.a == 'b'
+`
+
+// TestValidateBesideChecks validates a schema for one Kubernetes version
+// while CRDs are checked for another, as the language server does (#14):
+// the Kubernetes libraries read the version from a setting of the whole
+// process, which each check sets to its own, so a validation that did not
+// run under check.UnderVersion would see theirs.
+func TestValidateBesideChecks(t *testing.T) {
+	t.Parallel()
+	old, err := kubeversion.Parse("1.33")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := kubeversion.Default()
+	for _, tt := range []struct {
+		name          string
+		validate, ran kubeversion.Version
+		want          int
+	}{
+		{"old beside new", old, newer, 1},
+		{"new beside old", newer, old, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			n := node(t, "type: string")
+			done := make(chan struct{})
+			var wg sync.WaitGroup
+			for range 2 {
+				wg.Go(func() {
+					for {
+						select {
+						case <-done:
+							return
+						default:
+						}
+						if _, err := check.Check(t.Context(), "crd.yaml", []byte(rulesCRD), check.WithVersion(tt.ran)); err != nil {
+							t.Error(err)
+							return
+						}
+					}
+				})
+			}
+			for range 50 {
+				if got := crdschema.Validate(t.Context(), tt.validate, n, semverRule); len(got) != tt.want {
+					t.Errorf("Validate(%s, isSemver) beside checks for %s = %v, want %d problems", tt.validate, tt.ran, got, tt.want)
+					break
+				}
+			}
+			close(done)
+			wg.Wait()
+		})
 	}
 }

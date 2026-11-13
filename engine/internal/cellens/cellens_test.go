@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
+	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
 // The example of docs/cellens.md.
@@ -303,7 +304,7 @@ func TestParseSchemaAndGo(t *testing.T) {
 	if g := entries[1].Go; g == nil || *g != (cellens.GoType{Folder: "api/v1", Name: "QuotaSpec"}) || g.String() != "./api/v1#QuotaSpec" {
 		t.Errorf("Parse(issueExample) go = %+v, want api/v1 QuotaSpec, written ./api/v1#QuotaSpec", g)
 	}
-	if kept, problems := cellens.CheckSchemas(t.Context(), entries); len(kept) != 2 || len(problems) > 0 {
+	if kept, problems := cellens.CheckSchemas(t.Context(), kubeversion.Default(), entries); len(kept) != 2 || len(problems) > 0 {
 		t.Errorf("CheckSchemas(issueExample) = %v, %v, want both entries and no problems", kept, problems)
 	}
 }
@@ -384,7 +385,7 @@ func TestCheckSchemas(t *testing.T) {
 	if len(problems) > 0 || len(entries) != 4 {
 		t.Fatalf("Parse = %v, %v, want 4 entries", entries, problems)
 	}
-	kept, problems := cellens.CheckSchemas(t.Context(), entries)
+	kept, problems := cellens.CheckSchemas(t.Context(), kubeversion.Default(), entries)
 	if len(kept) != 1 || kept[0].File != "d.yaml" {
 		t.Errorf("CheckSchemas kept %v, want only the entry of d.yaml", kept)
 	}
@@ -421,7 +422,7 @@ func TestDocExamples(t *testing.T) {
 			continue
 		}
 		entries, problems := cellens.Parse([]byte(text))
-		if entries, more := cellens.CheckSchemas(t.Context(), entries); len(problems)+len(more) > 0 || len(entries) == 0 {
+		if entries, more := cellens.CheckSchemas(t.Context(), kubeversion.Default(), entries); len(problems)+len(more) > 0 || len(entries) == 0 {
 			t.Errorf("Parse(%q) = %d entries, problems %v %v, want entries and none", text, len(entries), problems, more)
 		}
 		for _, e := range entries {

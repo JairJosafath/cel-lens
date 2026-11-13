@@ -10,6 +10,7 @@
 package lsp
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,8 @@ import (
 	"unicode/utf16"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
+	"github.com/JairJosafath/cel-lens/engine/internal/examples"
+	"github.com/JairJosafath/cel-lens/engine/internal/inline"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
@@ -38,8 +41,8 @@ var ErrNoShutdown = errors.New("client ended the session without shutdown")
 // kubeversion.Default until the client chooses a Kubernetes version with
 // kubernetesVersion in initializationOptions or didChangeConfiguration. Every
 // experimental feature is off until the client lists it in experimental, in
-// the same two places, and the inline info is on until inlineInfo is false
-// there.
+// the same two places, and the inline info and the example results are on
+// until inlineInfo or exampleResults is false there.
 type Server struct {
 	// Version is reported to the client in the initialize result.
 	Version string
@@ -125,6 +128,10 @@ type session struct {
 	// inlineOff is true while the client's setting inlineInfo is false: the
 	// server then answers no code lenses.
 	inlineOff bool
+	// examplesOff is true while the client's setting exampleResults is
+	// false: the server then finds, checks and runs nothing on the
+	// examples, and shows nothing of them.
+	examplesOff bool
 	// completionRegistration is true when the client registers completion
 	// itself, a provider for YAML files and one for .cellens files;
 	// completionRegistered once the server asked it to.
@@ -163,6 +170,37 @@ type session struct {
 	jobs    map[int]*job
 	jobSeq  int
 	jobDone chan jobResult
+	// exampleRun is the check of the examples of the CRDs in progress, nil
+	// when none runs; examplesDue is true when what they are or their
+	// problems may have changed since the last one started (see
+	// examplesChanged), and exampleStale are the files that changed on disk
+	// since, which it reads again. exampleMemo is what the last check kept
+	// for the next, nil while one runs. exampleWait fires when the next may
+	// start, and cancelExampleWait stops it, both nil while none waits;
+	// exampleTimer makes them, nil meaning newTimer.
+	exampleRun        *exampleRun
+	examplesDue       bool
+	exampleStale      []string
+	exampleMemo       *exampleMemo
+	exampleWait       <-chan time.Time
+	cancelExampleWait func() bool
+	exampleTimer      func(d time.Duration) (<-chan time.Time, func() bool)
+	// exampleWork does the work of a check of the examples in its
+	// goroutine; nil means exampleCheck.run.
+	exampleWork func(ctx context.Context, c *exampleCheck) (map[string]exampleFile, error)
+	// loopBusy is busy while the message loop handles a message: a check
+	// of the examples waits for it between two steps of its work, so it
+	// takes no time from the message.
+	loopBusy busyGate
+	// exampleFound are the problems of the examples the last check found,
+	// by the key of their file; exampleShown what was sent for each file
+	// with some that is not open.
+	exampleFound map[string]exampleFile
+	exampleShown map[string]exampleShown
+	// results keeps what the rules of each file of CRDs exampleResults was
+	// asked about did to their examples; its jobs use it, under its own
+	// lock.
+	results examples.Cache
 }
 
 // document is an open file. Only the message loop uses it, so the cached
@@ -263,7 +301,9 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	defer ss.stopLensSearch()
 	defer ss.stopJobs()
 	defer ss.cancelRetry()
+	defer ss.stopExamples()
 	for {
+		ss.startExamples(ctx)
 		var r readResult
 		var scanned <-chan *check.CRDs
 		if ss.scan != nil {
@@ -277,9 +317,21 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 		if len(ss.jobs) > 0 {
 			jobDone = ss.jobDone
 		}
+		var examplesDone <-chan exampleResult
+		if ss.exampleRun != nil {
+			examplesDone = ss.exampleRun.done
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case r := <-examplesDone:
+			if err := ss.endExamples(ctx, r); err != nil {
+				return err
+			}
+			continue
+		case <-ss.exampleWait:
+			ss.exampleWait, ss.cancelExampleWait = nil, nil
+			continue
 		case r := <-jobDone:
 			if err := ss.finishJob(r); err != nil {
 				return err
@@ -318,7 +370,10 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 			}
 			return ErrNoShutdown
 		}
-		if err := ss.handle(ctx, msg); err != nil {
+		ss.loopBusy.enter()
+		err = ss.handle(ctx, msg)
+		ss.loopBusy.leave()
+		if err != nil {
 			return err
 		}
 	}
@@ -397,6 +452,7 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		ss.cancelRetry()
 		ss.stopScan()
 		ss.stopLensSearch()
+		ss.stopExamples()
 		if err := ss.dropPending(); err != nil {
 			return err
 		}
@@ -474,6 +530,7 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	if ss.features.Has(feature.CRDTypedPolicies) {
 		ss.startScan(ctx)
 	}
+	ss.examplesChanged()
 	ss.searchLenses(ctx, ss.folders)
 	return ss.warn(problems)
 }
@@ -488,14 +545,22 @@ type kubeOptions struct {
 	Experimental *[]string `json:"experimental"`
 	// InlineInfo turns the code lenses on or off; absent means no change.
 	InlineInfo *bool `json:"inlineInfo"`
+	// ExampleResults turns on or off what the server says of the examples
+	// of the CRDs: what the rules do to them, and the schema's problems in
+	// them; absent means no change.
+	ExampleResults *bool `json:"exampleResults"`
 }
 
-// configure applies the Kubernetes version, the experimental features and
-// inlineInfo in o. It reports whether the version or the features in use
-// changed, and why each value that is not supported was ignored.
+// configure applies the Kubernetes version, the experimental features,
+// inlineInfo and exampleResults in o. It reports whether the version or the
+// features in use changed, and why each value that is not supported was
+// ignored.
 func (ss *session) configure(o *kubeOptions) (changed bool, problems []message, err error) {
 	if o.InlineInfo != nil {
 		ss.inlineOff = !*o.InlineInfo
+	}
+	if o.ExampleResults != nil {
+		ss.examplesOff = !*o.ExampleResults
 	}
 	v, on := ss.kube, ss.features
 	if o.KubernetesVersion != nil {
@@ -555,12 +620,16 @@ func (ss *session) warn(problems []message) error {
 	return nil
 }
 
-// didChangeConfiguration applies a new kubernetesVersion, experimental list
-// and inlineInfo, checks the open documents again when the version or the
-// features changed, and asks the client to request the code lenses again when
-// they may have changed. Turning on crd-typed-policies starts a scan of the
-// workspace for CRDs in the background; the open documents are checked again
-// when it ends.
+// didChangeConfiguration applies a new kubernetesVersion, experimental list,
+// inlineInfo and exampleResults, checks the open documents again when the
+// version or the features changed, and asks the client to request the code
+// lenses again when they may have changed. A new version also stops each
+// cel-lens.exampleResults still running, whose answer would be for the old
+// version, answering it as cancelled. Turning on crd-typed-policies
+// starts a scan of the workspace for CRDs in the background; the open
+// documents are checked again when it ends. Turning exampleResults off
+// stops the check of the examples and takes back what they showed; turning
+// it on starts one.
 func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		Settings *kubeOptions `json:"settings"`
@@ -568,10 +637,20 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	if !decode(params, &p) || p.Settings == nil {
 		return nil
 	}
-	wasOn, wasOff := ss.features.Has(feature.CRDTypedPolicies), ss.inlineOff
+	wasOn, wasOff, examplesWereOff, kube := ss.features.Has(feature.CRDTypedPolicies), ss.inlineOff, ss.examplesOff, ss.kube
 	changed, problems, err := ss.configure(p.Settings)
 	if err != nil {
 		return err
+	}
+	if ss.kube != kube {
+		if err := ss.cancelJobs(commandExampleResults, "the Kubernetes version changed to "+ss.kube.String()); err != nil {
+			return err
+		}
+	}
+	if ss.examplesOff != examplesWereOff {
+		if err := ss.switchExamples(ctx); err != nil {
+			return err
+		}
 	}
 	if !wasOn && ss.features.Has(feature.CRDTypedPolicies) {
 		ss.batch++
@@ -581,6 +660,7 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 		return err
 	}
 	if changed {
+		ss.examplesChanged()          // the Kubernetes version their check matches may have changed
 		return ss.publishAll(ctx, "") // which refreshes the lenses
 	}
 	if ss.inlineOff != wasOff {
@@ -669,6 +749,7 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 		return ss.publishTyped(ctx, true)
 	}
 	ss.docs[d.URI] = &document{version: d.Version, text: []byte(d.Text), crds: &ss.crds}
+	ss.examplesChanged()
 	return ss.publishWithCRDs(ctx, d.URI, ss.crds.Set(ctx, crdKey(d.URI), []byte(d.Text)))
 }
 
@@ -697,6 +778,7 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 	}
 	shown := ss.docs[uri] != nil && ss.docs[uri].shown
 	ss.docs[uri] = &document{version: p.TextDocument.Version, text: text, crds: &ss.crds, shown: shown}
+	ss.examplesChanged()
 	return ss.publishWithCRDs(ctx, uri, ss.crds.Set(ctx, crdKey(uri), text))
 }
 
@@ -724,7 +806,8 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 	delete(ss.docs, uri)
 	// The editor's text is gone: the file on disk is what the workspace has.
 	changed := ss.readFromDisk(ctx, uri)
-	if err := ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": []any{}}); err != nil {
+	ss.examplesChanged()
+	if err := ss.closeExamples(uri); err != nil {
 		return err
 	}
 	if !changed {
@@ -765,6 +848,28 @@ func (ss *session) publishAssumed(ctx context.Context, uri string, assumed []che
 	diags, err := ss.diagnostics(ctx, uri, doc)
 	if err != nil {
 		return err
+	}
+	return ss.sendDiagnostics(uri, doc, diags)
+}
+
+// sendDiagnostics sends diags, the problems of the open document at uri,
+// with those of its examples found in its text, after them where they are
+// at the same place. The client has no other diagnostics for the file then.
+func (ss *session) sendDiagnostics(uri string, doc *document, diags []check.Diagnostic) error {
+	key := crdKey(uri)
+	if found := ss.exampleDiagnostics(key, doc.text); len(found) > 0 {
+		diags = append(slices.Clone(diags), found...)
+		slices.SortStableFunc(diags, func(a, b check.Diagnostic) int {
+			return cmp.Or(a.Start.Line-b.Start.Line, a.Start.Column-b.Start.Column)
+		})
+	}
+	if shown, ok := ss.exampleShown[key]; ok {
+		delete(ss.exampleShown, key)
+		if shown.uri != uri {
+			if err := ss.conn.Notify("textDocument/publishDiagnostics", map[string]any{"uri": shown.uri, "diagnostics": []any{}}); err != nil {
+				return err
+			}
+		}
 	}
 	lines := doc.runes()
 	out := make([]map[string]any, 0, len(diags))
@@ -816,9 +921,27 @@ func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, erro
 		return nil, nil
 	}
 	lines := doc.runes()
-	h, ok := ss.assist.Hover(doc.parse(ctx, p.TextDocument.URI), fromPosition(lines, p.Position))
-	if !ok {
+	parsed := doc.parse(ctx, p.TextDocument.URI)
+	pos := fromPosition(lines, p.Position)
+	h, ok := ss.assist.Hover(parsed, pos)
+	// A CRD's rule says what it does to the examples, as far as the last
+	// check of the examples found it, below what the place says, or alone
+	// where the place says nothing.
+	section := ""
+	if key := crdKey(p.TextDocument.URI); ss.knowsRules(key) {
+		if e, found := parsed.Expression(pos); found {
+			if section = inline.ExamplesHover(ss.ruleExamples(key, e)); section != "" && !ok {
+				h = assist.Hover{Start: e.Start, End: e.End}
+			}
+		}
+	}
+	switch {
+	case !ok && section == "":
 		return nil, nil
+	case h.Markdown == "":
+		h.Markdown = section
+	case section != "":
+		h.Markdown += "\n\n---\n\n" + section
 	}
 	return map[string]any{
 		"contents": map[string]any{"kind": "markdown", "value": h.Markdown},
