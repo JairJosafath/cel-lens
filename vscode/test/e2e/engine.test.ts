@@ -1004,6 +1004,57 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
     }
   });
 
+  it('says an unquoted on in an example is an error at its field, with the line of the word, where the API server reads a boolean, and nothing of a quoted one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    for (const [fixture, path] of [
+      ['tier_crd.yaml', 'crd.yaml'],
+      ['tier_on.yaml', 'config/samples/gold.yaml'],
+      ['tier_quoted.yaml', 'config/samples/silver.yaml'],
+    ]) {
+      await mkdir(dirname(join(root, path ?? '')), { recursive: true });
+      await copyFile(join(FIXTURES, fixture ?? ''), join(root, path ?? ''));
+    }
+    const session = await startEngine(await checkedExtensionPath(), { folder: root });
+    const shared = engine;
+    engine = session;
+    try {
+      const open = async (path: string): Promise<{ uri: string; text: string }> => {
+        const uri = pathToFileURL(join(root, path)).href;
+        const text = await readFile(join(root, path), 'utf8');
+        await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+          textDocument: { uri, languageId: 'yaml', version: 1, text },
+        });
+        return { uri, text };
+      };
+      const gold = await open('config/samples/gold.yaml');
+      const silver = await open('config/samples/silver.yaml');
+
+      const errors = await diagnosticsFor(gold.uri, (list) =>
+        list.some((each) => each.severity === ERROR),
+      );
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatchObject({ source: 'cel-lens', severity: ERROR });
+      // The engine says what the API server says, and which line the word is on, and puts it on the
+      // field the word is the value of: the key `tier`, which the line above it names.
+      expect(errors[0]?.message).toContain('spec.tier in body must be of type string');
+      expect(errors[0]?.message).toContain(
+        `(line ${String(lineOf(gold.text, 'tier: on') + 1)}: kubectl reads the unquoted on as a boolean, as YAML 1.1 does; quote it if a string is meant)`,
+      );
+      const line = lineOf(gold.text, 'tier: on');
+      const column = (gold.text.split('\n')[line] ?? '').indexOf('tier');
+      expect(errors[0]?.range).toEqual({
+        start: { line, character: column },
+        end: { line, character: column + 'tier'.length },
+      });
+      // The quoted word is a string: nothing is said about it.
+      expect(await diagnosticsFor(silver.uri, () => true)).toEqual([]);
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('reads the CRDs below a folder created after start, on a Create change', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
     const session = await startEngine(await checkedExtensionPath(), {

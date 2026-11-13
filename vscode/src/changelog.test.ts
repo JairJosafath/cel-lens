@@ -128,11 +128,11 @@ describe('CHANGELOG.md', () => {
       .find((part) => part.startsWith(`### ${kind}\n`));
   }
 
-  const LATEST = '0.38.0';
-  const PREVIOUS = '0.37.0';
+  const LATEST = '0.39.0';
+  const PREVIOUS = '0.38.0';
 
   it('has the notes of the latest release right under Unreleased, with the date of its preparation, and the version of package.json', () => {
-    expect(sectionOf(LATEST)).toMatch(/^## \[0\.38\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sectionOf(LATEST)).toMatch(/^## \[0\.39\.0\] - \d{4}-\d{2}-\d{2}\n/);
     expect(sections[1]?.version).toBe(LATEST);
     const version = (
       JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
@@ -162,9 +162,86 @@ describe('CHANGELOG.md', () => {
     expect(sentences.filter((sentence, at) => sentences.indexOf(sentence) !== at)).toEqual([]);
   });
 
-  it('names the engine of the latest release once, says it needs nothing set, and the size it adds', () => {
-    expect(engineVersions(sectionOf(LATEST))).toEqual(['v0.30.0']);
-    const changed = partOf(LATEST, 'Changed') ?? '';
+  it('names the engine of the latest release once, and says it needs nothing set', () => {
+    expect(engineVersions(sectionOf(LATEST))).toEqual(['v0.31.0']);
+    expect(partOf(LATEST, 'Changed')).toContain(
+      'The extension ships `cel-lens-core` v0.31.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
+    );
+  });
+
+  it.each([
+    '`cel-lens-core examples [--format text|json] [--kube-version <1.x>] [--fail-on wrong|error|none] [--verbose] [paths...]`',
+    "on their examples, with the results the editor shows, and exits 1 when a verdict is not what its example expects, so a repository's examples are a test",
+    'a file given alone is the workspace of its own, but for the folders given',
+    '`12 rules, 40 examples: 2 wrong, 1 error, 3 not run`',
+    'with nothing wrong that line is all it prints, and `--verbose` lists every result',
+    '`--format json` prints one object',
+    '`wrong` (the default) a verdict that is not what its example expects',
+    '`error` also a rule that stopped with an error on an example that expects to be refused',
+    'a rule that did not run never fails',
+    'Exit code 0 means nothing failed, 1 that a verdict did, 2 a usage or read error, 130 an interrupted run',
+    "not only the first 100 of a CRD or that a policy matches, which is the editor's cap",
+    'files over 1 MiB and past the first 20000 are not read',
+    'reports each CustomResourceDefinition, ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding of the workspace that the API server cannot read',
+    'a CI check passed on a policy the API server refuses',
+    'It counts as wrong, so the default exits 1',
+    'The editor says the same on such a file of the workspace that is not open',
+    'The README says how to run the examples in CI',
+    '`go install github.com/JairJosafath/cel-lens/engine@v0.31.0`',
+  ])('names %s under Added in the notes of the latest release', (text) => {
+    expect(partOf(LATEST, 'Added')).toContain(text);
+  });
+
+  it.each([
+    'A plain `y`, `n`, `yes`, `no`, `on` or `off`',
+    'is read as the boolean that kubectl and the API server read, not as a string',
+    'a policy whose audit annotation `key` is `n` passed the check',
+    'a string enum `[y, n]` in a CRD',
+    'A field that wants a string is now an error at the word',
+    'kubectl reads an unquoted n as one (YAML 1.1), so quote it if a string is meant',
+    'a string enum with such an entry is a warning at the entry',
+    'A quoted word, or one tagged `!!str`, is a string, as before',
+    "The schema's problems on an example of a CRD that come of such a word name its line",
+    'Not covered yet: a mapping key such as `on:` is still read as written',
+    'A CustomResourceDefinition whose version says `served: yes` or `storage: on`',
+    'and its examples run, which they did not, as the CRD was left out',
+    'A CEL expression that is a plain `yes` is one problem',
+  ])('names %s under Fixed in the notes of the latest release', (text) => {
+    expect(partOf(LATEST, 'Fixed')).toContain(text);
+  });
+
+  const OLDER = '0.37.0';
+
+  it('keeps the notes of 0.38.0 under its heading, with the date of its preparation, after those of 0.39.0', () => {
+    expect(sectionOf(PREVIOUS)).toMatch(/^## \[0\.38\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sections[2]?.version).toBe(PREVIOUS);
+  });
+
+  it('lists the kinds of 0.38.0 in order: Added, Changed, Fixed', () => {
+    expect(sections.find(({ version }) => version === PREVIOUS)?.kinds).toEqual([
+      'Added',
+      'Changed',
+      'Fixed',
+    ]);
+  });
+
+  it('says nothing twice in the notes of 0.38.0', () => {
+    const entries = sectionOf(PREVIOUS)
+      .split('\n')
+      .filter((line) => line.startsWith('- '));
+    expect(new Set(entries).size).toBe(entries.length);
+    const sentences = entries.flatMap((entry) =>
+      entry
+        .slice(2)
+        .split(/(?<=[.:;])\s+/)
+        .filter((sentence) => sentence.length > 60),
+    );
+    expect(sentences.filter((sentence, at) => sentences.indexOf(sentence) !== at)).toEqual([]);
+  });
+
+  it('names the engine of 0.38.0 once, says it needs nothing set, and the size it adds', () => {
+    expect(engineVersions(sectionOf(PREVIOUS))).toEqual(['v0.30.0']);
+    const changed = partOf(PREVIOUS, 'Changed') ?? '';
     expect(changed).toContain(
       'The extension ships `cel-lens-core` v0.30.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
     );
@@ -174,15 +251,15 @@ describe('CHANGELOG.md', () => {
     );
   });
 
-  it('names the engine of the previous release once', () => {
-    expect(engineVersions(sectionOf(PREVIOUS))).toEqual(['v0.29.0']);
-    expect(partOf(PREVIOUS, 'Changed')).toContain(
+  it('names the engine of 0.37.0 once', () => {
+    expect(engineVersions(sectionOf(OLDER))).toEqual(['v0.29.0']);
+    expect(partOf(OLDER, 'Changed')).toContain(
       'The extension ships `cel-lens-core` v0.29.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
     );
   });
 
-  it("names the fix of the release workflow's sign job under Fixed in the notes of the latest release", () => {
-    const fixed = partOf(LATEST, 'Fixed') ?? '';
+  it("names the fix of the release workflow's sign job under Fixed in the notes of 0.38.0", () => {
+    const fixed = partOf(PREVIOUS, 'Fixed') ?? '';
     expect(fixed).toContain(
       'A release made by the `release.yml` workflow of JairJosafath/cel-lens no longer shows a failed run when it is complete and signed',
     );
@@ -190,14 +267,14 @@ describe('CHANGELOG.md', () => {
   });
 
   it('describes nothing of example results as needing an engine that no release has, or as pictures still to take', () => {
-    const notes = sectionOf(PREVIOUS);
+    const notes = sectionOf(OLDER);
     expect(notes).not.toContain('does not yet');
     expect(notes).not.toContain('still to take');
     expect(notes).not.toContain('no engine release has');
   });
 
   it('describes nothing of the policies as needing an engine that has none, or as pictures still to take', () => {
-    const notes = sectionOf(LATEST);
+    const notes = sectionOf(PREVIOUS);
     expect(notes).not.toContain('does not yet');
     expect(notes).not.toContain('still to take');
   });
@@ -243,8 +320,8 @@ describe('CHANGELOG.md', () => {
     "_Not supported yet_ lists only what is still not covered: example results for a MutatingAdmissionPolicy and for Kyverno's policies",
     'gets no defaulting or validation of its own',
     "a Deployment's `spec.strategy`",
-  ])('names %s under Added in the notes of the latest release', (text) => {
-    expect(partOf(LATEST, 'Added')).toContain(text);
+  ])('names %s under Added in the notes of 0.38.0', (text) => {
+    expect(partOf(PREVIOUS, 'Added')).toContain(text);
   });
 
   it.each([
@@ -285,7 +362,7 @@ describe('CHANGELOG.md', () => {
     'with a picture of the line above a rule with its part and one of the picker it opens',
     'Dry runs stay under _Not supported yet_ for admission policies only',
   ])('names %s under Added in the notes of 0.37.0', (text) => {
-    expect(partOf(PREVIOUS, 'Added')).toContain(text);
+    expect(partOf(OLDER, 'Added')).toContain(text);
   });
 
   it.each([
@@ -294,7 +371,7 @@ describe('CHANGELOG.md', () => {
     'the worst wait for a change and a hover in a session is 12 to 23 ms, as without examples, where it was 21 to 48 ms',
     'has the engine work the results out again for the new version',
   ])('names %s under Changed in the notes of 0.37.0', (text) => {
-    expect(partOf(PREVIOUS, 'Changed')).toContain(text);
+    expect(partOf(OLDER, 'Changed')).toContain(text);
   });
 
   const RELEASE = '0.36.0';
@@ -305,9 +382,9 @@ describe('CHANGELOG.md', () => {
     return release.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
   }
 
-  it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0 and 0.38.0', () => {
+  it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0, 0.38.0 and 0.39.0', () => {
     expect(release).toMatch(/^## \[0\.36\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[3]?.version).toBe(RELEASE);
+    expect(sections[4]?.version).toBe(RELEASE);
   });
 
   it('lists the kinds of the release in order: Added, Changed, Fixed, Security', () => {
