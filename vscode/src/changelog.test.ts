@@ -128,10 +128,11 @@ describe('CHANGELOG.md', () => {
       .find((part) => part.startsWith(`### ${kind}\n`));
   }
 
-  const LATEST = '0.37.0';
+  const LATEST = '0.38.0';
+  const PREVIOUS = '0.37.0';
 
   it('has the notes of the latest release right under Unreleased, with the date of its preparation, and the version of package.json', () => {
-    expect(sectionOf(LATEST)).toMatch(/^## \[0\.37\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sectionOf(LATEST)).toMatch(/^## \[0\.38\.0\] - \d{4}-\d{2}-\d{2}\n/);
     expect(sections[1]?.version).toBe(LATEST);
     const version = (
       JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
@@ -139,8 +140,12 @@ describe('CHANGELOG.md', () => {
     expect(version).toBe(LATEST);
   });
 
-  it('lists the kinds of the latest release in order: Added, Changed', () => {
-    expect(sections.find(({ version }) => version === LATEST)?.kinds).toEqual(['Added', 'Changed']);
+  it('lists the kinds of the latest release in order: Added, Changed, Fixed', () => {
+    expect(sections.find(({ version }) => version === LATEST)?.kinds).toEqual([
+      'Added',
+      'Changed',
+      'Fixed',
+    ]);
   });
 
   it('says nothing twice in the notes of the latest release', () => {
@@ -157,18 +162,89 @@ describe('CHANGELOG.md', () => {
     expect(sentences.filter((sentence, at) => sentences.indexOf(sentence) !== at)).toEqual([]);
   });
 
-  it('names the engine of the latest release once, and says it needs nothing set', () => {
-    expect(engineVersions(sectionOf(LATEST))).toEqual(['v0.29.0']);
-    expect(partOf(LATEST, 'Changed')).toContain(
+  it('names the engine of the latest release once, says it needs nothing set, and the size it adds', () => {
+    expect(engineVersions(sectionOf(LATEST))).toEqual(['v0.30.0']);
+    const changed = partOf(LATEST, 'Changed') ?? '';
+    expect(changed).toContain(
+      'The extension ships `cel-lens-core` v0.30.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
+    );
+    expect(changed).toContain('The engine is about 7 MB bigger (52.6 MB to 59.7 MB)');
+    expect(changed).toContain(
+      'so the extension takes about 7 MB more on disk for each platform, and its `.vsix`, which is compressed, is 1.5 to 1.7 MB bigger to download',
+    );
+  });
+
+  it('names the engine of the previous release once', () => {
+    expect(engineVersions(sectionOf(PREVIOUS))).toEqual(['v0.29.0']);
+    expect(partOf(PREVIOUS, 'Changed')).toContain(
       'The extension ships `cel-lens-core` v0.29.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
     );
   });
 
+  it("names the fix of the release workflow's sign job under Fixed in the notes of the latest release", () => {
+    const fixed = partOf(LATEST, 'Fixed') ?? '';
+    expect(fixed).toContain(
+      'A release made by the `release.yml` workflow of JairJosafath/cel-lens no longer shows a failed run when it is complete and signed',
+    );
+    expect(fixed).toContain('24 reads 5 seconds apart');
+  });
+
   it('describes nothing of example results as needing an engine that no release has, or as pictures still to take', () => {
-    const notes = sectionOf(LATEST);
+    const notes = sectionOf(PREVIOUS);
     expect(notes).not.toContain('does not yet');
     expect(notes).not.toContain('still to take');
     expect(notes).not.toContain('no engine release has');
+  });
+
+  it('describes nothing of the policies as needing an engine that has none, or as pictures still to take', () => {
+    const notes = sectionOf(LATEST);
+    expect(notes).not.toContain('does not yet');
+    expect(notes).not.toContain('still to take');
+  });
+
+  it.each([
+    "Example results for a ValidatingAdmissionPolicy, as for a CRD's rules",
+    'what each validation, match condition and audit annotation of a policy does to the example objects of the workspace',
+    "The verdict is the API server's own",
+    'compiled as its ValidatingAdmissionPolicy plugin compiles it',
+    "the plugin's own dispatcher and matcher admit each example as a request by no user in particular",
+    '`matchConstraints`',
+    "`excludeResourceRules`, `matchPolicy`, `namespaceSelector` against the workspace's Namespace documents, `objectSelector`",
+    "of built-in kinds and of the workspace's CRDs, outside the policy's own file, at most 100",
+    '`kubernetes.io/metadata.name`',
+    'as an update from the last example of the same object that the API server would have stored',
+    'Each example runs under each ValidatingAdmissionPolicyBinding of the workspace that binds the policy and matches it',
+    'with the params its `paramRef` names or selects',
+    '`parameterNotFoundAction` followed (`Deny` refuses the example, `Allow` runs nothing)',
+    "A failed validation refuses the example under `Deny`, allows it with the API server's warning under `Warn` and records the audit annotation under `Audit`",
+    "an audit annotation's value never refuses, but one that fails under `failurePolicy: Fail` refuses the example under any binding",
+    "the message it refuses with may be another param's",
+    'With no binding the policy runs as if bound with `Deny` and no params',
+    '`warns 1 example`',
+    '`audits 1 example`',
+    '`excludes 1 example` (a match condition is false)',
+    '`annotates 1 example`',
+    '`under binding <name>` (`under 2 bindings`, `under no binding`)',
+    'an example run under several bindings or params counts once, as the first of what they did',
+    'The hover and the warnings name the binding and the param',
+    'right when the schema, a rule of its CRD or any policy under any binding refuses it; a warning or an audit annotation refuses nothing',
+    '`not run: excluded by matchConditions`',
+    '`not run: no binding gives params`',
+    '`not run: reads authorizer` (cel-lens runs no authorizer check)',
+    '`not run: policy refused`',
+    'takes about 40 ms from an empty cache and 6 ms with nothing changed',
+    'lists each example under each binding and param, the wrong verdicts first',
+    '`warned · allowed, with a warning`',
+    '`excluded · a match condition is false`',
+    '`big.yaml:1 · deny-limits`',
+    "the param it ran with and the API server's answer: what it denied with, its warnings and its audit annotations",
+    'Before, a result with one of these verdicts was left out of the picker',
+    'with a picture of the picker of a policy',
+    "_Not supported yet_ lists only what is still not covered: example results for a MutatingAdmissionPolicy and for Kyverno's policies",
+    'gets no defaulting or validation of its own',
+    "a Deployment's `spec.strategy`",
+  ])('names %s under Added in the notes of the latest release', (text) => {
+    expect(partOf(LATEST, 'Added')).toContain(text);
   });
 
   it.each([
@@ -208,8 +284,8 @@ describe('CHANGELOG.md', () => {
     'open editors follow at once, without a reload',
     'with a picture of the line above a rule with its part and one of the picker it opens',
     'Dry runs stay under _Not supported yet_ for admission policies only',
-  ])('names %s under Added in the notes of the latest release', (text) => {
-    expect(partOf(LATEST, 'Added')).toContain(text);
+  ])('names %s under Added in the notes of 0.37.0', (text) => {
+    expect(partOf(PREVIOUS, 'Added')).toContain(text);
   });
 
   it.each([
@@ -217,8 +293,8 @@ describe('CHANGELOG.md', () => {
     'the check of an edited open CRD no longer waits for the background check of a CRD that is not open',
     'the worst wait for a change and a hover in a session is 12 to 23 ms, as without examples, where it was 21 to 48 ms',
     'has the engine work the results out again for the new version',
-  ])('names %s under Changed in the notes of the latest release', (text) => {
-    expect(partOf(LATEST, 'Changed')).toContain(text);
+  ])('names %s under Changed in the notes of 0.37.0', (text) => {
+    expect(partOf(PREVIOUS, 'Changed')).toContain(text);
   });
 
   const RELEASE = '0.36.0';
@@ -229,9 +305,9 @@ describe('CHANGELOG.md', () => {
     return release.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
   }
 
-  it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0', () => {
+  it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0 and 0.38.0', () => {
     expect(release).toMatch(/^## \[0\.36\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[2]?.version).toBe(RELEASE);
+    expect(sections[3]?.version).toBe(RELEASE);
   });
 
   it('lists the kinds of the release in order: Added, Changed, Fixed, Security', () => {

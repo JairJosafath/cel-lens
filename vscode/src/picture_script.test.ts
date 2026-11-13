@@ -215,6 +215,7 @@ describe('the picture script', () => {
       'inline-info.png',
       'example-results-line.png',
       'example-results-picker.png',
+      'example-results-policy.png',
       'problems.png',
       'quick-fix.png',
       'hover.png',
@@ -388,6 +389,7 @@ describe('the pictures start clean', () => {
   it.each([
     'inline-info.png',
     'example-results-line.png',
+    'example-results-policy.png',
     'problems.png',
     'completion.gif',
     'colors.gif',

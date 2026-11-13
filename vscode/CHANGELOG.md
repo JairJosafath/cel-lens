@@ -6,6 +6,24 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-13
+
+### Added
+
+- Example results for a ValidatingAdmissionPolicy, as for a CRD's rules: what each validation, match condition and audit annotation of a policy does to the example objects of the workspace. The verdict is the API server's own: the policy is compiled as its ValidatingAdmissionPolicy plugin compiles it, for the Kubernetes version picked, and the plugin's own dispatcher and matcher admit each example as a request by no user in particular, so `matchConditions`, `variables`, `validations` with `message`, `messageExpression` and `reason`, `failurePolicy`, `auditAnnotations` and the binding's `validationActions` are its. The examples are the documents the policy's `matchConstraints` match as the API server matches them (resource rules, `excludeResourceRules`, `matchPolicy`, `namespaceSelector` against the workspace's Namespace documents, `objectSelector`), of built-in kinds and of the workspace's CRDs, outside the policy's own file, at most 100; a namespace without a Namespace document has the one label the API server gives every namespace, `kubernetes.io/metadata.name`. Each runs as a create, or as an update from the last example of the same object that the API server would have stored.
+- Each example runs under each ValidatingAdmissionPolicyBinding of the workspace that binds the policy and matches it, with the params its `paramRef` names or selects: the documents of the policy's `paramKind`, each param a run of its own, and `parameterNotFoundAction` followed (`Deny` refuses the example, `Allow` runs nothing). A failed validation refuses the example under `Deny`, allows it with the API server's warning under `Warn` and records the audit annotation under `Audit`; an audit annotation's value never refuses, but one that fails under `failurePolicy: Fail` refuses the example under any binding. With a `selector` that matches several params they are taken in the order of their namespaces and names, where the API server has no fixed order, so when several fail under `Deny` the message it refuses with may be another param's. With no binding the policy runs as if bound with `Deny` and no params.
+- The line above each validation, match condition and audit annotation, its hover and the warnings show it, under the setting `cel-lens.exampleResults`. The line gains `warns 1 example`, `audits 1 example`, `excludes 1 example` (a match condition is false), `annotates 1 example` and `under binding <name>` (`under 2 bindings`, `under no binding`), with the words of a CRD's rules; an example run under several bindings or params counts once, as the first of what they did. The hover and the warnings name the binding and the param. An example that expects to be refused is right when the schema, a rule of its CRD or any policy under any binding refuses it; a warning or an audit annotation refuses nothing. An expression that runs on no example says why: `not run: excluded by matchConditions`, `not run: no params`, `not run: no binding gives params`, `not run: binding refuses the request`, `not run: examples refused before the rules`, `not run: needs a conversion` (a built-in kind matched in another version, or a custom resource whose CRD converts with a `Webhook`), `not run: reads authorizer` (cel-lens runs no authorizer check) and `not run: policy refused`. With a policy of 20 validations over 100 examples on 4 shared CPUs a run takes about 40 ms from an empty cache and 6 ms with nothing changed, and hover and the lines of the open policy take as long while it runs as while nothing runs.
+- The picker the part above a policy's expression opens lists each example under each binding and param, the wrong verdicts first. A line has its own icon and the verdict in words that fit it (`refused`, `warned · allowed, with a warning`, `audited · allowed, audited`, `annotated · an annotation has a value`, `excluded · a match condition is false`), the binding it ran under after the file (`big.yaml:1 · deny-limits`), and, in its detail, the param it ran with and the API server's answer: what it denied with, its warnings and its audit annotations. Before, a result with one of these verdicts was left out of the picker.
+- The README describes example results for admission policies (examples, bindings and params, what `Deny`, `Warn` and `Audit` do, the words of the line), with a picture of the picker of a policy, and _Not supported yet_ lists only what is still not covered: example results for a MutatingAdmissionPolicy and for Kyverno's policies. A document of a built-in kind is decoded strictly, as the API server decodes a request, but gets no defaulting or validation of its own, so a policy that reads a field the API server defaults, such as a Deployment's `spec.strategy`, sees it absent when the document does not set it.
+
+### Changed
+
+- The extension ships `cel-lens-core` v0.30.0, which has all of the above, with nothing to set in `cel-lens.serverPath`. The engine is about 7 MB bigger (52.6 MB to 59.7 MB), because it carries the API server's admission code that runs a policy, so the extension takes about 7 MB more on disk for each platform, and its `.vsix`, which is compressed, is 1.5 to 1.7 MB bigger to download; no informer is created or run.
+
+### Fixed
+
+- A release made by the `release.yml` workflow of JairJosafath/cel-lens no longer shows a failed run when it is complete and signed. Its `sign` job started `sign-release.yml` and watched the run at once, and GitHub answered HTTP 404 for a run it had not yet made readable (run 43465064181 of core v0.30.0). The job now reads the run until GitHub can answer, 24 reads 5 seconds apart (about 2 minutes), then watches it; a run that stays unreadable fails the job, saying to sign by hand, and a run that fails still fails it.
+
 ## [0.37.0] - 2026-11-13
 
 ### Added
@@ -693,7 +711,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.37.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.38.0...HEAD
+[0.38.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.37.0...vscode-v0.38.0
 [0.37.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.36.0...vscode-v0.37.0
 [0.36.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.35.0...vscode-v0.36.0
 [0.35.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.34.1...vscode-v0.35.0

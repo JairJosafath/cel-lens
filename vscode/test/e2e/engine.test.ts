@@ -906,6 +906,104 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
     }
   });
 
+  it('shows what a ValidatingAdmissionPolicy does to its examples under each binding: the part of the line, and the command’s answer as the picker lists it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    for (const [fixture, path] of [
+      ['policy_limit.yaml', 'policy.yaml'],
+      ['policy_bindings.yaml', 'bindings.yaml'],
+      ['policy_params.yaml', 'config/samples/limits.yaml'],
+      ['policy_small.yaml', 'config/samples/small.yaml'],
+      ['policy_big.yaml', 'config/samples/big.yaml'],
+    ]) {
+      await mkdir(dirname(join(root, path ?? '')), { recursive: true });
+      await copyFile(join(FIXTURES, fixture ?? ''), join(root, path ?? ''));
+    }
+    const session = await startEngine(await checkedExtensionPath(), { folder: root });
+    const shared = engine;
+    engine = session;
+    try {
+      const uri = pathToFileURL(join(root, 'policy.yaml')).href;
+      const text = await readFile(join(root, 'policy.yaml'), 'utf8');
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+
+      // The validation's part, and the audit annotation's: the validation is refused under one
+      // binding and warned under the other, the annotation has a value under both.
+      const isPart = (lens: { command: string }): boolean =>
+        lens.command === 'cel-lens.showExampleResults';
+      const shown = await lensesWhen(uri, (lenses) => lenses.filter(isPart).length === 2);
+      expect(shown.filter(isPart).map((lens) => lens.title)).toEqual([
+        '1 wrong · 1 passes',
+        'annotates 2 examples · under 2 bindings',
+      ]);
+
+      // The command the validation's part runs: each example under each binding, with its verdict, the
+      // binding and the param it ran under, and the API server's answer.
+      const location = await lensArgument(uri, 'cel-lens.showExampleResults');
+      const picked: PickedLines[] = [];
+      const flow = new ExampleResultsFlow(
+        (command, argument, signal) =>
+          signal === undefined
+            ? session.connection.sendRequest('workspace/executeCommand', {
+                command,
+                arguments: [argument],
+              })
+            : session.connection.sendRequest(
+                'workspace/executeCommand',
+                { command, arguments: [argument] },
+                cancellationOf(signal),
+              ),
+        pickerOf(picked, [], 'none'),
+        { warn: fail, error: fail },
+      );
+      await flow.show(location);
+
+      expect(picked[0]?.title).toBe(
+        `Example results of the rule on line ${String(lineOf(text, '- expression:') + 1)}`,
+      );
+      expect(picked[0]?.lines).toEqual([
+        { label: 'Not as expected' },
+        {
+          label: '$(warning) config/samples/big.yaml:1 · deny-limits',
+          description: 'refused · expected allowed',
+          detail:
+            'param config/samples/limits.yaml:1; denied: a deployment may not run more replicas than its limit; annotations: replica-limit/replicas=20',
+        },
+        { label: 'As expected' },
+        {
+          label: '$(megaphone) config/samples/big.yaml:1 · warn-limits',
+          description: 'warned · allowed, with a warning',
+          detail: expect.stringMatching(
+            /^param config\/samples\/limits\.yaml:1; warnings: a deployment may not run more replicas than its limit; annotations: replica-limit\/replicas=20, validation_failure=\[\{"message":/,
+          ) as string,
+        },
+        {
+          label: '$(pass) config/samples/small.yaml:1 · deny-limits',
+          description: 'allowed',
+          detail: 'param config/samples/limits.yaml:1; annotations: replica-limit/replicas=2',
+        },
+        {
+          label: '$(pass) config/samples/small.yaml:1 · warn-limits',
+          description: 'allowed',
+          detail: 'param config/samples/limits.yaml:1; annotations: replica-limit/replicas=2',
+        },
+      ]);
+
+      // The wrong verdict, refused under the Deny binding, is a warning on the policy and on the example.
+      const warned = (list: { severity?: number }[]): boolean =>
+        list.some((each) => each.severity === WARNING);
+      const policyWarnings = await diagnosticsFor(uri, warned);
+      expect(policyWarnings[0]?.message).toContain(
+        'refuses config/samples/big.yaml:1 under binding deny-limits with param config/samples/limits.yaml:1',
+      );
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('reads the CRDs below a folder created after start, on a Create change', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
     const session = await startEngine(await checkedExtensionPath(), {
