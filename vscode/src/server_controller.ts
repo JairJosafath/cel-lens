@@ -177,12 +177,27 @@ export class ServerController implements vscode.Disposable {
   private knownFeatures: readonly string[] = [];
   /** The unknown names last warned about, as one string, so the same list is never shown twice. */
   private warnedUnknown = '';
+  /** The handlers of the engine's notifications, by method; each new client gets them all. */
+  private readonly notifications = new Map<string, (params: unknown) => void>();
 
+  /**
+   * `onStarted` gets the `initialize` result of each engine that starts, once it runs and has been
+   * told the settings, so a client can ask it for what it lists.
+   */
   constructor(
     private readonly log: vscode.LogOutputChannel,
     private readonly extensionPath: string,
     private readonly onState: (state: ServerState) => void = () => undefined,
+    private readonly onStarted: (initializeResult: unknown) => void = () => undefined,
   ) {}
+
+  /**
+   * Has `handler` run for each notification of `method` an engine sends, from the engine's next
+   * start on and after every restart. One handler for a method; a second replaces the first.
+   */
+  onNotification(method: string, handler: (params: unknown) => void): void {
+    this.notifications.set(method, handler);
+  }
 
   /**
    * Tells the running server the `cel-lens.kubernetesVersion`, `cel-lens.experimental`,
@@ -433,6 +448,8 @@ export class ServerController implements vscode.Disposable {
           ...sentOptions,
           inlineInfo: engineInlineInfo(),
           exampleResults: engineExampleResults(),
+          // The engine keeps the list of the rules of the workspace for the cel-lens view.
+          ruleList: true,
         },
         middleware: {
           // The engine has one switch for the window for each setting; a workspace folder that
@@ -485,6 +502,9 @@ export class ServerController implements vscode.Disposable {
     client.onNotification(SHOW_MESSAGE_METHOD, (params: ShowMessageParams) => {
       messages.show(params);
     });
+    for (const [method, handler] of this.notifications) {
+      client.onNotification(method, handler);
+    }
     // The same for the requests with actions, one of which turns on an experimental feature.
     client.onRequest(SHOW_MESSAGE_REQUEST_METHOD, (params: ShowMessageRequestParams) =>
       messages.request(params),
@@ -511,6 +531,10 @@ export class ServerController implements vscode.Disposable {
         sentOptions.kubernetesVersion
       ) {
         await this.sendSettingsNow();
+      }
+      // Not when the settings just restarted the engine: the new one says it itself.
+      if (this.client === client) {
+        this.onStarted(client.initializeResult);
       }
     } catch (error) {
       this.onState({ kind: 'failed' });

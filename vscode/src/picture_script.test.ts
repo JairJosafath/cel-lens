@@ -213,6 +213,7 @@ describe('the picture script', () => {
     const files = [...SOURCE.matchAll(/screenshotPage\(page, '([^']+)'\)/g)].map((m) => m[1]);
     expect(files).toEqual([
       'inline-info.png',
+      'rule-view.png',
       'example-results-line.png',
       'example-results-picker.png',
       'example-results-policy.png',

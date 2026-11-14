@@ -197,10 +197,29 @@ class FakeStatusBarItem {
 }
 
 /** The editor `window.activeTextEditor` returns: only its document's language and URI. */
-export const activeEditor: { languageId: string | undefined; uri: string } = {
+export const activeEditor: {
+  languageId: string | undefined;
+  uri: string;
+  /** Where the cursor is. */
+  line: number;
+  character: number;
+} = {
   languageId: undefined,
   uri: 'file:///workspace/active.yaml',
+  line: 0,
+  character: 0,
 };
+
+const selectionListeners = new Set<(event: { textEditor: unknown }) => void>();
+
+/** Moves the active editor's cursor and tells the listeners of onDidChangeTextEditorSelection. */
+export function moveCursor(line: number, character = 0): void {
+  activeEditor.line = line;
+  activeEditor.character = character;
+  for (const listener of selectionListeners) {
+    listener({ textEditor: window.activeTextEditor });
+  }
+}
 
 const editorListeners = new Set<() => void>();
 
@@ -428,6 +447,7 @@ type LooseWindowMember =
   | 'showTextDocument'
   | 'activeTextEditor'
   | 'onDidChangeActiveTextEditor'
+  | 'onDidChangeTextEditorSelection'
   | 'showQuickPick'
   | 'createTextEditorDecorationType'
   | 'visibleTextEditors'
@@ -435,10 +455,12 @@ type LooseWindowMember =
   | 'onDidChangeTextEditorVisibleRanges'
   | 'activeColorTheme'
   | 'onDidChangeActiveColorTheme'
-  | 'tabGroups';
+  | 'tabGroups'
+  | 'createTreeView'
+  | 'withProgress';
 
 /** The workspace members whose real types are overloaded or too large to rebuild. */
-type LooseWorkspaceMember = 'openTextDocument' | 'textDocuments';
+type LooseWorkspaceMember = 'openTextDocument' | 'textDocuments' | 'fs';
 
 export const ColorThemeKind = { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 } as const;
 
@@ -450,6 +472,16 @@ export class Range {
     readonly endLine: number,
     readonly endCharacter: number,
   ) {}
+
+  /** Where the range starts, as vscode.Range says. */
+  get start(): { line: number; character: number } {
+    return { line: this.startLine, character: this.startCharacter };
+  }
+
+  /** Where the range ends, as vscode.Range says. */
+  get end(): { line: number; character: number } {
+    return { line: this.endLine, character: this.endCharacter };
+  }
 }
 
 /** A decoration type that remembers its color and whether it was disposed. */
@@ -576,8 +608,19 @@ export class FakeTextDocument {
     public text: string,
   ) {}
 
-  getText(): string {
-    return this.text;
+  /** The whole text, or the part in `range` when one is given. */
+  getText(range?: vscode.Range): string {
+    if (range === undefined) {
+      return this.text;
+    }
+    return this.text
+      .split('\n')
+      .slice(range.start.line, range.end.line + 1)
+      .map((line, at, kept) => {
+        const end = at === kept.length - 1 ? range.end.character : line.length;
+        return line.slice(at === 0 ? range.start.character : 0, end);
+      })
+      .join('\n');
   }
 
   save(): Promise<boolean> {
@@ -613,6 +656,9 @@ export const openTabs: { input: TabInputText }[] = [];
 
 /** The URIs of the tabs window.tabGroups.close closed, oldest first. */
 export const closedTabs: string[] = [];
+
+/** The URIs `workspace.openTextDocument` had to open because they were closed, oldest first: each one makes the language client send the engine a didOpen. */
+export const openedByApi: string[] = [];
 
 /** The documents workspace.textDocuments lists: each one workspace.openTextDocument opened. */
 export const openDocuments: FakeTextDocument[] = [];
@@ -653,6 +699,130 @@ export function openDocument(document: OpenedDocument): void {
   }
 }
 
+/** A theme colour, by id. */
+export class ThemeColor implements vscode.ThemeColor {
+  constructor(readonly id: string) {}
+}
+
+/** A product icon, by id, with the theme colour it is drawn in, if any. */
+export class ThemeIcon implements vscode.ThemeIcon {
+  constructor(
+    readonly id: string,
+    readonly color?: vscode.ThemeColor,
+  ) {}
+}
+
+export const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 } as const;
+
+/** A row of a tree view, as the code under test fills it. */
+export class TreeItem implements vscode.TreeItem {
+  id?: string;
+  description?: string | boolean;
+  iconPath?: vscode.ThemeIcon;
+  contextValue?: string;
+  tooltip?: string | vscode.MarkdownString;
+  command?: vscode.Command;
+  accessibilityInformation?: vscode.AccessibilityInformation;
+
+  label?: string;
+  collapsibleState?: vscode.TreeItemCollapsibleState;
+
+  constructor(label: string, collapsibleState?: vscode.TreeItemCollapsibleState) {
+    this.label = label;
+    if (collapsibleState !== undefined) {
+      this.collapsibleState = collapsibleState;
+    }
+  }
+}
+
+/** A Markdown text; `isTrusted` is what lets its links run commands. */
+export class MarkdownString implements Pick<vscode.MarkdownString, 'value'> {
+  isTrusted?: boolean | { readonly enabledCommands: readonly string[] };
+
+  constructor(public value = '') {}
+}
+
+/** An event source, as vscode.EventEmitter is. */
+export class EventEmitter<T> implements vscode.EventEmitter<T> {
+  private readonly listeners = new Set<(event: T) => unknown>();
+
+  readonly event: vscode.Event<T> = (listener) => {
+    this.listeners.add(listener);
+    return new Disposable(() => this.listeners.delete(listener));
+  };
+
+  fire(data: T): void {
+    for (const listener of [...this.listeners]) {
+      listener(data);
+    }
+  }
+
+  dispose(): void {
+    this.listeners.clear();
+  }
+}
+
+export const ProgressLocation = { SourceControl: 1, Window: 10, Notification: 15 } as const;
+
+/** A tree view made with `window.createTreeView`: the provider and what the code sets on the view. */
+/** The options of `TreeView.reveal`. */
+interface RevealOptions {
+  select?: boolean;
+  focus?: boolean;
+  expand?: boolean | number;
+}
+
+export class FakeTreeView<T> {
+  message: string | undefined;
+  description: string | undefined;
+  badge: vscode.ViewBadge | undefined;
+  disposed = false;
+  visible = true;
+  selection: T[] = [];
+  /** What `reveal` was asked for, oldest first; a reveal with `select` selects the element. */
+  revealed: { element: T; options: RevealOptions | undefined }[] = [];
+
+  constructor(
+    readonly viewId: string,
+    readonly provider: vscode.TreeDataProvider<T>,
+  ) {}
+
+  reveal(element: T, options?: RevealOptions): Promise<void> {
+    this.revealed.push({ element, options });
+    if (options?.select === true) {
+      this.selection = [element];
+    }
+    return Promise.resolve();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+  }
+}
+
+/** The tree views created, oldest first. */
+export const treeViews: FakeTreeView<never>[] = [];
+
+/** The progress `window.withProgress` was asked to show, oldest first; `done` once its task ended. */
+export const progressRuns: { options: vscode.ProgressOptions; done: boolean }[] = [];
+
+/** Tells the listeners of onDidChangeWorkspaceFolders that the folders changed. */
+export function changeWorkspaceFolders(): void {
+  for (const listener of folderListeners) {
+    listener({});
+  }
+}
+
+const folderListeners = new Set<(event: object) => void>();
+const saveListeners = new Set<(document: OpenedDocument) => void>();
+
+/** Tells the listeners of onDidSaveTextDocument that a document was saved. */
+export function saveDocument(document: OpenedDocument): void {
+  for (const listener of saveListeners) {
+    listener(document);
+  }
+}
+
 export const window = {
   createTextEditorDecorationType(options: { color?: unknown }): FakeDecorationType {
     const type = new FakeDecorationType(options.color);
@@ -684,10 +854,22 @@ export const window = {
     statusBarItems.push(item);
     return item;
   },
-  get activeTextEditor(): { document: { languageId: string; uri: vscode.Uri } } | undefined {
+  get activeTextEditor():
+    | {
+        document: { languageId: string; uri: vscode.Uri };
+        selection: { active: { line: number; character: number } };
+      }
+    | undefined {
     return activeEditor.languageId === undefined
       ? undefined
-      : { document: { languageId: activeEditor.languageId, uri: Uri.parse(activeEditor.uri) } };
+      : {
+          document: { languageId: activeEditor.languageId, uri: Uri.parse(activeEditor.uri) },
+          selection: { active: { line: activeEditor.line, character: activeEditor.character } },
+        };
+  },
+  onDidChangeTextEditorSelection(listener: (event: { textEditor: unknown }) => void): Disposable {
+    selectionListeners.add(listener);
+    return new Disposable(() => selectionListeners.delete(listener));
   },
   onDidChangeActiveTextEditor(listener: () => void): Disposable {
     editorListeners.add(listener);
@@ -757,6 +939,23 @@ export const window = {
       }
       return Promise.resolve(true);
     },
+  },
+  createTreeView<T>(viewId: string, options: vscode.TreeViewOptions<T>): FakeTreeView<T> {
+    const view = new FakeTreeView<T>(viewId, options.treeDataProvider);
+    treeViews.push(view as FakeTreeView<never>);
+    return view;
+  },
+  async withProgress<R>(
+    options: vscode.ProgressOptions,
+    task: (progress: object, token: object) => PromiseLike<R>,
+  ): Promise<R> {
+    const run = { options, done: false };
+    progressRuns.push(run);
+    try {
+      return await task({}, {});
+    } finally {
+      run.done = true;
+    }
   },
   createOutputChannel(name: string): LogChannel {
     // Both overloads of the real function return a channel; tests only ask for the log kind.
@@ -903,7 +1102,20 @@ export const workspace = {
     }
     const document = new FakeTextDocument(target, 'yaml', text);
     openDocuments.push(document);
+    openedByApi.push(target.toString());
+    // Like VS Code, opening a document that was closed tells the listeners, which is how the
+    // language client sends the engine a didOpen for it.
+    openDocument(document);
     return document;
+  },
+  /** The files of the workspace as bytes, from `fileTexts`: reading one opens no document. */
+  fs: {
+    readFile(target: vscode.Uri): Promise<Uint8Array> {
+      const text = fileTexts.get(target.toString());
+      return text === undefined
+        ? Promise.reject(FileSystemError.FileNotFound(target))
+        : Promise.resolve(new TextEncoder().encode(text));
+    },
   },
   get textDocuments(): readonly FakeTextDocument[] {
     return openDocuments;
@@ -923,6 +1135,14 @@ export const workspace = {
   onDidOpenTextDocument(listener: (document: OpenedDocument) => void): Disposable {
     openListeners.add(listener);
     return new Disposable(() => openListeners.delete(listener));
+  },
+  onDidSaveTextDocument(listener: (document: OpenedDocument) => void): Disposable {
+    saveListeners.add(listener);
+    return new Disposable(() => saveListeners.delete(listener));
+  },
+  onDidChangeWorkspaceFolders(listener: (event: object) => void): Disposable {
+    folderListeners.add(listener);
+    return new Disposable(() => folderListeners.delete(listener));
   },
   getConfiguration(section?: string, scope?: vscode.ConfigurationScope | null): Configuration {
     return new Configuration(section ?? '', scope);
@@ -967,6 +1187,8 @@ export const workspace = {
     | 'onDidChangeTextDocument'
     | 'onDidOpenTextDocument'
     | 'onDidCloseTextDocument'
+    | 'onDidSaveTextDocument'
+    | 'onDidChangeWorkspaceFolders'
     | LooseWorkspaceMember
   >
 > &
@@ -982,6 +1204,14 @@ export const workspace = {
     onDidOpenTextDocument?: FiredEvent<
       typeof vscode.workspace.onDidOpenTextDocument,
       OpenedDocument
+    >;
+    onDidSaveTextDocument?: FiredEvent<
+      typeof vscode.workspace.onDidSaveTextDocument,
+      OpenedDocument
+    >;
+    onDidChangeWorkspaceFolders?: FiredEvent<
+      typeof vscode.workspace.onDidChangeWorkspaceFolders,
+      object
     >;
   };
 
@@ -1138,6 +1368,7 @@ export function reset(): void {
   commandResults.clear();
   fileTexts.clear();
   openDocuments.length = 0;
+  openedByApi.length = 0;
   fileSystemProviders.clear();
   openTabs.length = 0;
   closedTabs.length = 0;
@@ -1173,9 +1404,16 @@ export function reset(): void {
   themeListeners.clear();
   documentListeners.clear();
   openListeners.clear();
+  saveListeners.clear();
+  folderListeners.clear();
+  treeViews.length = 0;
+  progressRuns.length = 0;
   theme.kind = ColorThemeKind.Dark;
   activeEditor.languageId = undefined;
   activeEditor.uri = 'file:///workspace/active.yaml';
+  activeEditor.line = 0;
+  activeEditor.character = 0;
+  selectionListeners.clear();
   errorChoice.next = undefined;
   errorChoice.never = false;
 }

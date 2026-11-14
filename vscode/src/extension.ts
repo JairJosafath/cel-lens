@@ -16,8 +16,19 @@ import { INLINE_INFO_SETTING_NAME, TOGGLE_INLINE_INFO_COMMAND } from './inline_i
 import { toggleInlineInfo } from './inline_info_setting';
 import { offerLegacyColorStyleMove } from './legacy_color_style';
 import { PICK_VERSION_COMMAND, RESTART_SERVER_COMMAND } from './kubernetes_version';
+import { FOLLOW_EDITOR_SETTING } from './rule_follow';
+import { RULE_LIST_CHANGED_NOTIFICATION } from './rule_list';
 import { listValues, showRule } from './rule_commands';
 import { LIST_VALUES_COMMAND, SHOW_RULE_COMMAND } from './rule_parts';
+import {
+  FOLLOW_EDITOR_COMMAND,
+  RuleView,
+  SHOW_ALL_RULES_COMMAND,
+  SHOW_PROBLEMS_ONLY_COMMAND,
+  SHOW_RULE_EXAMPLES_COMMAND,
+  SHOW_RULE_PROBLEMS_COMMAND,
+  STOP_FOLLOWING_COMMAND,
+} from './rule_view';
 import { ServerController } from './server_controller';
 import { giveValueType, typeUi } from './type_commands';
 import { TypeFlow } from './type_flow';
@@ -40,14 +51,36 @@ let controller: ServerController | undefined;
 export function activate(
   context: Pick<vscode.ExtensionContext, 'subscriptions' | 'extensionPath'> & {
     readonly globalState: Pick<vscode.Memento, 'get' | 'update'>;
+    readonly workspaceState: Pick<vscode.Memento, 'get' | 'update'>;
   },
 ): void {
   const log = vscode.window.createOutputChannel('cel-lens', { log: true });
   const status = new VersionStatus(log);
-  const server = new ServerController(log, context.extensionPath, (state) => {
-    status.setState(state);
-  });
+  // The server and the view need each other: the server says when the engine starts and stops,
+  // the view asks it for the list. Both are made before the engine starts, so neither is early.
+  const server = new ServerController(
+    log,
+    context.extensionPath,
+    (state) => {
+      status.setState(state);
+      view.engineState(state);
+    },
+    (initializeResult) => {
+      view.engineStarted(initializeResult);
+    },
+  );
   controller = server;
+  const view = new RuleView(
+    (command, argument) => server.runEngineCommand(command, argument),
+    log,
+    {
+      state: context.workspaceState,
+    },
+  );
+  // The engine tells a client that asked for the list (`ruleList: true`) when it changed.
+  server.onNotification(RULE_LIST_CHANGED_NOTIFICATION, (params) => {
+    view.onRuleListChanged(params);
+  });
   const examples = new ExampleEditors(log);
   const notes = new ExampleNotes();
   const ui = typeUi(log, examples, notes);
@@ -65,20 +98,31 @@ export function activate(
     log,
     server,
     status,
+    view,
     examples,
     notes,
     new ColorPainter(),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration(`cel-lens.${FOLLOW_EDITOR_SETTING}`)) {
+        view.followEditorChanged();
+      }
       if (
         event.affectsConfiguration(INLINE_INFO_SETTING_NAME) ||
         event.affectsConfiguration(EXAMPLE_RESULTS_SETTING_NAME)
       ) {
-        void server.sendLineSettings();
+        // The rows show or hide their example words by folder, and the engine's states follow its switch.
+        void server.sendLineSettings().then(() => {
+          view.redraw();
+          return view.refresh();
+        });
       } else if (
         event.affectsConfiguration('cel-lens.kubernetesVersion') ||
         event.affectsConfiguration('cel-lens.experimental')
       ) {
-        void server.sendSettings();
+        void server.sendSettings().then(() => {
+          view.redraw();
+          return view.refresh();
+        });
       }
     }),
     vscode.commands.registerCommand(PICK_VERSION_COMMAND, async () => {
@@ -120,6 +164,26 @@ export function activate(
     }),
     vscode.commands.registerCommand(REMOVE_TYPE_COMMAND, async (value: unknown) => {
       await types.removeType(value);
+    }),
+    // The context menu of a rule in the view: the line's own commands, run for the rule it was opened on.
+    vscode.commands.registerCommand(SHOW_RULE_PROBLEMS_COMMAND, async (node: unknown) => {
+      await view.showProblems(node);
+    }),
+    vscode.commands.registerCommand(SHOW_RULE_EXAMPLES_COMMAND, async (node: unknown) => {
+      await view.showExampleResults(node);
+    }),
+    // The view's title menu: the filter, and following the editor.
+    vscode.commands.registerCommand(SHOW_PROBLEMS_ONLY_COMMAND, () => {
+      view.setProblemsOnly(true);
+    }),
+    vscode.commands.registerCommand(SHOW_ALL_RULES_COMMAND, () => {
+      view.setProblemsOnly(false);
+    }),
+    vscode.commands.registerCommand(FOLLOW_EDITOR_COMMAND, async () => {
+      await view.setFollowEditor(true);
+    }),
+    vscode.commands.registerCommand(STOP_FOLLOWING_COMMAND, async () => {
+      await view.setFollowEditor(false);
     }),
     // The palette's way to the same steps, for the values of the open file.
     vscode.commands.registerCommand(GIVE_VALUE_TYPE_COMMAND, async () => {

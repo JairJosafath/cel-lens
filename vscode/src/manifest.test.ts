@@ -38,6 +38,12 @@ const INTERNAL_COMMANDS = [
   'cel-lens.giveType',
   'cel-lens.editType',
   'cel-lens.removeType',
+  'cel-lens.rules.showProblems',
+  'cel-lens.rules.showExampleResults',
+  'cel-lens.rules.showProblemsOnly',
+  'cel-lens.rules.showAll',
+  'cel-lens.rules.followEditor',
+  'cel-lens.rules.stopFollowing',
 ];
 const SHOWN_WITHOUT_YAML = ['cel-lens.showLogs'];
 /** Shown only on the editor of a pasted example, whatever its language. */
@@ -46,11 +52,13 @@ const SETTINGS = Object.entries(configuration.properties);
 const TITLE_VERBS = [
   'Choose',
   'Edit',
+  'Follow',
   'Give',
   'Pick',
   'Remove',
   'Restart',
   'Show',
+  'Stop',
   'Toggle',
   'Use',
 ];
