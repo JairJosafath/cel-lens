@@ -121,6 +121,30 @@ number also brings the total under its budget). No fix is offered when there is 
   is typed, a schema worked out from examples, and setting or removing a
   `.cellens` entry through `workspace/applyEdit`, or adding one to fill in,
   and what a CRD's rules do to its examples. See [Commands](#commands).
+- **Workspace folders**: the server follows them as they change, without a
+  restart. `initialize` declares `workspace.workspaceFolders` with
+  `supported` and `changeNotifications` true, so the client sends
+  `workspace/didChangeWorkspaceFolders` when a folder is added or removed;
+  the server keeps one list of the folders, from `workspaceFolders` (else
+  `rootUri`) and those changes, a folder named with or without a trailing
+  slash and with its drive letter in either case being one folder, and every background run that walks the
+  workspace reads it when it starts: the CRD scan (while
+  `crd-typed-policies` is on), the search for `.cellens` files, the check of
+  the examples (while `exampleResults` is on) and the searches of
+  `cel-lens.typeChoices` and `cel-lens.exampleResults`. A folder inside
+  another folder of the workspace is walked once, with the outer one. A
+  folder added is walked with the limits of the walk: the CRD scan walks
+  every folder again from the start, as at `initialize`, so its cap of
+  20,000 YAML files counts across them all, and a scan in progress gives way
+  to it; the `.cellens` files of the folder are searched for in the
+  background; the check of the examples runs again. A folder removed is
+  forgotten at once: its CRDs and `.cellens` files no longer count, even
+  those a scan or search in progress finds there, the diagnostics sent for
+  its `.cellens` files and its examples that are not open are cleared, and
+  an open file in it stays open, as an open file outside every folder does.
+  The open documents are checked again when the CRDs or the `.cellens`
+  types they are typed from changed, once the walks of the change end, and
+  the Go types `go:` lists are listed again.
 
 - **Inline info**: `textDocument/codeLens` (the server declares
   `codeLensProvider`, without `resolveProvider`: each lens comes with its
@@ -134,7 +158,15 @@ number also brings the total under its budget). No fix is offered when there is 
     `spec` (`self: Widget` on the root, `self: Widget.spec.ports[]` on a list's
     items), `object: apps/v1 Deployment · 2 problems` for a policy (`object:
     dyn` when its kinds are not known). It runs `cel-lens.showRule`, for the
-    client to show the expression's problems or its hover.
+    client to show the expression's problems or its hover. For an expression
+    the check did not compile, it says so and why in place of `compiles`:
+    `not checked: schema error` for a CRD whose schema the API server refuses
+    before its rules (a schema that is not structural, or whose defaults it
+    refuses, compiles none; an error at or below a rule's schema node stops
+    that rule), `not checked: unreadable document` for a document the API
+    server cannot read; then `cel-lens.showRule` gets the place of the
+    problem that stopped the check, not the expression. It is the signal the
+    rule list takes (`compile.state` `error`).
   - only while `cellens-types` is on, for each value the expression reads
     that Kubernetes leaves `dyn` and a `.cellens` entry can type,
     `self.spec.port: dyn · Give it a type`, which
@@ -233,21 +265,23 @@ exit code 2. `lsp --help` lists them.
 
 ## Commands
 
-`initialize` declares six commands under `executeCommandProvider`, which a
+`initialize` declares seven commands under `executeCommandProvider`, which a
 client runs with `workspace/executeCommand`. While `cellens-types` is off,
 `cel-lens.typeChoices`, `cel-lens.checkType`, `cel-lens.setType`,
 `cel-lens.removeType` and `cel-lens.inferType`, the commands behind
 **Give it a type**, fail (`-32803`) with a message that says so:
 `cel-lens.setType: giving a value a type of your own in .cellens is the
 experimental feature cellens-types, which is off: turn it on to give a value
-a type`; `cel-lens.exampleResults` runs whatever the features. The VS Code extension runs them
+a type`; `cel-lens.exampleResults` and `cel-lens.ruleList` run whatever the
+features. The VS Code extension runs them
 from the lines above a rule: their parts run its own commands
 `cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, which ask
 the person for a type and pass these commands the same argument, with the
 type or kind chosen. `cel-lens.exampleResults` is described with the
 examples it is about, in [What the rules do to the
-examples](#what-the-rules-do-to-the-examples). Each of the others but
-`cel-lens.inferType` takes one argument, an object with these keys:
+examples](#what-the-rules-do-to-the-examples), and `cel-lens.ruleList` in
+[The rules of the workspace](#the-rules-of-the-workspace). Each of the others
+but `cel-lens.inferType` takes one argument, an object with these keys:
 
 | Key | What it is |
 | --- | --- |
@@ -489,6 +523,212 @@ API server would refuse, a Go type that cannot be read or a struct for an
 `x-kubernetes-int-or-string` value, is refused before any edit with
 `InvalidParams` (-32602) and the reason. A Go type that leaves fields out is
 written: its entry gets the warning.
+
+### The rules of the workspace
+
+`cel-lens.ruleList` takes no argument, or one, `{"since": n}` (another is
+refused with `InvalidParams`), and answers every CEL rule of the workspace
+folders and of the open files, each with its compile state: the state its
+file would show if it were open now. It needs no experimental feature.
+
+```json
+{
+  "kubernetesVersion": "1.34",
+  "generation": 1794600000042,
+  "full": true,
+  "documents": [{
+    "uri": "file:///repo/config/crd/widgets.yaml",
+    "folder": "file:///repo",
+    "file": "config/crd/widgets.yaml",
+    "document": "CustomResourceDefinition widgets.example.com",
+    "kind": "CustomResourceDefinition",
+    "name": "widgets.example.com",
+    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 41, "character": 31}},
+    "rules": [{
+      "id": "file:///repo/config/crd/widgets.yaml#CustomResourceDefinition widgets.example.com#v1#spec.ports[]#0",
+      "document": "CustomResourceDefinition widgets.example.com",
+      "version": "v1", "path": "spec.ports[]", "index": 0,
+      "label": "port names are at most 15 characters", "labelFrom": "message",
+      "location": {"range": {"start": {"line": 30, "character": 30}, "end": {"line": 30, "character": 51}},
+                   "uri": "file:///repo/config/crd/widgets.yaml"},
+      "span": {"start": {"line": 30, "character": 0}, "end": {"line": 31, "character": 62}},
+      "compile": {"state": "error", "problems": 1,
+                  "messages": [{"message": "undefined field 'nmae'", "severity": "error"}]},
+      "examples": {"state": "wrong", "words": "refuses 1 example it should allow · 2 pass"},
+      "problem": true
+    }]
+  }]
+}
+```
+
+- **The documents** are the ones the check checks, no more: a
+  CustomResourceDefinition of `apiextensions.k8s.io/v1`; a
+  ValidatingAdmissionPolicy and a MutatingAdmissionPolicy of
+  `admissionregistration.k8s.io`, any version; and, only while `kyverno` is
+  on, a Kyverno `ValidatingPolicy` of `policies.kyverno.io/v1` whose
+  `evaluation.mode` is left out, `Kubernetes` or `JSON`. A `v1beta1` CRD, a
+  binding, Kyverno's other kinds and a document with no CEL are not listed.
+  Each document has the URI of its file (the editor's for an open file),
+  `folder`, the deepest workspace folder holding the file, left out for an
+  open file outside every folder, `file`, its path below that folder (outside
+  every folder, its path, or its URI when it is no file), `document` as
+  `cel-lens.exampleResults` names it, its `kind` and `name`, its `range` and
+  its `rules`, in the order of the file. The documents come in the order of
+  the workspace folders, then of the files' paths, then of the file; the
+  open files outside every folder come last.
+- **A rule** is one entry of a list that holds CEL: an
+  `x-kubernetes-validations` entry, its `rule` and `messageExpression`
+  together; one item of a policy's `validations`, `matchConditions`,
+  `variables` or `auditAnnotations`; one item of a MutatingAdmissionPolicy's
+  `matchConditions`, `variables` or `mutations`. It is named as
+  `cel-lens.exampleResults` names it: `document`, then `version`, `path` and
+  `index` for a CRD's, or `field` (`validation`, `matchCondition`,
+  `variable`, `auditAnnotation`, `mutation`), `name` (a match condition's or
+  variable's name, an audit annotation's key) and `index` for a policy's.
+  `id` is the file's URI, written from its path whoever opened the file,
+  `#`, and those parts joined with `#`; a second document of the same kind
+  and name in a file gets `#2` after its name. The id does not change with
+  the rule's text, nor when a document or a rule is added above it in
+  another document.
+- **`label`** is the rule's static `message`, else a match condition's or
+  variable's `name`, else an audit annotation's `key`, else its expression
+  on one line, cut past 60 characters with `…`; `labelFrom` says which
+  (`message`, `name`, `key`, `expression`). A `messageExpression` never
+  labels.
+- **`location`** is the place of the rule's expression, as
+  `cel-lens.showRule` takes it; `span` runs from the line of the rule's list
+  item to the end of the item.
+- **`compile`** is `error` when a diagnostic of severity error of the file's
+  check starts in the rule's `rule`, `expression`, `messageExpression` or
+  `valueExpression`, else `warning` for a warning, else `ok`, with the count
+  (`problems`) and the first three `messages` with their severity. The
+  warnings the check of the examples puts on a rule are not counted. A rule
+  whose CEL the check did not compile, because the API server cannot read
+  its document or refuses its CRD's schema before the rules (a schema that
+  is not structural or whose defaults it refuses, whose rules it compiles
+  none of, or an error at or below the rule's schema node), is `error`,
+  never `ok`, with that problem counted and first in its `messages`.
+
+**Keeping a copy current.** Each answer has a `generation`, a number that
+grows each time the entry of any file changes (a file's entry is its
+documents, with their rules and states). The generations of a session start
+from the clock at `initialize`, so those of an engine started later are
+higher. With `{"since": n}`, the answer holds only the files whose entry
+changed after generation `n`, each whole (all its documents), and
+`removed`, the URIs of the files that left the list after `n` and are not
+listed now: a file deleted, one with no rule left, one out of every
+workspace folder, a Kyverno policy once `kyverno` is off. `removed` may name
+a URI the client does not hold, such as a file that came and left after
+`n`, or the editor's spelling of an open file's URI: a client ignores those.
+`full` is then `false`. Without `since`, and for an
+`n` older than the session's first generation or newer than its last, as a
+client of an engine that restarted has, the answer is the whole list with
+`"full": true`. A client applies an answer by replacing the entries of the
+files it holds, or all of them for `full`, and dropping those `removed` it
+holds. A
+file whose entry did not change does not raise the generation; an open file
+is listed by the URI the editor gave it.
+
+```json
+{"kubernetesVersion": "1.34", "generation": 1794600000043, "full": false,
+ "documents": [{"uri": "file:///repo/config/crd/widgets.yaml", "...": "..."}],
+ "removed": ["file:///repo/old/policy.yaml"]}
+```
+
+A client that sends `initializationOptions.ruleList: true` gets the
+notification `cel-lens/ruleListChanged`, never with the list itself:
+
+```json
+{"generation": 1794600000043,
+ "scan": {"state": "done", "yamlFiles": 4210, "filesWithRules": 37, "filesLeftOut": 0}}
+```
+
+For it the index starts at `initialize`, not at the first request, and
+follows every change of what a rule's entry depends on, once changes pause
+for 250 ms, as the check of the examples waits: an open file edited, opened
+or closed (back to the text on disk), a YAML file or folder created, changed
+or deleted on disk (`workspace/didChangeWatchedFiles`), a `.cellens` change,
+the CRDs the server knows, `kubernetesVersion`, the experimental features and
+the workspace folders. It then sends the notification once, when the
+generation grew. Its requests are answered at once from the list when no
+change came since the list was made, and otherwise when the run for the
+change ends. `scan` says how far the walk of the workspace is: `state`
+is `scanning` while the index walks the whole workspace (its first walk, and
+the one after the Kubernetes version, the features or the folders changed, a
+folder added among them), and `done` otherwise; `yamlFiles` are the YAML
+files walked, so far while it scans, `filesWithRules` those with rules, and
+`filesLeftOut` the files the limits left out, past the 20000th or over 1 MiB,
+as `cel-lens-core examples` counts them. A scan is told at once, then at most
+every 500 ms while it walks, and once when it ends. Another client gets no
+notification, and the index runs only for its requests. The answers and the
+notifications are made on the message loop from what the background run
+found; the run never touches the session. When the index runs for a change
+of the workspace folders, the server's check of the open documents for that
+change waits for it too: for a folder added with many CRDs, which the index
+checks, that is seconds (about 3 s for 200 CRDs of 25 rules). On the workspace above (2,000 YAML files, 5,000
+rules), from the end of the pause after an edit of one open CRD of 25 rules
+to the notification takes 21 to 28 ms on 4 shared CPUs, and the answer since
+the generation before holds that file alone (16 kB).
+
+- **`examples`** is what the rule's examples say, `{state, words}`, for a
+  rule of a CustomResourceDefinition and a validation, match condition or
+  audit annotation of a ValidatingAdmissionPolicy of
+  `admissionregistration.k8s.io/v1`: what the last check of the examples
+  found the rule did to them, for the Kubernetes version in use, found by
+  the rule's identity the line above it uses (its document, field path and
+  text). `state` is `wrong` (a wrong verdict, at the rule or on an example
+  it ran on), `error` (an example errors and none is wrong), `pass`, or
+  `notRun` (it ran on none); `words` are exactly the part about the
+  examples the line above the rule shows (`refuses 1 example it should
+  allow · 2 pass`, `not run: needs an update example`), before the line
+  shortens it to fit. It is `null` for a rule with no example, a policy's
+  variable, a MutatingAdmissionPolicy, a Kyverno policy, a
+  ValidatingAdmissionPolicy of another version, while `exampleResults` is
+  off, and while no check of the examples has run for the Kubernetes version
+  in use: a rule never shows the results of another version.
+- **`problem`** is `true` when `compile.state` is `error` or `warning`, or
+  `examples.state` is `wrong` or `error`; `notRun` is not a problem.
+
+When a check of the examples ends and what a listed rule did to its
+examples changed, the files whose entries changed get a new generation and
+a client that follows the list is told, as for an edit; the list runs no
+rule itself, but reads what the check of the examples kept. Turning
+`exampleResults` off clears every `examples` in one generation; turning it
+on fills them when its check ends.
+
+The list is made by the *rule index*, a background run of its own, never on
+the message loop, and no command job: it takes none of the four places of
+the commands in the background. The first `cel-lens.ruleList` starts it and
+waits for it; a later one starts it again, and it checks again only what
+changed. It walks the workspace folders as the workspace scan does, with its
+limits (20000 YAML files of at most 1 MiB each, hidden folders and
+`node_modules` skipped, nothing a symbolic link leads to outside the folder),
+reads a file again only when its size or time changed, reads a UTF-16 file in
+UTF-8 as the check does, and parses only a file
+with `CustomResourceDefinition`, `AdmissionPolicy` or, with `kyverno` on,
+`ValidatingPolicy` in it. A file that is not open is checked with the options
+an open document gets: the Kubernetes version, the experimental features,
+the CRDs the server knows and, while `cellens-types` is on, the types the
+`.cellens` files give it (the index reads no `.cellens` itself); it is
+checked again only when its text, the version, the features, the
+`.cellens` types or, for a file with a policy while `crd-typed-policies` is
+on, the CRDs changed. An open file is the editor's text and the server's own
+check of it. The run checks one file at a time and waits while the server
+handles a message; its checks of CRDs share the Kubernetes version setting
+with the server's other checks. When the version, the features, the CRDs,
+the `.cellens` types or the folders changed while it ran, or a document open
+when it started was closed, it runs again, for what changed, before it
+answers: a rule whose check is still to come is never listed with a guessed
+state. A workspace folder added is walked by the next run, and what the index
+kept of the files of a folder removed is dropped. `$/cancelRequest` answers the request with `RequestCancelled` and
+stops the run when no other request waits for it and the client does not
+follow the list; `shutdown` answers the
+requests still waiting with `RequestFailed`. On a workspace of 2,000 YAML
+files with 200 CRDs of 25 rules, the first answer takes 3.3 to 4.5 s on 4
+shared CPUs, and an answer asked again with nothing changed about 37 ms;
+while a run checks, hover, completion and the code lenses of an open
+1,000-line CRD take about 1 ms longer than the 3.5 to 4.5 ms they take
+otherwise.
 
 ## Examples of a CustomResourceDefinition
 

@@ -10,6 +10,8 @@ import (
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	structuraldefaulting "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 	kfield "k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
@@ -76,6 +78,10 @@ func (r *reporter) validateCRD(ctx context.Context, node *yaml.Node, exprs map[s
 		return err
 	}
 	problems = slices.DeleteFunc(problems, r.ruleOfGuessedSchema)
+	whole, err := r.wholeSchemaErrors(ctx, &internal, problems)
+	if err != nil {
+		return err
+	}
 	for _, fe := range problems {
 		if fe.Detail == "" {
 			// Errors such as Required carry no detail; say what and where.
@@ -85,18 +91,33 @@ func (r *reporter) validateCRD(ctx context.Context, node *yaml.Node, exprs map[s
 			costErrs = append(costErrs, fe)
 			continue
 		}
-		if isSchemaError(fe) {
+		reported := len(r.diags)
+		schemaErr := isSchemaError(fe)
+		if schemaErr {
 			schemaErrs = append(schemaErrs, fe.Field)
 		}
-		if r.validationValue(node, fe.Field, fe.Detail) {
-			continue
+		if !r.validationValue(node, fe.Field, fe.Detail) {
+			at := expressionsAt(exprs, fe.Field)
+			for _, e := range at {
+				r.report(e, fe.Detail)
+			}
+			if len(at) == 0 && !partial {
+				r.schemaNode(node, fe.Field, fe.Detail)
+			}
 		}
-		at := expressionsAt(exprs, fe.Field)
-		for _, e := range at {
-			r.report(e, fe.Detail)
+		// Every problem of a schema the API server compiles no rule of
+		// stands for all its rules, whatever its kind, so one does.
+		var skipped []extract.Position
+		if w := slices.IndexFunc(whole, func(w string) bool { return underError(w, []string{fe.Field}) }); w >= 0 {
+			skipped = starts(rulesOf(exprs, whole[w]))
+		} else if schemaErr {
+			skipped = starts(uncompiledBy(exprs, errorNode(fe)))
 		}
-		if len(at) == 0 && !partial {
-			r.schemaNode(node, fe.Field, fe.Detail)
+		for i := reported; i < len(r.diags); i++ {
+			r.diags[i].Uncompiled = skipped
+			if len(skipped) > 0 {
+				r.diags[i].Stop = StopSchema
+			}
 		}
 	}
 	if len(costErrs) == 0 {
@@ -217,6 +238,124 @@ func isSchemaError(fe *kfield.Error) bool {
 		return false
 	}
 	return true
+}
+
+// wholeSchemaErrors returns the schemas of crd, by field path (such as
+// spec.versions[0].schema.openAPIV3Schema, or spec.validation.openAPIV3Schema
+// for the one the API server moves there when every version has it), whose
+// rules the API server compiles none of: as it does, those that are not
+// structural or whose defaults are not valid, which it gives no CEL
+// context. The defaults are validated as the API server validates them, for
+// the Kubernetes version of the check. Only a schema with one of problems,
+// the API server's errors, under it is looked at: one without has none of
+// those, and the API server's validation validated its defaults already, so
+// they are not validated a second time. The error is ctx's, or says the
+// version cannot be set (see UnderVersion).
+func (r *reporter) wholeSchemaErrors(ctx context.Context, crd *apiextensions.CustomResourceDefinition, problems kfield.ErrorList) ([]string, error) {
+	type schema struct {
+		field string
+		props *apiextensions.JSONSchemaProps
+	}
+	var schemas []schema
+	if v := crd.Spec.Validation; v != nil && v.OpenAPIV3Schema != nil {
+		schemas = append(schemas, schema{"spec.validation.openAPIV3Schema", v.OpenAPIV3Schema})
+	}
+	for i, v := range crd.Spec.Versions {
+		if v.Schema != nil && v.Schema.OpenAPIV3Schema != nil {
+			schemas = append(schemas, schema{fmt.Sprintf("spec.versions[%d].schema.openAPIV3Schema", i), v.Schema.OpenAPIV3Schema})
+		}
+	}
+	var out []string
+	for _, s := range schemas {
+		if !slices.ContainsFunc(problems, func(fe *kfield.Error) bool { return underError(s.field, []string{fe.Field}) }) {
+			continue
+		}
+		path := kfield.NewPath(s.field)
+		ss, err := structuralschema.NewStructural(s.props)
+		bad := err != nil || len(structuralschema.ValidateStructural(path, ss)) > 0
+		if !bad {
+			var problems kfield.ErrorList
+			var defaultsErr error
+			if err := UnderVersion(r.version, func() {
+				problems, defaultsErr = structuraldefaulting.ValidateDefaults(ctx, path, ss, true, true)
+			}); err != nil {
+				return nil, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			bad = defaultsErr != nil || len(problems) > 0
+		}
+		if bad {
+			out = append(out, s.field)
+		}
+	}
+	return out, nil
+}
+
+// rulesOf returns the expressions of exprs in the schema at field, one of
+// those wholeSchemaErrors returns: the schema every version shares, at
+// spec.validation, holds those of every version.
+func rulesOf(exprs map[string]extract.Expression, field string) []extract.Expression {
+	var out []extract.Expression
+	for path, e := range exprs {
+		if strings.HasPrefix(path, field+".") || field == "spec.validation.openAPIV3Schema" && strings.HasPrefix(path, "spec.versions[") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// listItemsErrors are the messages of the errors the API server finds for a
+// list, with x-kubernetes-list-type set or map, in the schema of its items,
+// and records at the list, not at the items: it skips the rules of the list
+// and of the nodes above it, but compiles those of the items.
+var listItemsErrors = []string{
+	"cannot be nullable when x-kubernetes-list-type is ",
+	"this property is in x-kubernetes-list-map-keys, so it ",
+	"must be atomic as item of a list with x-kubernetes-list-type=set",
+	"must have a schema if x-kubernetes-list-type is map",
+	"must only have a single schema if x-kubernetes-list-type is map",
+	"must be object if parent array's x-kubernetes-list-type is map",
+	"must be a scalar type if parent array's x-kubernetes-list-type is map",
+}
+
+// errorNode is the field path where the API server records the schema
+// error fe, whose rules and those above it it does not compile: fe's own,
+// but the list's for an error about the schema of the list's items (see
+// listItemsErrors).
+func errorNode(fe *kfield.Error) string {
+	if slices.ContainsFunc(listItemsErrors, func(m string) bool { return strings.Contains(fe.Detail, m) }) {
+		if i := strings.LastIndex(fe.Field, ".items"); i >= 0 {
+			return fe.Field[:i]
+		}
+	}
+	return fe.Field
+}
+
+// uncompiledBy returns the expressions of exprs that the API server does not
+// compile for the schema error recorded at field, in a schema it compiles rules of:
+// those of the rules whose schema node holds the error, at it or below it
+// (see isSchemaError). An error under spec.validation, where the API server
+// moves the schema every version shares, holds the rules at that place in
+// each version.
+func uncompiledBy(exprs map[string]extract.Expression, field string) []extract.Expression {
+	shared, isShared := strings.CutPrefix(field, "spec.validation.")
+	var out []extract.Expression
+	for path, e := range exprs {
+		node, _, ok := strings.Cut(path, ".x-kubernetes-validations[")
+		if !ok {
+			continue
+		}
+		if underError(node, []string{field}) {
+			out = append(out, e)
+			continue
+		}
+		if _, schema, ok := strings.Cut(node, ".schema."); isShared && ok && strings.HasPrefix(node, "spec.versions[") && underError(schema, []string{shared}) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // expressionsAt returns the expressions that the API server error at field

@@ -252,6 +252,41 @@ func (c *CRDs) ForgetUnder(dir string, keep func(file string) bool) bool {
 	return changed
 }
 
+// Snapshot returns a copy of the schemas of c as they are now, which the
+// changes made to c after it leave as they are, for a Check that runs while
+// c changes. It keeps nothing of a scan or of Track. A nil c gives an empty
+// set. It is not safe to call while c changes.
+func (c *CRDs) Snapshot() *CRDs {
+	if c == nil || len(c.files) == 0 {
+		return &CRDs{}
+	}
+	return &CRDs{files: maps.Clone(c.files)}
+}
+
+// Equal reports whether c and o hold the same schemas for the same files. A
+// nil set holds none. It is quick for two snapshots of one set (see
+// Snapshot) where few files changed, as the schemas of a file that did not
+// change are shared.
+func (c *CRDs) Equal(o *CRDs) bool {
+	var a, b map[string][]crdKind
+	if c != nil {
+		a = c.files
+	}
+	if o != nil {
+		b = o.files
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for f, kinds := range a {
+		other, ok := b[f]
+		if !ok || !reflect.DeepEqual(kinds, other) {
+			return false
+		}
+	}
+	return true
+}
+
 // Files returns the names of the files c has CustomResourceDefinitions for,
 // sorted. A nil c has none.
 func (c *CRDs) Files() []string {

@@ -193,55 +193,12 @@ func examplesTitles(ex []Example) []string {
 	if len(ex) == 0 {
 		return nil
 	}
-	type at struct {
-		uri    string
-		line   int
-		update bool
-		// rule is the index of a CustomResourceDefinition's rule's result,
-		// each of which is its own example.
-		rule int
-	}
-	worst := map[at]Example{}
-	var order []at
-	bindings := map[string]bool{}
-	for i, e := range ex {
-		k := at{e.URI, e.Line, e.Update, -1}
-		if e.Binding == "" {
-			k.rule = i
-		}
-		if w, ok := worst[k]; !ok || kindOf(e) < kindOf(w) {
-			if !ok {
-				order = append(order, k)
-			}
-			worst[k] = e
-		}
-		bindings[e.Binding] = true
-	}
-	var n [notRun + 1]int
-	skips := map[Skip]int{}
-	for _, k := range order {
-		kind := kindOf(worst[k])
-		n[kind]++
-		if kind == notRun {
-			skips[worst[k].Skip]++
-		}
-	}
-	under := ""
-	switch {
-	case len(bindings) > 1:
-		under = "under " + strconv.Itoa(len(bindings)) + " bindings"
-	case bindings[Unbound]:
-		under = "under no binding"
-	case !bindings[""]:
-		for b := range bindings {
-			under = "under binding " + b
-		}
-	}
-	if n[notRun] == len(order) {
-		why := "not run on " + count(len(order))
+	n, skips, under, examples := tally(ex)
+	if n[notRun] == examples {
+		why := "not run on " + count(examples)
 		if len(skips) == 1 {
 			for s := range skips {
-				why = "not run: " + skipPhrase(s, len(order))
+				why = "not run: " + skipPhrase(s, examples)
 			}
 		}
 		return dedupe(why, "not run")
@@ -258,7 +215,7 @@ func examplesTitles(ex []Example) []string {
 	if c := n[allowsWrongly]; c > 0 {
 		add("allows " + countIf(c, first()) + " it should refuse")
 	}
-	if wrong := n[refusesWrongly] + n[refusesOtherwise] + n[allowsWrongly]; wrong > 0 {
+	if wrong := wrongs(n); wrong > 0 {
 		short = append(short, strconv.Itoa(wrong)+" wrong")
 	}
 	if c := n[errs]; c > 0 {
@@ -291,6 +248,95 @@ func examplesTitles(ex []Example) []string {
 		full += dot + under
 	}
 	return dedupe(full, strings.Join(words, dot), strings.Join(short, dot), short[0])
+}
+
+// wrongs is how many examples of the counts n have a wrong verdict.
+func wrongs(n [notRun + 1]int) int {
+	return n[refusesWrongly] + n[refusesOtherwise] + n[allowsWrongly]
+}
+
+// tally counts the examples of ex by kind, each counted once as the worst
+// of what was done to it (see examplesTitles), and returns the counts, why
+// the rule did not run on those it did not run on, the binding the words
+// end with ("" for none), and how many examples there are.
+func tally(ex []Example) (n [notRun + 1]int, skips map[Skip]int, under string, examples int) {
+	type at struct {
+		uri    string
+		line   int
+		update bool
+		// rule is the index of a CustomResourceDefinition's rule's result,
+		// each of which is its own example.
+		rule int
+	}
+	worst := map[at]Example{}
+	var order []at
+	bindings := map[string]bool{}
+	for i, e := range ex {
+		k := at{e.URI, e.Line, e.Update, -1}
+		if e.Binding == "" {
+			k.rule = i
+		}
+		if w, ok := worst[k]; !ok || kindOf(e) < kindOf(w) {
+			if !ok {
+				order = append(order, k)
+			}
+			worst[k] = e
+		}
+		bindings[e.Binding] = true
+	}
+	skips = map[Skip]int{}
+	for _, k := range order {
+		kind := kindOf(worst[k])
+		n[kind]++
+		if kind == notRun {
+			skips[worst[k].Skip]++
+		}
+	}
+	switch {
+	case len(bindings) > 1:
+		under = "under " + strconv.Itoa(len(bindings)) + " bindings"
+	case bindings[Unbound]:
+		under = "under no binding"
+	case !bindings[""]:
+		for b := range bindings {
+			under = "under binding " + b
+		}
+	}
+	return n, skips, under, len(order)
+}
+
+// The states of a rule's examples (see ExamplesState).
+const (
+	ExamplesWrong  = "wrong"
+	ExamplesError  = "error"
+	ExamplesPass   = "pass"
+	ExamplesNotRun = "notRun"
+)
+
+// ExamplesState returns what the examples ex of a rule say, as a list of
+// rules shows it: the state, ExamplesWrong when a verdict is wrong, at the
+// rule or on an example, ExamplesError when an example errors and none is
+// wrong, ExamplesNotRun when the rule ran on none, else ExamplesPass; and
+// the words, exactly the part about examples of the line above the rule
+// before the line shortens it to fit (see Line). It is false, with neither,
+// for no example.
+func ExamplesState(ex []Example) (state, words string, ok bool) {
+	titles := examplesTitles(ex)
+	if titles == nil {
+		return "", "", false
+	}
+	n, _, _, examples := tally(ex)
+	switch {
+	case wrongs(n) > 0:
+		state = ExamplesWrong
+	case n[errs] > 0:
+		state = ExamplesError
+	case n[notRun] == examples:
+		state = ExamplesNotRun
+	default:
+		state = ExamplesPass
+	}
+	return state, titles[0], true
 }
 
 // countIf writes c examples as "c examples" when they come first, as "c"

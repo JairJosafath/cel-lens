@@ -304,8 +304,8 @@ func (ss *session) endExamples(ctx context.Context, r exampleResult) error {
 
 // showExamples makes files what the examples show, nil for nothing, and
 // sends what changed: the diagnostics of each file whose example problems
-// changed, and a code lens refresh when what a rule does to its examples
-// did.
+// changed, and, when what a rule does to its examples did, the list of
+// rules again (see republishRules) and a code lens refresh.
 func (ss *session) showExamples(ctx context.Context, files map[string]exampleFile) error {
 	old := ss.exampleFound
 	ss.exampleFound = files
@@ -329,6 +329,10 @@ func (ss *session) showExamples(ctx context.Context, files map[string]exampleFil
 	}
 	if !lenses {
 		return nil
+	}
+	// What a rule did to its examples is in the list of rules too.
+	if err := ss.republishRules(ctx); err != nil {
+		return err
 	}
 	ss.lensChanges++
 	return ss.refreshCodeLenses()

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"regexp"
 	"slices"
@@ -69,6 +70,23 @@ type Diagnostic struct {
 	// FixesTogether is true when the fixes solve the problem only all at once,
 	// and false when each of them does alone.
 	FixesTogether bool
+	// Uncompiled are where the expressions this problem kept from being
+	// compiled start, as package extract finds them, in file order: those of
+	// a document that cannot be read; every rule of a CustomResourceDefinition
+	// schema that is not structural or whose defaults are not valid, on each
+	// problem of that schema, as the API server compiles none of them; and
+	// the rules whose schema node has an error at or below it, which the API
+	// server does not compile (for an error about the items of a list with
+	// x-kubernetes-list-type, the list's). Such an expression has no other
+	// problem, whatever its CEL. Only the expressions package extract finds
+	// are listed, so none of a rule under allOf, anyOf, oneOf or not. Empty
+	// for other problems.
+	Uncompiled []extract.Position
+	// Stop says why the expressions of Uncompiled were not compiled:
+	// StopUnreadable for a document the API server cannot read, StopSchema
+	// for a schema of a CustomResourceDefinition it refuses before the rules.
+	// Empty when Uncompiled is.
+	Stop Stop
 	// CostTotal is true for a problem that is, or includes, the estimated
 	// cost of all the rules of a CustomResourceDefinition schema together
 	// being over the budget of one schema: the API server then refuses the
@@ -76,6 +94,19 @@ type Diagnostic struct {
 	// the diagnostic is placed on.
 	CostTotal bool
 }
+
+// Stop is why a problem kept expressions from being compiled (see
+// Diagnostic.Stop).
+type Stop string
+
+// The reasons a problem keeps expressions from being compiled.
+const (
+	// StopUnreadable: the API server cannot read the document.
+	StopUnreadable Stop = "unreadable"
+	// StopSchema: the API server refuses the schema of the
+	// CustomResourceDefinition before its rules.
+	StopSchema Stop = "schema"
+)
 
 // Check finds the CEL expressions in data, a YAML file with any number of
 // documents, and returns the problems the API server would report for them,
@@ -146,7 +177,7 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 			if cerr := ctx.Err(); cerr != nil {
 				return r.sorted(), cerr
 			}
-			r.unreadable(d.Node, err)
+			r.unreadable(d.Node, err, found)
 		}
 	}
 	return r.sorted(), findErr
@@ -247,8 +278,9 @@ func typeOf(node *yaml.Node) (head struct{ APIVersion, Kind string }, ok bool) {
 
 // unreadable reports a document that cannot be read as the Kubernetes type its
 // apiVersion and kind name, such as a field of the wrong type. The problem is
-// placed on the first line of the document, and the CEL in it is not checked.
-func (r *reporter) unreadable(node *yaml.Node, err error) {
+// placed on the first line of the document, and the CEL in it, exprs, is not
+// checked, which the problem says (Diagnostic.Uncompiled).
+func (r *reporter) unreadable(node *yaml.Node, err error, exprs map[string]extract.Expression) {
 	start := extract.Position{Line: node.Line, Column: node.Column}
 	if len(node.Content) > 0 {
 		start = extract.Position{Line: node.Content[0].Line, Column: node.Content[0].Column}
@@ -257,7 +289,25 @@ func (r *reporter) unreadable(node *yaml.Node, err error) {
 	if start.Line >= 1 && start.Line <= len(r.lines) {
 		end.Column = len(r.lines[start.Line-1]) + 1
 	}
-	r.diags = append(r.diags, Diagnostic{File: r.file, Message: err.Error(), Severity: SeverityError, Start: start, End: end})
+	r.diags = append(r.diags, Diagnostic{File: r.file, Message: err.Error(), Severity: SeverityError, Start: start, End: end, Uncompiled: starts(slices.Collect(maps.Values(exprs)))})
+	if d := &r.diags[len(r.diags)-1]; len(d.Uncompiled) > 0 {
+		d.Stop = StopUnreadable
+	}
+}
+
+// starts are where exprs start, in file order, nil for none.
+func starts(exprs []extract.Expression) []extract.Position {
+	var out []extract.Position
+	for _, e := range exprs {
+		out = append(out, e.Start)
+	}
+	slices.SortFunc(out, func(a, b extract.Position) int {
+		if a.Line != b.Line {
+			return a.Line - b.Line
+		}
+		return a.Column - b.Column
+	})
+	return out
 }
 
 // syntax reports a document that does not parse, on the first token of the line

@@ -112,7 +112,7 @@ func (p initializeParams) editCaps() editCaps {
 	}
 }
 
-// folders returns the folders of the workspace as paths.
+// folders returns the folders of the workspace as paths (see folderPath).
 func (p initializeParams) folders() []string {
 	var uris []string
 	for _, f := range p.WorkspaceFolders {
@@ -123,7 +123,7 @@ func (p initializeParams) folders() []string {
 	}
 	var out []string
 	for _, uri := range uris {
-		if path, ok := diskPath(uri); ok {
+		if path, ok := folderPath(uri); ok {
 			out = append(out, path)
 		}
 	}
@@ -143,14 +143,15 @@ type scan struct {
 	batches []int
 }
 
-// startScan scans the workspace folders in a goroutine, for the batch in
-// hand, unless a scan is already running. The message loop receives its
-// result on ss.scan.done, and stopScan stops it.
+// startScan scans the workspace folders in a goroutine, a folder inside
+// another once, with that one, for the batch in hand, unless a scan is
+// already running. The message loop receives its result on ss.scan.done,
+// and stopScan stops it.
 func (ss *session) startScan(ctx context.Context) {
 	if ss.scan != nil {
 		return
 	}
-	ss.runScan(ctx, slices.Clone(ss.folders), []int{ss.batch})
+	ss.runScan(ctx, outermost(ss.folders), []int{ss.batch})
 }
 
 // runScan starts the scan of folders in a goroutine, for batches; no scan may
@@ -231,6 +232,7 @@ func (ss *session) scanQueued(ctx context.Context) {
 func (ss *session) endScan(ctx context.Context, found *check.CRDs) error {
 	sc := ss.scan
 	ss.scan = nil
+	ss.rulesChanged() // the CRDs a policy is typed from may have changed
 	if err := ss.warn(sc.notes); err != nil {
 		return err
 	}
@@ -245,10 +247,12 @@ func (ss *session) endScan(ctx context.Context, found *check.CRDs) error {
 	return nil
 }
 
-// busy reports whether a scan or search for batch b runs or waits.
+// busy reports whether a scan or search for batch b runs or waits, or a run
+// of the rule index (see forBatch).
 func (ss *session) busy(b int) bool {
 	return ss.scan != nil && slices.Contains(ss.scan.batches, b) || slices.Contains(ss.queuedBatches, b) ||
-		ss.lensSearch != nil && slices.Contains(ss.lensSearch.batches, b) || slices.Contains(ss.lensQueuedBatches, b)
+		ss.lensSearch != nil && slices.Contains(ss.lensSearch.batches, b) || slices.Contains(ss.lensQueuedBatches, b) ||
+		ss.rules.run != nil && slices.Contains(ss.rules.run.batches, b) || slices.Contains(ss.rules.dueBatches, b)
 }
 
 // owe records that batch b owes a check of the open documents.
@@ -649,6 +653,9 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 	}
 	if !decode(params, &p) {
 		return nil
+	}
+	if len(p.Changes) > 0 {
+		ss.rulesChanged()
 	}
 	lensChanged, aboutLens := false, false
 	var lensFolders []string

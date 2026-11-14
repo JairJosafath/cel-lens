@@ -160,7 +160,8 @@ func with(args map[string]any, key string, value any) map[string]any {
 }
 
 // TestExecuteCommandProvider checks that initialize declares the four
-// commands (#4), and inferType (#17).
+// commands (#4), inferType (#17), exampleResults and ruleList
+// (cel-lens-core#35).
 func TestExecuteCommandProvider(t *testing.T) {
 	t.Parallel()
 	c := start(t)
@@ -176,7 +177,7 @@ func TestExecuteCommandProvider(t *testing.T) {
 	if err := json.Unmarshal(res, &r); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"cel-lens.typeChoices", "cel-lens.checkType", "cel-lens.setType", "cel-lens.removeType", "cel-lens.inferType", "cel-lens.exampleResults"}
+	want := []string{"cel-lens.typeChoices", "cel-lens.checkType", "cel-lens.setType", "cel-lens.removeType", "cel-lens.inferType", "cel-lens.exampleResults", "cel-lens.ruleList"}
 	if got := r.Capabilities.ExecuteCommandProvider.Commands; !slices.Equal(got, want) {
 		t.Errorf("executeCommandProvider.commands = %v, want %v", got, want)
 	}

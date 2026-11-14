@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -319,6 +320,25 @@ func BenchmarkExampleRulesRunning(b *testing.B) {
 // for id 0, the diagnostics of u.
 func benchSession(b *testing.B, folder string, setup func(*session)) (send func(any), until func(id int, u string) jsonrpc.Message) {
 	b.Helper()
+	send, read := benchSessionWith(b, folder, nil, setup)
+	until = func(id int, u string) jsonrpc.Message {
+		for {
+			m := read()
+			if id == 0 && m.Method == "textDocument/publishDiagnostics" && strings.Contains(string(m.Params), `"uri":"`+u+`"`) {
+				return m
+			}
+			if id != 0 && string(m.ID) == strconv.Itoa(id) {
+				return m
+			}
+		}
+	}
+	return send, until
+}
+
+// benchSessionWith is benchSession with opts as the initializationOptions;
+// read returns the session's next message.
+func benchSessionWith(b *testing.B, folder string, opts map[string]any, setup func(*session)) (send func(any), read func() jsonrpc.Message) {
+	b.Helper()
 	clientIn, serverOut := io.Pipe()
 	serverIn, clientOut := io.Pipe()
 	a, err := assist.New(kubeversion.Default())
@@ -346,24 +366,23 @@ func benchSession(b *testing.B, folder string, setup func(*session)) (send func(
 			b.Fatal(err)
 		}
 	}
-	until = func(id int, u string) jsonrpc.Message {
-		for {
-			m, err := in.Read()
-			if err != nil {
-				b.Fatal(err)
-			}
-			if id == 0 && m.Method == "textDocument/publishDiagnostics" && strings.Contains(string(m.Params), `"uri":"`+u+`"`) {
-				return m
-			}
-			if id != 0 && string(m.ID) == strconv.Itoa(id) {
-				return m
-			}
+	read = func() jsonrpc.Message {
+		m, err := in.Read()
+		if err != nil {
+			b.Fatal(err)
+		}
+		return m
+	}
+	// The types of .cellens are on, as the benchmarks measured them before
+	// they were a feature, unless opts say otherwise.
+	options := map[string]any{"experimental": []string{"cellens-types"}}
+	maps.Copy(options, opts)
+	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{
+		"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(folder), "name": "ws"}}, "initializationOptions": options,
+	}})
+	for {
+		if m := read(); string(m.ID) == "1" {
+			return send, read
 		}
 	}
-	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{
-		"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(folder), "name": "ws"}},
-		"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}},
-	}})
-	until(1, "")
-	return send, until
 }
