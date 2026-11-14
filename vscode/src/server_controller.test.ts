@@ -67,6 +67,7 @@ const client = vi.hoisted(() => ({
   /** The methods of the features the client kept, in the order the client registered them. */
   features: [] as string[],
   handlers: new Map<string, (params: never) => void>(),
+  requestHandlers: new Map<string, (params: never) => unknown>(),
   startGate: undefined as Promise<void> | undefined,
   onStart: undefined as (() => void) | undefined,
   lensRefreshes: 0,
@@ -132,6 +133,10 @@ vi.mock('vscode-languageclient/node', async () => {
 
       onNotification(method: string, handler: (params: never) => void): void {
         client.handlers.set(method, handler);
+      }
+
+      onRequest(method: string, handler: (params: never) => unknown): void {
+        client.requestHandlers.set(method, handler);
       }
 
       getFeature(method: string): unknown {
@@ -275,6 +280,7 @@ describe('ServerController', () => {
     client.requestError = undefined;
     client.features.length = 0;
     client.handlers.clear();
+    client.requestHandlers.clear();
     client.startGate = undefined;
     client.onStart = undefined;
     client.lensRefreshes = 0;
@@ -320,6 +326,30 @@ describe('ServerController', () => {
     ]);
     expect(client.started).toBe(1);
     expect(channels.get('cel-lens')?.lines[0]).toContain(`Starting ${execPath} lsp`);
+  });
+
+  it('answers the engine’s showMessageRequest itself, so its Turn on cellens-types action turns the feature on', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    warningChoice.next = 'Turn on cellens-types';
+
+    await newController().start();
+    const handler = client.requestHandlers.get('window/showMessageRequest') as (
+      params: unknown,
+    ) => Promise<unknown>;
+    const answer = await handler({
+      type: 2,
+      message: 'cel-lens does not read deploy/.cellens',
+      actions: [{ title: 'Turn on cellens-types', experimental: 'cellens-types' }],
+    });
+
+    expect(answer).toEqual({ title: 'Turn on cellens-types' });
+    expect(settingUpdates).toEqual([
+      {
+        name: 'cel-lens.experimental',
+        value: ['cellens-types'],
+        target: ConfigurationTarget.Global,
+      },
+    ]);
   });
 
   it("shows the engine's showMessage notifications itself, so the file-cap warning gets a button", async () => {

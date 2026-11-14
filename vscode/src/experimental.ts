@@ -116,3 +116,33 @@ export function replaceExperimental(
     ? items.filter((item, index) => items.indexOf(item) === index)
     : undefined;
 }
+
+/**
+ * The names `cel-lens.experimental` offers, as package.json lists them. An action of the engine
+ * that turns a feature on is followed only for one of these: the extension never writes a name the
+ * engine supplies into a person's settings unless the setting itself offers it.
+ */
+export const KNOWN_EXPERIMENTAL: readonly string[] = [
+  'kyverno',
+  'crd-typed-policies',
+  'fitting-completion',
+  'cellens-types',
+];
+
+/** The experimental feature that reads the `.cellens` files giving a value a type of your own. */
+export const CELLENS_TYPES_FEATURE = 'cellens-types';
+
+/**
+ * The setting value with `name` added at the end, the other items as they are; `undefined` when
+ * the value is a list that has the name (after trimming) already. A value that is no list is
+ * replaced, as the engine reads such a value as none.
+ */
+export function addExperimental(value: unknown, name: string): unknown[] | undefined {
+  if (!Array.isArray(value)) {
+    return [name];
+  }
+  const items: readonly unknown[] = value;
+  return items.some((item) => typeof item === 'string' && item.trim() === name)
+    ? undefined
+    : [...items, name];
+}

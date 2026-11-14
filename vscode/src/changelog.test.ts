@@ -128,28 +128,25 @@ describe('CHANGELOG.md', () => {
       .find((part) => part.startsWith(`### ${kind}\n`));
   }
 
-  const LATEST = '0.39.0';
-  const PREVIOUS = '0.38.0';
+  const V40 = '0.40.0';
+  const V39 = '0.39.0';
+  const V38 = '0.38.0';
 
   it('has the notes of the latest release right under Unreleased, with the date of its preparation, and the version of package.json', () => {
-    expect(sectionOf(LATEST)).toMatch(/^## \[0\.39\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[1]?.version).toBe(LATEST);
+    expect(sectionOf(V40)).toMatch(/^## \[0\.40\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sections[1]?.version).toBe(V40);
     const version = (
       JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
     ).version;
-    expect(version).toBe(LATEST);
+    expect(version).toBe(V40);
   });
 
-  it('lists the kinds of the latest release in order: Added, Changed, Fixed', () => {
-    expect(sections.find(({ version }) => version === LATEST)?.kinds).toEqual([
-      'Added',
-      'Changed',
-      'Fixed',
-    ]);
+  it('lists the kinds of the latest release in order: Added, Changed', () => {
+    expect(sections.find(({ version }) => version === V40)?.kinds).toEqual(['Added', 'Changed']);
   });
 
   it('says nothing twice in the notes of the latest release', () => {
-    const entries = sectionOf(LATEST)
+    const entries = sectionOf(V40)
       .split('\n')
       .filter((line) => line.startsWith('- '));
     expect(new Set(entries).size).toBe(entries.length);
@@ -163,8 +160,60 @@ describe('CHANGELOG.md', () => {
   });
 
   it('names the engine of the latest release once, and says it needs nothing set', () => {
-    expect(engineVersions(sectionOf(LATEST))).toEqual(['v0.31.0']);
-    expect(partOf(LATEST, 'Changed')).toContain(
+    expect(engineVersions(sectionOf(V40))).toEqual(['v0.32.0']);
+    expect(partOf(V40, 'Changed')).toContain(
+      'The extension ships `cel-lens-core` v0.32.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
+    );
+  });
+
+  it('says plainly under Changed that a workspace with a .cellens now needs cellens-types in cel-lens.experimental', () => {
+    const changed = partOf(V40, 'Changed') ?? '';
+
+    expect(changed).toContain(
+      '**A workspace with a `.cellens` needs `cellens-types` in `cel-lens.experimental` from this version on.**',
+    );
+    expect(partOf(V40, 'Added')).toContain('Turn on cellens-types');
+  });
+
+  it.each([
+    'the experimental feature `cellens-types`',
+    '`images/cellens-types.gif`',
+    '**cel-lens: Give a Value a Type…**',
+    'cel-lens.experimental',
+  ])('names %s under Added in the notes of the latest release', (text) => {
+    expect(partOf(V40, 'Added')).toContain(text);
+  });
+
+  it('keeps the notes of 0.39.0 under its heading, with the date of its preparation, after those of 0.40.0', () => {
+    expect(sectionOf(V39)).toMatch(/^## \[0\.39\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sections[2]?.version).toBe(V39);
+  });
+
+  it('lists the kinds of 0.39.0 in order: Added, Changed, Fixed', () => {
+    expect(sections.find(({ version }) => version === V39)?.kinds).toEqual([
+      'Added',
+      'Changed',
+      'Fixed',
+    ]);
+  });
+
+  it('says nothing twice in the notes of 0.39.0', () => {
+    const entries = sectionOf(V39)
+      .split('\n')
+      .filter((line) => line.startsWith('- '));
+    expect(new Set(entries).size).toBe(entries.length);
+    const sentences = entries.flatMap((entry) =>
+      entry
+        .slice(2)
+        .split(/(?<=[.:;])\s+/)
+        .filter((sentence) => sentence.length > 60),
+    );
+    expect(sentences.filter((sentence, at) => sentences.indexOf(sentence) !== at)).toEqual([]);
+  });
+
+  it('names the engine of 0.39.0 once, and says it needs nothing set', () => {
+    expect(engineVersions(sectionOf(V39))).toEqual(['v0.31.0']);
+    expect(partOf(V39, 'Changed')).toContain(
       'The extension ships `cel-lens-core` v0.31.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
     );
   });
@@ -188,8 +237,8 @@ describe('CHANGELOG.md', () => {
     'The editor says the same on such a file of the workspace that is not open',
     'The README says how to run the examples in CI',
     '`go install github.com/JairJosafath/cel-lens/engine@v0.31.0`',
-  ])('names %s under Added in the notes of the latest release', (text) => {
-    expect(partOf(LATEST, 'Added')).toContain(text);
+  ])('names %s under Added in the notes of 0.39.0', (text) => {
+    expect(partOf(V39, 'Added')).toContain(text);
   });
 
   it.each([
@@ -206,19 +255,19 @@ describe('CHANGELOG.md', () => {
     'A CustomResourceDefinition whose version says `served: yes` or `storage: on`',
     'and its examples run, which they did not, as the CRD was left out',
     'A CEL expression that is a plain `yes` is one problem',
-  ])('names %s under Fixed in the notes of the latest release', (text) => {
-    expect(partOf(LATEST, 'Fixed')).toContain(text);
+  ])('names %s under Fixed in the notes of 0.39.0', (text) => {
+    expect(partOf(V39, 'Fixed')).toContain(text);
   });
 
-  const OLDER = '0.37.0';
+  const V37 = '0.37.0';
 
-  it('keeps the notes of 0.38.0 under its heading, with the date of its preparation, after those of 0.39.0', () => {
-    expect(sectionOf(PREVIOUS)).toMatch(/^## \[0\.38\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[2]?.version).toBe(PREVIOUS);
+  it('keeps the notes of 0.38.0 under its heading, with the date of its preparation, after those of 0.39.0 and 0.40.0', () => {
+    expect(sectionOf(V38)).toMatch(/^## \[0\.38\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sections[3]?.version).toBe(V38);
   });
 
   it('lists the kinds of 0.38.0 in order: Added, Changed, Fixed', () => {
-    expect(sections.find(({ version }) => version === PREVIOUS)?.kinds).toEqual([
+    expect(sections.find(({ version }) => version === V38)?.kinds).toEqual([
       'Added',
       'Changed',
       'Fixed',
@@ -226,7 +275,7 @@ describe('CHANGELOG.md', () => {
   });
 
   it('says nothing twice in the notes of 0.38.0', () => {
-    const entries = sectionOf(PREVIOUS)
+    const entries = sectionOf(V38)
       .split('\n')
       .filter((line) => line.startsWith('- '));
     expect(new Set(entries).size).toBe(entries.length);
@@ -240,8 +289,8 @@ describe('CHANGELOG.md', () => {
   });
 
   it('names the engine of 0.38.0 once, says it needs nothing set, and the size it adds', () => {
-    expect(engineVersions(sectionOf(PREVIOUS))).toEqual(['v0.30.0']);
-    const changed = partOf(PREVIOUS, 'Changed') ?? '';
+    expect(engineVersions(sectionOf(V38))).toEqual(['v0.30.0']);
+    const changed = partOf(V38, 'Changed') ?? '';
     expect(changed).toContain(
       'The extension ships `cel-lens-core` v0.30.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
     );
@@ -252,14 +301,14 @@ describe('CHANGELOG.md', () => {
   });
 
   it('names the engine of 0.37.0 once', () => {
-    expect(engineVersions(sectionOf(OLDER))).toEqual(['v0.29.0']);
-    expect(partOf(OLDER, 'Changed')).toContain(
+    expect(engineVersions(sectionOf(V37))).toEqual(['v0.29.0']);
+    expect(partOf(V37, 'Changed')).toContain(
       'The extension ships `cel-lens-core` v0.29.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
     );
   });
 
   it("names the fix of the release workflow's sign job under Fixed in the notes of 0.38.0", () => {
-    const fixed = partOf(PREVIOUS, 'Fixed') ?? '';
+    const fixed = partOf(V38, 'Fixed') ?? '';
     expect(fixed).toContain(
       'A release made by the `release.yml` workflow of JairJosafath/cel-lens no longer shows a failed run when it is complete and signed',
     );
@@ -267,14 +316,14 @@ describe('CHANGELOG.md', () => {
   });
 
   it('describes nothing of example results as needing an engine that no release has, or as pictures still to take', () => {
-    const notes = sectionOf(OLDER);
+    const notes = sectionOf(V37);
     expect(notes).not.toContain('does not yet');
     expect(notes).not.toContain('still to take');
     expect(notes).not.toContain('no engine release has');
   });
 
   it('describes nothing of the policies as needing an engine that has none, or as pictures still to take', () => {
-    const notes = sectionOf(PREVIOUS);
+    const notes = sectionOf(V38);
     expect(notes).not.toContain('does not yet');
     expect(notes).not.toContain('still to take');
   });
@@ -321,7 +370,7 @@ describe('CHANGELOG.md', () => {
     'gets no defaulting or validation of its own',
     "a Deployment's `spec.strategy`",
   ])('names %s under Added in the notes of 0.38.0', (text) => {
-    expect(partOf(PREVIOUS, 'Added')).toContain(text);
+    expect(partOf(V38, 'Added')).toContain(text);
   });
 
   it.each([
@@ -362,7 +411,7 @@ describe('CHANGELOG.md', () => {
     'with a picture of the line above a rule with its part and one of the picker it opens',
     'Dry runs stay under _Not supported yet_ for admission policies only',
   ])('names %s under Added in the notes of 0.37.0', (text) => {
-    expect(partOf(OLDER, 'Added')).toContain(text);
+    expect(partOf(V37, 'Added')).toContain(text);
   });
 
   it.each([
@@ -371,7 +420,7 @@ describe('CHANGELOG.md', () => {
     'the worst wait for a change and a hover in a session is 12 to 23 ms, as without examples, where it was 21 to 48 ms',
     'has the engine work the results out again for the new version',
   ])('names %s under Changed in the notes of 0.37.0', (text) => {
-    expect(partOf(OLDER, 'Changed')).toContain(text);
+    expect(partOf(V37, 'Changed')).toContain(text);
   });
 
   const RELEASE = '0.36.0';
@@ -382,9 +431,9 @@ describe('CHANGELOG.md', () => {
     return release.split(/^(?=### )/m).find((part) => part.startsWith(`### ${kind}\n`));
   }
 
-  it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0, 0.38.0 and 0.39.0', () => {
+  it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0, 0.38.0, 0.39.0 and 0.40.0', () => {
     expect(release).toMatch(/^## \[0\.36\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[4]?.version).toBe(RELEASE);
+    expect(sections[5]?.version).toBe(RELEASE);
   });
 
   it('lists the kinds of the release in order: Added, Changed, Fixed, Security', () => {

@@ -8,7 +8,7 @@ import { platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DidChangeConfigurationNotification,
   DidChangeTextDocumentNotification,
@@ -84,6 +84,8 @@ interface Engine {
   readonly registrations: Registration[];
   /** The commands the engine lists in `executeCommandProvider`, from its `initialize` result. */
   readonly commands: readonly string[];
+  /** The `window/showMessageRequest` the engine sent, as it sent them. */
+  readonly messageRequests: { readonly params: unknown }[];
   /** How many times the engine asked the client to ask again for the lines above the rules. */
   readonly refreshes: { count: number };
   /** Resolves on the next publishDiagnostics. */
@@ -209,6 +211,11 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
     }
     return null;
   });
+  const messageRequests: { params: unknown }[] = [];
+  connection.onRequest('window/showMessageRequest', (params: unknown) => {
+    messageRequests.push({ params });
+    return null;
+  });
   const registrations: Registration[] = [];
   connection.onRequest(RegistrationRequest.type, (params) => {
     registrations.push(...params.registrations);
@@ -260,6 +267,7 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
     published,
     registrations,
     commands: listedCommands(initialized),
+    messageRequests,
     refreshes,
     nextPublish: () =>
       new Promise<void>((resolve) => {
@@ -429,7 +437,8 @@ function fail(message?: string): never {
 }
 
 beforeAll(async () => {
-  engine = await startEngine(await checkedExtensionPath());
+  // cellens-types is on for the shared session, which most of the tests below read the lines of.
+  engine = await startEngine(await checkedExtensionPath(), { experimental: ['cellens-types'] });
 });
 
 async function stopEngine(stopping: Engine): Promise<void> {
@@ -504,7 +513,10 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
   });
 
   it('draws no line above a rule while inlineInfo is off, and draws them again when it is on', async () => {
-    const quiet = await startEngine(await checkedExtensionPath(), { inlineInfo: false });
+    const quiet = await startEngine(await checkedExtensionPath(), {
+      inlineInfo: false,
+      experimental: ['cellens-types'],
+    });
     const shared = engine;
     engine = quiet;
     try {
@@ -513,7 +525,7 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
       expect(await lensesOf(uri)).toEqual([]);
 
       await quiet.connection.sendNotification(DidChangeConfigurationNotification.type, {
-        settings: { ...serverOptions('', undefined, []), inlineInfo: true },
+        settings: { ...serverOptions('', undefined, ['cellens-types']), inlineInfo: true },
       });
 
       expect(await lensesOf(uri)).toHaveLength(2);
@@ -695,6 +707,7 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
       folder: root,
       dynamicRegistration: true,
       writesCellens: true,
+      experimental: ['cellens-types'],
     });
     const shared = engine;
     engine = session;
@@ -762,6 +775,122 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
       expect((await lensesOf(uri)).map((lens) => lens.title)).toContain(
         'params: dyn · Give it a type',
       );
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('offers no Give it a type while cellens-types is off, and offers it, and types a value from .cellens, once it is on', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    await copyFile(join(FIXTURES, 'replica_policy.yaml'), join(root, 'policy.yaml'));
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      dynamicRegistration: true,
+      writesCellens: true,
+    });
+    const shared = engine;
+    engine = session;
+    try {
+      const uri = pathToFileURL(join(root, 'policy.yaml')).href;
+      const text = await readFile(join(root, 'policy.yaml'), 'utf8');
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+      await diagnosticsFor(uri, () => true);
+      const titles = async (): Promise<string[]> => (await lensesOf(uri)).map((lens) => lens.title);
+
+      // Off: no part to give a type, and the commands behind it refuse.
+      expect(await titles()).toEqual(['object: apps/v1 Deployment · compiles']);
+      await expect(
+        runCommand('cel-lens.setType', {
+          file: 'policy.yaml',
+          document: 'ValidatingAdmissionPolicy replica-limit',
+          variable: 'params',
+          type: 'int',
+        }),
+      ).rejects.toThrow(/cellens-types/);
+
+      // On: the part is there, as it asks the editor to ask for the lines again.
+      await session.connection.sendNotification(DidChangeConfigurationNotification.type, {
+        settings: { ...serverOptions('', undefined, ['cellens-types']), inlineInfo: true },
+      });
+      const on = await lensesWhen(uri, (found) =>
+        found.some((lens) => lens.title === 'params: dyn · Give it a type'),
+      );
+      expect(on.map((lens) => lens.title)).toEqual([
+        'object: apps/v1 Deployment · compiles',
+        'params: dyn · Give it a type',
+      ]);
+
+      // A value typed from .cellens: the entry is written, and the line follows it.
+      const value = await lensArgument(uri, 'cel-lens.giveType');
+      const written = await runCommand('cel-lens.setType', {
+        ...value,
+        schema: { type: 'object', properties: { maxReplicas: { type: 'integer' } } },
+      });
+      expect(written).toMatchObject({ change: 'created' });
+      await session.connection.sendNotification(DidChangeWatchedFilesNotification.type, {
+        changes: [
+          { uri: pathToFileURL(join(root, '.cellens')).href, type: FileChangeType.Created },
+        ],
+      });
+      const typed = await lensesWhen(uri, (found) =>
+        found.some((lens) => lens.title === 'params: {maxReplicas} · Edit'),
+      );
+      expect(typed.map((lens) => lens.command)).toContain('cel-lens.editType');
+
+      // Off again: the typed value is dyn, and the part is gone.
+      await session.connection.sendNotification(DidChangeConfigurationNotification.type, {
+        settings: { ...serverOptions('', undefined, []), inlineInfo: true },
+      });
+      const off = await lensesWhen(
+        uri,
+        (found) => !found.some((lens) => lens.command === 'cel-lens.editType'),
+      );
+      expect(off.map((lens) => lens.title)).toEqual(['object: apps/v1 Deployment · compiles']);
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('asks the client once, with an action that names cellens-types, when the workspace holds a .cellens it does not read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    await copyFile(join(FIXTURES, 'replica_policy.yaml'), join(root, 'policy.yaml'));
+    await writeFile(
+      join(root, '.cellens'),
+      'types:\n  - file: policy.yaml\n    document: ValidatingAdmissionPolicy replica-limit\n    variable: params\n    type: "{maxReplicas: int}"\n',
+    );
+    const session = await startEngine(await checkedExtensionPath(), { folder: root });
+    const shared = engine;
+    engine = session;
+    try {
+      await vi.waitFor(
+        () => {
+          expect(session.messageRequests).toHaveLength(1);
+        },
+        { timeout: 10_000 },
+      );
+      expect(session.messageRequests[0]?.params).toMatchObject({
+        type: 2,
+        message: expect.stringContaining('cellens-types') as string,
+        actions: [{ title: 'Turn on cellens-types', experimental: 'cellens-types' }],
+      });
+
+      // Opening the policy checks it again, and the notice does not come a second time.
+      const uri = pathToFileURL(join(root, 'policy.yaml')).href;
+      const text = await readFile(join(root, 'policy.yaml'), 'utf8');
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+      await diagnosticsFor(uri, () => true);
+      expect(await lensesOf(uri)).toEqual([
+        { title: 'object: apps/v1 Deployment · compiles', command: 'cel-lens.showRule' },
+      ]);
+      expect(session.messageRequests).toHaveLength(1);
     } finally {
       await stopEngine(session);
       engine = shared;

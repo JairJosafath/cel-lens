@@ -108,7 +108,7 @@ const PNGS = [
   'quick-fix.png',
   'colors.png',
 ];
-const GIFS = ['colors.gif', 'completion.gif', 'give-type.gif'];
+const GIFS = ['colors.gif', 'completion.gif', 'give-type.gif', 'cellens-types.gif'];
 const TWO_MEGABYTES = 2 * 1024 * 1024;
 
 describe('pictureKind', () => {

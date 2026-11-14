@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   closestKnownName,
   replaceExperimental,
+  addExperimental,
   suggestions,
   unknownExperimental,
   unknownExperimentalMessage,
@@ -87,5 +88,23 @@ describe('replaceExperimental', () => {
     ['kyvernoo', undefined],
   ])('turns %j into %j', (value, expected) => {
     expect(replaceExperimental(value, fixes)).toEqual(expected);
+  });
+});
+
+describe('addExperimental', () => {
+  it.each([
+    [[], ['cellens-types']],
+    [['kyverno'], ['kyverno', 'cellens-types']],
+    [
+      ['a', 3, 'b'],
+      ['a', 3, 'b', 'cellens-types'],
+    ],
+    [['kyverno', ' cellens-types '], undefined],
+    [['cellens-types'], undefined],
+    ['kyverno', ['cellens-types']],
+    [undefined, ['cellens-types']],
+    [{ a: 1 }, ['cellens-types']],
+  ])('turns %j into %j', (value, expected) => {
+    expect(addExperimental(value, 'cellens-types')).toEqual(expected);
   });
 });
