@@ -38,7 +38,7 @@ func startRefresh(t *testing.T, ss *session) *refreshClient {
 		<-served
 	})
 	c := &refreshClient{t: t, conn: jsonrpc.NewConn(clientIn, clientOut)}
-	if err := c.conn.Request("init", "initialize", map[string]any{"capabilities": map[string]any{"workspace": map[string]any{"codeLens": map[string]any{"refreshSupport": true}}}}); err != nil {
+	if err := c.conn.Request("init", "initialize", map[string]any{"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}}, "capabilities": map[string]any{"workspace": map[string]any{"codeLens": map[string]any{"refreshSupport": true}}}}); err != nil {
 		t.Fatal(err)
 	}
 	readUntil(t, c.conn, func(m jsonrpc.Message) bool { return m.Method == "" && string(m.ID) == `"init"` })

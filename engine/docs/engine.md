@@ -71,7 +71,9 @@ Server Protocol on stdin and stdout, for any editor:
   the rule under its budget (a cost error on the CRD's total is solved when the
 number also brings the total under its budget). No fix is offered when there is no clear one.
 
-- **Types from `.cellens`**: the server finds the `.cellens` files of the
+- **Types from `.cellens`**, the experimental feature `cellens-types` (see
+  [Types from `.cellens`](#types-from-cellens) for what off means): the
+  server finds the `.cellens` files of the
   workspace folders, and follows them as they are opened, edited, saved,
   created or deleted (it registers a watcher for `**/.cellens`, and one for
   `**/*.go`, for the Go types a `go:` can name). A `dyn` value
@@ -133,8 +135,9 @@ number also brings the total under its budget). No fix is offered when there is 
     items), `object: apps/v1 Deployment · 2 problems` for a policy (`object:
     dyn` when its kinds are not known). It runs `cel-lens.showRule`, for the
     client to show the expression's problems or its hover.
-  - for each value the expression reads that Kubernetes leaves `dyn` and a
-    `.cellens` entry can type, `self.spec.port: dyn · Give it a type`, which
+  - only while `cellens-types` is on, for each value the expression reads
+    that Kubernetes leaves `dyn` and a `.cellens` entry can type,
+    `self.spec.port: dyn · Give it a type`, which
     runs `cel-lens.giveType`; for one an entry types, `self.spec.port: int ·
     Edit` and `Remove`, or `params: {max, x} · Edit` and `Remove`, which run
     `cel-lens.editType` and `cel-lens.removeType`. A value an entry names that
@@ -231,7 +234,13 @@ exit code 2. `lsp --help` lists them.
 ## Commands
 
 `initialize` declares six commands under `executeCommandProvider`, which a
-client runs with `workspace/executeCommand`. The VS Code extension runs them
+client runs with `workspace/executeCommand`. While `cellens-types` is off,
+`cel-lens.typeChoices`, `cel-lens.checkType`, `cel-lens.setType`,
+`cel-lens.removeType` and `cel-lens.inferType`, the commands behind
+**Give it a type**, fail (`-32803`) with a message that says so:
+`cel-lens.setType: giving a value a type of your own in .cellens is the
+experimental feature cellens-types, which is off: turn it on to give a value
+a type`; `cel-lens.exampleResults` runs whatever the features. The VS Code extension runs them
 from the lines above a rule: their parts run its own commands
 `cel-lens.giveType`, `cel-lens.editType` and `cel-lens.removeType`, which ask
 the person for a type and pass these commands the same argument, with the
@@ -1049,6 +1058,61 @@ PolicyRun ./internal/examples/` measures a policy of 20 validations over
 PolicyLineRunning ./internal/lsp/` hover and the code lenses of the open
 policy while the check runs it on 100 examples again and again, and while
 no check runs.
+
+## Types from `.cellens`
+
+Giving a `dyn` value a type of your own, the `.cellens` files and **Give it
+a type**, is the experimental feature `cellens-types` (see the README): it
+is off unless `experimental` lists it, in `initializationOptions` or in the
+`settings` of `workspace/didChangeConfiguration`. Off, the server acts as if
+no `.cellens` existed:
+
+- no `.cellens` is read, and the search for them does not run; a `.cellens`
+  the editor opens is kept as the editor's text, unread, for when the
+  feature turns on;
+- the line above a rule shows no `Give it a type`, `Edit` or `Remove`, and
+  no value a `.cellens` types: only the subject and whether it compiles;
+- a value a `.cellens` would type is `dyn`, in diagnostics, hover and
+  completion, and hover on a `dyn` value a `.cellens` entry could type
+  (`params`, `object`, `oldObject` or `variables.<name>` of an admission
+  policy, a `dyn` value inside them, or an `x-kubernetes-int-or-string`
+  value of a CRD) adds `Giving it a type of your own in .cellens is the
+  experimental feature cellens-types, which is off.`, as hover on `params`
+  says `crd-typed-policies` is off;
+- an open `.cellens` gets no diagnostics, hover or completion: they answer
+  `null`, and the diagnostics a `.cellens` had are taken back;
+- the example results are those of values left `dyn`, as they always are:
+  the examples run with the API server's own types, which no `.cellens`
+  changes;
+- the commands behind **Give it a type** fail with a message that says the
+  feature is off (see [Commands](#commands)).
+
+Off, the server tells the user once per session that the workspace holds a
+`.cellens` it does not read: at `initialize` it walks the workspace folders,
+as the search would but opening no file, until it finds one, and it also
+learns of one the editor opens, one `workspace/didChangeWatchedFiles`
+reports created or changed, and one in a folder reported created. It sends
+`window/showMessageRequest`, `type` 2, `cel-lens does not read
+deploy/.cellens: giving a value a type of your own in .cellens is the
+experimental feature cellens-types, which is off: add cellens-types to the
+experimental features (cel-lens.experimental in VS Code) to read it.`, with
+one action,
+`{"title": "Turn on cellens-types", "experimental": "cellens-types"}`.
+The client turns the feature on when that action is picked, by adding the
+name its `experimental` names to its setting of the experimental features,
+at the scope that sets it (the VS Code extension: `cel-lens.experimental`);
+the server changes no setting, and ignores the answer. Turning the feature
+off in a session sends no notice, then or later: the person just chose it.
+
+Turning `cellens-types` on or off with `workspace/didChangeConfiguration`
+needs no restart. Off, the server stops the search in progress, forgets
+every `.cellens` and checks the open documents again. On, it reads the open
+`.cellens` files with the editor's text, checks the open documents again and
+searches the workspace folders for the others in the background, after
+which the open documents are checked again with what it found, as at
+`initialize`. One method of the server, `readsLenses`, answers whether
+`.cellens` is read, and every path above asks it once
+(`TestReadsLensesPaths` lists them). On, everything behaves as in v0.31.0.
 
 ## Typed `object` and `oldObject`
 

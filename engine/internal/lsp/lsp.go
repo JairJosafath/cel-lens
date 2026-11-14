@@ -91,11 +91,20 @@ type session struct {
 	queuedBatches []int
 	// lenses are the .cellens files of the workspace folders and the open
 	// ones, by key (see crdKey), which give types to assume where values are
-	// dyn. They are found by a search of the folders at initialize, which
-	// runs whatever the experimental features.
+	// dyn. They are found by a search of the folders at initialize, or when
+	// cellens-types turns on, and are none while it is off (see
+	// readsLenses).
 	lenses map[string]*lens
-	// lensSearch is the search for .cellens files in progress, nil when none.
+	// lensSearch is the search for .cellens files in progress, or while
+	// cellens-types is off the probe that looks for one, nil when none.
 	lensSearch *lensSearch
+	// unread are the .cellens files the editor has open while cellens-types
+	// is off, by key: their text is kept, not read, so turning the feature
+	// on reads the editor's text.
+	unread map[string]unreadLens
+	// lensNoticed is true once the notice that cellens-types is off was
+	// sent (see noticeLenses), which is once per session.
+	lensNoticed bool
 	// lensQueued are the created folders to search once lensSearch ends, for
 	// lensQueuedBatches.
 	lensQueued        []string
@@ -222,8 +231,10 @@ type document struct {
 	diags   []check.Diagnostic
 	checked bool
 	// assumed are the types the .cellens files assume in the document, as of
-	// its last check; parsed is made with them.
-	assumed []check.AssumedType
+	// its last check; parsed is made with them. lensesOff is true when that
+	// check found cellens-types off, so hover says so (see readsLenses).
+	assumed   []check.AssumedType
+	lensesOff bool
 	// codeLenses are the code lenses of this version as of its last check,
 	// made when the session's lensChanges was codeLensesAt; nil until a
 	// codeLens request makes them.
@@ -270,7 +281,11 @@ func (d *document) parse(ctx context.Context, uri string) *assist.Document {
 	if d.parsed != nil {
 		return d.parsed
 	}
-	p := assist.Parse(ctx, uri, d.text, assist.WithCRDs(d.crds), assist.WithAssumedTypes(d.assumed))
+	opts := []assist.Option{assist.WithCRDs(d.crds), assist.WithAssumedTypes(d.assumed)}
+	if d.lensesOff {
+		opts = append(opts, assist.WithoutCellens())
+	}
+	p := assist.Parse(ctx, uri, d.text, opts...)
 	if ctx.Err() == nil {
 		d.parsed = p
 	}
@@ -534,7 +549,11 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 		ss.startScan(ctx)
 	}
 	ss.examplesChanged()
-	ss.searchLenses(ctx, ss.folders)
+	if ss.readsLenses() {
+		ss.searchLenses(ctx, ss.folders)
+	} else {
+		ss.probeLenses(ctx, ss.folders)
+	}
 	return ss.warn(problems)
 }
 
@@ -630,9 +649,10 @@ func (ss *session) warn(problems []message) error {
 // cel-lens.exampleResults still running, whose answer would be for the old
 // version, answering it as cancelled. Turning on crd-typed-policies
 // starts a scan of the workspace for CRDs in the background; the open
-// documents are checked again when it ends. Turning exampleResults off
-// stops the check of the examples and takes back what they showed; turning
-// it on starts one.
+// documents are checked again when it ends. Turning cellens-types on or off
+// reads or forgets the .cellens files (see switchLenses). Turning
+// exampleResults off stops the check of the examples and takes back what
+// they showed; turning it on starts one.
 func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMessage) error {
 	var p struct {
 		Settings *kubeOptions `json:"settings"`
@@ -641,10 +661,12 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 		return nil
 	}
 	wasOn, wasOff, examplesWereOff, kube := ss.features.Has(feature.CRDTypedPolicies), ss.inlineOff, ss.examplesOff, ss.kube
+	lensesWere := ss.readsLenses()
 	changed, problems, err := ss.configure(p.Settings)
 	if err != nil {
 		return err
 	}
+	ss.switchLenses(ctx, lensesWere)
 	if ss.kube != kube {
 		if err := ss.cancelJobs(commandExampleResults, "the Kubernetes version changed to "+ss.kube.String()); err != nil {
 			return err
@@ -747,6 +769,10 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 	}
 	d := p.TextDocument
 	if isLens(d.URI) {
+		if !ss.readsLenses() {
+			ss.keepUnread(d.URI, []byte(d.Text), d.Version)
+			return ss.noticeLenses(crdKey(d.URI))
+		}
 		ss.putLens(ctx, d.URI, []byte(d.Text), true)
 		ss.lenses[crdKey(d.URI)].version = d.Version
 		return ss.publishTyped(ctx, true)
@@ -772,6 +798,10 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 	uri := p.TextDocument.URI
 	text := []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
 	if isLens(uri) {
+		if !ss.readsLenses() {
+			ss.keepUnread(uri, text, p.TextDocument.Version)
+			return nil
+		}
 		changed := ss.putLens(ctx, uri, text, true)
 		ss.lenses[crdKey(uri)].version = p.TextDocument.Version
 		if !changed {
@@ -796,6 +826,10 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 	}
 	uri := p.TextDocument.URI
 	if isLens(uri) {
+		if !ss.readsLenses() {
+			delete(ss.unread, crdKey(uri))
+			return nil
+		}
 		// The editor's text is gone: the file on disk, if any, is what the
 		// workspace has, and its problems still show.
 		if l := ss.lenses[crdKey(uri)]; l != nil {
@@ -845,8 +879,8 @@ func (ss *session) publishAssumed(ctx context.Context, uri string, assumed []che
 	doc := ss.docs[uri]
 	doc.checked = false // the Kubernetes version may have changed
 	doc.codeLenses = nil
-	if !reflect.DeepEqual(assumed, doc.assumed) {
-		doc.assumed, doc.parsed = assumed, nil
+	if off := !ss.readsLenses(); !reflect.DeepEqual(assumed, doc.assumed) || off != doc.lensesOff {
+		doc.assumed, doc.lensesOff, doc.parsed = assumed, off, nil
 	}
 	diags, err := ss.diagnostics(ctx, uri, doc)
 	if err != nil {

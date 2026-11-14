@@ -119,7 +119,7 @@ func TestBatchQueuedDuringScanWaitsForItsScan(t *testing.T) {
 	oldFile := filepath.Join(dir, "old", "crd.yaml")
 	ss := newSession(t)
 	published := countPublishes(ss)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{filepath.Join(dir, "ws")}
 	ss.crds.Set(ctx, filepath.ToSlash(oldFile), []byte(scanCRD))
 	ss.docs[cacheURI] = &document{version: 1, text: []byte(widget(t)), crds: &ss.crds}
@@ -186,7 +186,7 @@ func TestBatchWithLensAndScanPublishesOnce(t *testing.T) {
 			}
 			ss := newSession(t)
 			published := countPublishes(ss)
-			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 			docURI := pathURI(filepath.Join(created, "crd.yaml"))
 			ss.docs[docURI] = &document{version: 1, text: []byte(batchCRD), crds: &ss.crds}
 			release := make(chan struct{})
@@ -251,7 +251,7 @@ func TestScanPublishesWhileAnotherBatchSearches(t *testing.T) {
 	}
 	ss := newSession(t)
 	published := countPublishes(ss)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.docs[cacheURI] = &document{version: 1, text: []byte(widget(t)), crds: &ss.crds}
 	scanFirst, searchSecond := make(chan struct{}), make(chan struct{})
 	ss.scanner = func(ctx context.Context, folders []string, dst *check.CRDs) []message {
@@ -384,7 +384,7 @@ func BenchmarkLensKeystroke(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}, folders: []string{dir}}
+			ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}, folders: []string{dir}, features: feature.Of(feature.CellensTypes)}
 			ss.putLens(ctx, pathURI(filepath.Join(dir, ".cellens")), []byte(lens.String()), true)
 			doc := pathURI(filepath.Join(dir, "crd0.yaml"))
 			open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": doc, "version": 1, "text": batchCRD}})
@@ -423,7 +423,7 @@ func TestBatchScanFindsBeforeSearchEnds(t *testing.T) {
 	oldFile := filepath.Join(dir, "old", "crd.yaml")
 	ss := newSession(t)
 	published := countPublishes(ss)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.crds.Set(ctx, filepath.ToSlash(oldFile), []byte(scanCRD))
 	ss.docs[cacheURI] = &document{version: 1, text: []byte(widget(t)), crds: &ss.crds}
 	ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) []message {
@@ -536,7 +536,7 @@ func BenchmarkCellensKeystroke(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}, folders: []string{dir}}
+			ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}, folders: []string{dir}, features: feature.Of(feature.CellensTypes)}
 			lensURI := pathURI(filepath.Join(dir, ".cellens"))
 			for i := range 3 {
 				open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": pathURI(filepath.Join(dir, fmt.Sprintf("crd%02d.yaml", i))), "version": 1, "text": crd}})

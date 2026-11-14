@@ -157,9 +157,12 @@ func (ss *session) touchLens(key string) {
 	}
 }
 
-// lensSearch is a search for .cellens files running in its own goroutine.
+// lensSearch is a search for .cellens files running in its own goroutine, or,
+// with probe, a walk that only looks for whether there is one, while
+// cellens-types is off (see probeLenses).
 type lensSearch struct {
 	cancel context.CancelFunc
+	probe  bool
 	// roots are the keys of the folders it searches.
 	roots []string
 	// touched are the .cellens files the session changed while it ran.
@@ -192,19 +195,20 @@ func (ss *session) searchLenses(ctx context.Context, folders []string) {
 		}
 		return
 	}
-	ss.runLensSearch(ctx, outermost(folders), []int{ss.batch})
+	ss.runLensSearch(ctx, outermost(folders), []int{ss.batch}, false)
 }
 
-// runLensSearch starts the search of folders for batches; none may be running.
-func (ss *session) runLensSearch(ctx context.Context, folders []string, batches []int) {
+// runLensSearch starts the search of folders for batches, or with probe the
+// probe of them, which is for no batch; none may be running.
+func (ss *session) runLensSearch(ctx context.Context, folders []string, batches []int, probe bool) {
 	dirFS := ss.dirFS()
 	ctx, cancel := context.WithCancel(ctx)
-	sc := &lensSearch{cancel: cancel, touched: map[string]bool{}, batches: batches, done: make(chan lensFound, 1)}
+	sc := &lensSearch{cancel: cancel, probe: probe, touched: map[string]bool{}, batches: batches, done: make(chan lensFound, 1)}
 	for _, f := range folders {
 		sc.roots = append(sc.roots, crdKey(pathURI(f)))
 	}
 	ss.lensSearch = sc
-	go func() { sc.done <- findLenses(ctx, dirFS, folders) }()
+	go func() { sc.done <- walkLenses(ctx, dirFS, folders, probe) }()
 }
 
 // stopLensSearch cancels the search in progress and waits for it to end.
@@ -222,8 +226,17 @@ func (ss *session) stopLensSearch() {
 // and reading at most maxWorkspaceFileSize bytes of one (see readLimited).
 // dirFS gives the file system of a folder. It stops when ctx is cancelled.
 func findLenses(ctx context.Context, dirFS func(dir string) fs.FS, folders []string) lensFound {
+	return walkLenses(ctx, dirFS, folders, false)
+}
+
+// walkLenses is findLenses, or with probe the walk that reads no .cellens: it
+// stops at the first it finds, whose key it gives with no text.
+func walkLenses(ctx context.Context, dirFS func(dir string) fs.FS, folders []string, probe bool) lensFound {
 	found := lensFound{files: map[string][]byte{}}
 	for _, dir := range folders {
+		if probe && len(found.files) > 0 {
+			break
+		}
 		root := dirFS(dir)
 		_ = fs.WalkDir(root, ".", func(rel string, d fs.DirEntry, err error) error {
 			if ctx.Err() != nil {
@@ -238,6 +251,9 @@ func findLenses(ctx context.Context, dirFS func(dir string) fs.FS, folders []str
 				return fs.SkipDir
 			case d.IsDir() || d.Name() != cellens.FileName || !d.Type().IsRegular():
 				return nil
+			case probe:
+				found.files[key] = nil
+				return fs.SkipAll
 			}
 			// A file that cannot be read, or is too big, is skipped.
 			if data, rerr := readFS(root, rel); rerr == nil {
@@ -335,6 +351,9 @@ func readUnder(folders []string, p string) ([]byte, error) {
 func (ss *session) finishLensSearch(ctx context.Context, found lensFound) error {
 	sc := ss.lensSearch
 	ss.lensSearch = nil
+	if sc.probe {
+		return ss.endProbe(ctx, found)
+	}
 	below := func(key string, dirs []string) bool {
 		return slices.ContainsFunc(dirs, func(d string) bool { return strings.HasPrefix(key, strings.TrimSuffix(d, "/")+"/") })
 	}
@@ -355,22 +374,25 @@ func (ss *session) finishLensSearch(ctx context.Context, found lensFound) error 
 	batches, ended := ss.lensQueuedBatches, sc.batches
 	ss.lensQueued, ss.lensQueuedBatches = nil, nil
 	if len(queued) > 0 {
-		ss.runLensSearch(ctx, queued, batches)
+		ss.runLensSearch(ctx, queued, batches, false)
 	} else {
 		ended = append(ended, batches...) // their folders are gone
 	}
 	return ss.settle(ctx, ended, changed, true)
 }
 
-// lensSource is the name messages give the .cellens file l: its path below the
-// workspace folder it is in, or its whole path.
-func (ss *session) lensSource(l *lens) string {
+// lensSource is the name messages give the .cellens file l (see keySource).
+func (ss *session) lensSource(l *lens) string { return ss.keySource(l.key) }
+
+// keySource is the name messages give the file with the key: its path below
+// the workspace folder it is in, or its whole path.
+func (ss *session) keySource(key string) string {
 	for _, f := range ss.folders {
-		if rel, ok := strings.CutPrefix(l.key, strings.TrimSuffix(crdKey(pathURI(f)), "/")+"/"); ok {
+		if rel, ok := strings.CutPrefix(key, strings.TrimSuffix(crdKey(pathURI(f)), "/")+"/"); ok {
 			return rel
 		}
 	}
-	return l.key
+	return key
 }
 
 // target is the key of the file an entry of l names.

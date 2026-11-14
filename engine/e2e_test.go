@@ -394,7 +394,8 @@ func TestBinaryLSPCellens(t *testing.T) {
 	p := startLSP(ctx, t)
 	p.call(1, "initialize", map[string]any{
 		"processId": os.Getpid(), "capabilities": map[string]any{},
-		"workspaceFolders": []map[string]any{{"uri": uri(""), "name": "cellens"}},
+		"workspaceFolders":      []map[string]any{{"uri": uri(""), "name": "cellens"}},
+		"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}},
 	})
 	p.send(map[string]any{"method": "initialized", "params": map[string]any{}})
 	crd, policy := read("crd.yaml"), read("policy.yaml")

@@ -23,6 +23,8 @@ type Document struct {
 	crds *check.CRDs
 	// assumed are the types to assume where values are dyn (WithAssumedTypes).
 	assumed []check.AssumedType
+	// lensesOff is true when the types of .cellens are off (WithoutCellens).
+	lensesOff bool
 }
 
 // Option changes how Parse reads a file.
@@ -34,6 +36,13 @@ type Option func(*Document)
 // change while the Document is in use.
 func WithCRDs(c *check.CRDs) Option {
 	return func(d *Document) { d.crds = c }
+}
+
+// WithoutCellens says that the types of .cellens are off, the experimental
+// feature cellens-types: hover on a dyn value a .cellens entry could type
+// says so, as it does for crd-typed-policies (see cellensOffNote).
+func WithoutCellens() Option {
+	return func(d *Document) { d.lensesOff = true }
 }
 
 // Parse reads data, the text of file. A YAML error does not fail it: the

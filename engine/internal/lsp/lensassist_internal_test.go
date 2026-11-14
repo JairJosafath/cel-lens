@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/goschema"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 // goEntry is a .cellens whose last line is a go: being written.
@@ -120,7 +121,7 @@ func BenchmarkGoCompletion(b *testing.B) {
 			}
 		}
 	}
-	ss := &session{docs: map[string]*document{}, folders: []string{dir}}
+	ss := &session{docs: map[string]*document{}, folders: []string{dir}, features: feature.Of(feature.CellensTypes)}
 	b.Run("completion", func(b *testing.B) {
 		uri := pathURI(filepath.Join(dir, ".cellens"))
 		ss.putLens(context.Background(), uri, []byte(goEntry), true)

@@ -91,7 +91,7 @@ spec:
 		}
 	}
 
-	request("init", "initialize", map[string]any{"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}})
+	request("init", "initialize", map[string]any{"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}}, "capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}})
 	next("init")
 	crdURI := pathURI(filepath.Join(dir, "crd.yaml"))
 	results := map[string]any{"command": commandExampleResults, "arguments": []any{map[string]any{"uri": crdURI}}}
@@ -207,7 +207,7 @@ spec:
 			return got
 		}
 	}
-	if err := c.Request("init", "initialize", map[string]any{"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}}); err != nil {
+	if err := c.Request("init", "initialize", map[string]any{"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}}, "capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}}); err != nil {
 		t.Fatal(err)
 	}
 	readUntil(t, c, func(m jsonrpc.Message) bool { return string(m.ID) == `"init"` })

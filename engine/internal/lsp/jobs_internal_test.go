@@ -64,7 +64,7 @@ func TestJobsLeaveTheLoopFree(t *testing.T) {
 	}
 	isAnswer := func(m jsonrpc.Message, id string) bool { return m.Method == "" && string(m.ID) == `"`+id+`"` }
 
-	request("init", "initialize", map[string]any{"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}})
+	request("init", "initialize", map[string]any{"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}}, "capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}})
 	readUntil(t, c, func(m jsonrpc.Message) bool { return isAnswer(m, "init") })
 	choices := func(variable string) map[string]any {
 		return map[string]any{"command": commandTypeChoices, "arguments": []any{map[string]any{

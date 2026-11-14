@@ -15,6 +15,7 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
 	"github.com/JairJosafath/cel-lens/engine/internal/examples"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
@@ -324,7 +325,7 @@ func benchSession(b *testing.B, folder string, setup func(*session)) (send func(
 	if err != nil {
 		b.Fatal(err)
 	}
-	ss := &session{conn: jsonrpc.NewConn(serverIn, serverOut), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}}
+	ss := &session{conn: jsonrpc.NewConn(serverIn, serverOut), assist: a, kube: kubeversion.Default(), docs: map[string]*document{}, features: feature.Of(feature.CellensTypes)}
 	setup(ss)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -361,6 +362,7 @@ func benchSession(b *testing.B, folder string, setup func(*session)) (send func(
 	}
 	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{
 		"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": pathURI(folder), "name": "ws"}},
+		"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}},
 	}})
 	until(1, "")
 	return send, until

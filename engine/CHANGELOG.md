@@ -9,6 +9,14 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-14
+
+### Changed
+
+- Giving a value a type of your own, the `.cellens` files and **Give it a type**, is now the experimental feature `cellens-types`, off by default. **A workspace with a `.cellens` needs `cellens-types` in its experimental features from this version on** (`cel-lens.experimental` in VS Code; `experimental` in `initializationOptions` or in the `settings` of `workspace/didChangeConfiguration` for another client); without it the language server acts as if no `.cellens` existed. Off, no `.cellens` is searched for or read; a value one types is `dyn`, and hover on a `dyn` value a `.cellens` could type says `Giving it a type of your own in .cellens is the experimental feature cellens-types, which is off.`, as hover on `params` says `crd-typed-policies` is off; the line above a rule shows no `Give it a type`, `Edit` or `Remove`; an open `.cellens` gets no diagnostics, hover or completion; the example results are those of the values left `dyn`, as they always were; and `cel-lens.typeChoices`, `cel-lens.checkType`, `cel-lens.setType`, `cel-lens.removeType` and `cel-lens.inferType` fail with `-32803` and a message that says the feature is off. On, everything behaves as in 0.31.0.
+- Off, the server tells the user once per session that the workspace holds a `.cellens` it does not read: `window/showMessageRequest`, `cel-lens does not read deploy/.cellens: giving a value a type of your own in .cellens is the experimental feature cellens-types, which is off: add cellens-types to the experimental features (cel-lens.experimental in VS Code) to read it.`, with one action, `{"title": "Turn on cellens-types", "experimental": "cellens-types"}`, for the client to add the name to its setting at the scope that sets it; the server changes no setting. To know, it walks the workspace folders at `initialize` until it finds a `.cellens`, opening none, and it also hears of one the editor opens, one the file watcher reports created or changed, and one in a folder reported created. A session in which the person turned the feature off sends none.
+- Turning the feature on or off with `workspace/didChangeConfiguration` takes effect without a restart: off forgets every `.cellens` and checks the open documents again; on reads the open ones with the editor's text, checks the open documents again and searches the workspace for the others in the background, as at `initialize`. `initialize` lists `cellens-types` among `experimentalFeatures`, and `cel-lens-core check --experimental` knows the name, though the check reads no `.cellens` either way. `docs/engine.md` says what off means.
+
 ## [0.31.0] - 2026-11-13
 
 ### Added
@@ -627,7 +635,8 @@ Versions before 0.14.0 were released before the public repository existed, and 0
 - The language server reports broken YAML as a problem at the place where it
   breaks, so a file whose YAML is broken never looks clean.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.31.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/core-v0.32.0...HEAD
+[0.32.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.31.0...core-v0.32.0
 [0.31.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.30.0...core-v0.31.0
 [0.30.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.29.0...core-v0.30.0
 [0.29.0]: https://github.com/JairJosafath/cel-lens/compare/core-v0.28.0...core-v0.29.0

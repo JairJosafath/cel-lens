@@ -125,7 +125,7 @@ func TestScanNotesReachClient(t *testing.T) {
 
 			c := jsonrpc.NewConn(clientIn, clientOut)
 			if err := c.Request("1", "initialize", map[string]any{
-				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies", "cellens-types"}},
 				"workspaceFolders":      []map[string]any{{"uri": pathURI(dir)}},
 			}); err != nil {
 				t.Fatal(err)

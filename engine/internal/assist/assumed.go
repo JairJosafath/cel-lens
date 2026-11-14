@@ -6,6 +6,7 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assume"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
+	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
 const (
@@ -183,4 +184,34 @@ func withAssumed(desc string, s schema) string {
 		return note
 	}
 	return desc + "\n\n" + note
+}
+
+// cellensOffNote is the sentence hover adds to a dyn value a .cellens entry
+// could type while the types of .cellens are off (see withCellensOff).
+const cellensOffNote = "Giving it a type of your own in `.cellens` is the experimental feature `cellens-types`, which is off."
+
+// withCellensOff adds cellensOffNote to md, the hover of a value of schema s
+// that the variable root of the expression e holds or is, when doc was
+// parsed WithoutCellens and a .cellens entry could type the value: in a
+// ValidatingAdmissionPolicy or MutatingAdmissionPolicy a dyn params,
+// object, oldObject or variables.<name>, or a dyn value inside them, and in
+// a CustomResourceDefinition an x-kubernetes-int-or-string value of self or
+// oldSelf, as Summaries lists them.
+func withCellensOff(md string, doc *Document, e extract.Expression, root string, s schema) string {
+	if !doc.lensesOff || e.Document >= len(doc.roots) {
+		return md
+	}
+	var m assume.Mode
+	switch kind, _ := doc.roots[e.Document]["kind"].(string); {
+	case kind == "CustomResourceDefinition" && (root == "self" || root == "oldSelf"):
+		m = assume.Rules
+	case (kind == "ValidatingAdmissionPolicy" || kind == "MutatingAdmissionPolicy") && readable(root):
+		m = assume.Policies
+	default:
+		return md
+	}
+	if s == nil || !m.IsDyn(s) {
+		return md
+	}
+	return md + "\n\n" + cellensOffNote
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -92,9 +93,14 @@ func (c *client) use(t *testing.T) {
 	t.Cleanup(func() { c.t = parent })
 }
 
-// call sends a request and returns the response's result, or its error.
+// call sends a request and returns the response's result, or its error. An
+// initialize whose initializationOptions list no experimental features turns
+// cellens-types on (see withLenses).
 func (c *client) call(method string, params any) (json.RawMessage, *jsonrpc.Error) {
 	c.t.Helper()
+	if method == "initialize" {
+		params = withLenses(params)
+	}
 	c.nextID++
 	id := strconv.Itoa(c.nextID)
 	c.send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "method": method, "params": params})
@@ -104,6 +110,30 @@ func (c *client) call(method string, params any) (json.RawMessage, *jsonrpc.Erro
 			return m.Result, m.Error
 		}
 	}
+}
+
+// withLenses returns the params of an initialize with the experimental
+// feature cellens-types on when their initializationOptions list no
+// experimental features, so the tests written before the feature was
+// experimental run with it on, as everyone did then. A test that lists the
+// features, an empty list included, gets those.
+func withLenses(params any) any {
+	p, ok := params.(map[string]any)
+	if !ok {
+		return params
+	}
+	opts, _ := p["initializationOptions"].(map[string]any)
+	if _, listed := opts["experimental"]; listed {
+		return params
+	}
+	out := maps.Clone(p)
+	out["initializationOptions"] = map[string]any{"experimental": []string{"cellens-types"}}
+	if opts != nil {
+		with := maps.Clone(opts)
+		with["experimental"] = []string{"cellens-types"}
+		out["initializationOptions"] = with
+	}
+	return out
 }
 
 func (c *client) notify(method string, params any) {

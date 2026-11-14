@@ -47,6 +47,16 @@ func commandNames() []string {
 	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType, commandExampleResults}
 }
 
+// typeCommand reports whether command is one of those behind Give it a
+// type, which answer that cellens-types is off while it is.
+func typeCommand(command string) bool {
+	switch command {
+	case commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType:
+		return true
+	}
+	return false
+}
+
 // editCaps are what the client can do with a workspace/applyEdit.
 type editCaps struct {
 	apply, documentChanges, create, delete bool
@@ -126,7 +136,9 @@ func invalid(msg string) error { return &rpcError{jsonrpc.CodeInvalidParams, msg
 
 func failed(msg string) error { return &rpcError{jsonrpc.CodeRequestFailed, msg} }
 
-// executeCommand runs a command of workspace/executeCommand. checkType
+// executeCommand runs a command of workspace/executeCommand. While
+// cellens-types is off, the commands behind Give it a type (see typeCommand)
+// fail with a message that says so. checkType
 // answers at once. typeChoices answers once the Go types of the workspace
 // are listed and, with a value, its examples are found, and inferType once
 // its work ends, and exampleResults once its rules ran: they run in a
@@ -140,6 +152,9 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 	}
 	if err := json.Unmarshal(msg.Params, &p); err != nil {
 		return reply(nil, badParams("workspace/executeCommand", err))
+	}
+	if typeCommand(p.Command) && !ss.readsLenses() {
+		return reply(nil, failed(p.Command+": "+lensesOffText+": turn it on to give a value a type"))
 	}
 	var a valueArgs
 	if len(p.Arguments) > 0 && p.Command != commandInferType && p.Command != commandExampleResults {

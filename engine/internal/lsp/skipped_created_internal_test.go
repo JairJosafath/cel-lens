@@ -3,6 +3,8 @@ package lsp
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 func TestSkippedCreated(t *testing.T) {
@@ -33,7 +35,7 @@ func TestSkippedCreated(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ss := &session{folders: tt.folders}
+			ss := &session{folders: tt.folders, features: feature.Of(feature.CellensTypes)}
 			path := filepath.FromSlash(tt.path)
 			if got := ss.skippedCreated(path); got != tt.want {
 				t.Errorf("skippedCreated(%q) with folders %q = %v, want %v", path, tt.folders, got, tt.want)

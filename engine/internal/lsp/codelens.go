@@ -145,9 +145,10 @@ func lineRange(lines [][]rune, line int) lspRange {
 // does not apply, gets Edit and Remove for that entry, not a second entry. A
 // policy variable whose type follows from the entries of the values it reads
 // shows that type. A document that is no file has none, as no .cellens entry
-// can name it.
+// can name it, and no document has any while cellens-types is off, so the
+// line shows no Give it a type and no Edit.
 func (ss *session) inlineValues(uri string, values []assist.Value) []inline.Value {
-	if _, ok := diskPath(uri); !ok {
+	if _, ok := diskPath(uri); !ok || !ss.readsLenses() {
 		return nil
 	}
 	key := crdKey(uri)

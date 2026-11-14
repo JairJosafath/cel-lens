@@ -397,7 +397,8 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 			return hover(declaration("field", word, resourceCheckType, requestResourceDesc))
 		}
 		if f := recv.known.field(word); isChain && recv.found && f != nil {
-			return hover(a.withDynReason(declaration("field", word, assumedType(f), withAssumed(withKinds(f.str("description"), f.kinds()), f)), f))
+			md := a.withDynReason(declaration("field", word, assumedType(f), withAssumed(withKinds(f.str("description"), f.kinds()), f)), f)
+			return hover(withCellensOff(md, doc, s.expr, chain[0].name, f))
 		}
 	case called:
 		return a.hoverFunction(word, false, a.argTypes(s.line, end, vars), hover)
@@ -408,7 +409,7 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 				if v.typeName == "" {
 					md = a.withDynReason(md, v.schema)
 				}
-				return hover(md)
+				return hover(withCellensOff(md, doc, s.expr, word, v.schema))
 			}
 		}
 	}
