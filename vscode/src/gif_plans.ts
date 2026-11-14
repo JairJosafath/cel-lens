@@ -55,3 +55,38 @@ export function giveTypeHolds(): number[] {
     afterWrite,
   ];
 }
+
+/** The delay between typed characters in `cellens-types.gif`. */
+export const CELLENS_TYPES_TYPING_MS = 50;
+
+/** What `cellens-types.gif` types in the schema before the completion list opens, what it types in the list to find the type, and after the type the list gives. */
+export const CELLENS_TYPES_TYPED_BEFORE = 'maxReplicas: {type: ';
+export const CELLENS_TYPES_FILTER = 'int';
+export const CELLENS_TYPES_TYPED_AFTER = '}';
+
+/** The holds of `cellens-types.gif`, named by the step they follow. */
+export const CELLENS_TYPES_HOLDS_MS = {
+  start: 500,
+  pickerShown: 1100,
+  cellensOpen: 700,
+  listShown: 800,
+  typePicked: 400,
+  afterWrite: 1600,
+} as const;
+
+/** The holds of `cellens-types.gif` in the order the script plays them. */
+export function cellensTypesHolds(): number[] {
+  const { start, pickerShown, cellensOpen, listShown, typePicked, afterWrite } =
+    CELLENS_TYPES_HOLDS_MS;
+  return [
+    start,
+    pickerShown,
+    cellensOpen,
+    ...Array.from(CELLENS_TYPES_TYPED_BEFORE, () => CELLENS_TYPES_TYPING_MS),
+    listShown,
+    ...Array.from(CELLENS_TYPES_FILTER, () => CELLENS_TYPES_TYPING_MS),
+    typePicked,
+    ...Array.from(CELLENS_TYPES_TYPED_AFTER, () => CELLENS_TYPES_TYPING_MS),
+    afterWrite,
+  ];
+}

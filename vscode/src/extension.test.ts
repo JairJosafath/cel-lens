@@ -52,6 +52,10 @@ vi.mock('vscode-languageclient/node', () => ({
       return undefined;
     }
 
+    onRequest(): void {
+      return undefined;
+    }
+
     getFeature(): undefined {
       return undefined;
     }
@@ -325,7 +329,7 @@ describe('activate', () => {
     expect(quickPicks.created).toMatchObject([{ title: 'Example results of the rule on line 16' }]);
   });
 
-  it('contributes the experimental setting as an empty list of the three known names', () => {
+  it('contributes the experimental setting as an empty list of the four known names', () => {
     const setting = manifest.contributes.configuration.properties['cel-lens.experimental'];
 
     expect(setting).toMatchObject({
@@ -333,8 +337,13 @@ describe('activate', () => {
       default: [],
       items: {
         type: 'string',
-        enum: ['kyverno', 'crd-typed-policies', 'fitting-completion'],
-        enumDescriptions: [expect.any(String), expect.any(String), expect.any(String)],
+        enum: ['kyverno', 'crd-typed-policies', 'fitting-completion', 'cellens-types'],
+        enumDescriptions: [
+          expect.any(String),
+          expect.any(String),
+          expect.any(String),
+          expect.any(String),
+        ],
       },
     });
   });
@@ -555,7 +564,7 @@ describe('published text', () => {
   });
 
   it('names the cel-lens-core release the extension is built for', () => {
-    expect(guide).toContain('cel-lens-core` v0.31.0');
+    expect(guide).toContain('cel-lens-core` v0.32.0');
   });
 
   it('shows no message the engine does not give', () => {

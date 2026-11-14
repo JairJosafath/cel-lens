@@ -19,7 +19,13 @@ import {
 
 import { RELEASES_PAGE_URL } from './core_releases';
 import { EngineErrorHandler } from './engine_error_handler';
-import { EngineMessages, SHOW_MESSAGE_METHOD, type ShowMessageParams } from './engine_messages';
+import {
+  EngineMessages,
+  SHOW_MESSAGE_METHOD,
+  SHOW_MESSAGE_REQUEST_METHOD,
+  type ShowMessageParams,
+  type ShowMessageRequestParams,
+} from './engine_messages';
 import {
   EXPERIMENTAL_SETTING,
   parseExperimental,
@@ -479,6 +485,10 @@ export class ServerController implements vscode.Disposable {
     client.onNotification(SHOW_MESSAGE_METHOD, (params: ShowMessageParams) => {
       messages.show(params);
     });
+    // The same for the requests with actions, one of which turns on an experimental feature.
+    client.onRequest(SHOW_MESSAGE_REQUEST_METHOD, (params: ShowMessageRequestParams) =>
+      messages.request(params),
+    );
     try {
       await client.start();
       started = true;

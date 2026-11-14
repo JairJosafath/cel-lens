@@ -2,9 +2,11 @@
 //
 // Builds the extension, installs it in openvscode-server (a VS Code served to a
 // browser), opens the fixtures of this folder in headless Chromium driven by
-// Playwright, and writes six PNGs and three GIFs into images/. Not part of
+// Playwright, and writes six PNGs and four GIFs into images/. Not part of
 // `make check`: it fetches the server and Chromium, so it needs a network, and it
 // is run on purpose. The engine is the pinned one: `npm run engine` puts it in bin/.
+// `npm run pictures -- cellens-types` takes only that GIF. `CEL_LENS_CHROME` names a Chrome or
+// Chromium to run in place of the one Playwright downloads.
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -18,6 +20,11 @@ import { chromium, errors, type CDPSession, type Locator, type Page } from 'play
 import { cursorLineText } from '../../src/cursor_line.ts';
 import { askUntilFixListed } from '../../src/quick_fix_retry.ts';
 import {
+  CELLENS_TYPES_FILTER,
+  CELLENS_TYPES_HOLDS_MS,
+  CELLENS_TYPES_TYPED_AFTER,
+  CELLENS_TYPES_TYPED_BEFORE,
+  CELLENS_TYPES_TYPING_MS,
   COLORS_HOLD_AFTER_MS,
   COLORS_HOLD_BEFORE_MS,
   COLORS_TYPED_TEXT,
@@ -60,10 +67,17 @@ const GAVE_UP_TIMEOUT_MS = 5_000;
 /** Where the page is kept when the script stops; outside images/ and ignored by git. */
 const GAVE_UP_PICTURE = 'out/pictures/gave-up.png';
 
+/** The pictures asked for on the command line, such as `cellens-types`; none means all of them. */
+const ONLY = process.argv.slice(2);
+/** The names `npm run pictures --` takes: the pictures that can be taken alone. */
+const TAKEN_ALONE = ['cellens-types'];
+
 const CRD = 'widget_crd.yaml';
 const POLICY = 'pod_policy.yaml';
 /** A policy whose `params` is a custom kind, so the line above its rule offers Give it a type. */
 const PARAMS_POLICY = 'container_policy.yaml';
+/** A ValidatingAdmissionPolicy that reads `params.maxReplicas` of a custom kind, which a schema in `.cellens` types. */
+const REPLICA_POLICY = 'replica_policy.yaml';
 /** A document of that kind: the workspace's example, at the path a person keeps their samples. */
 const SAMPLE = 'limit_sample.yaml';
 const SAMPLE_IN_WORKSPACE = 'config/samples/limit.yaml';
@@ -111,6 +125,8 @@ const SETTINGS = {
   'chat.disableAIFeatures': true,
   'window.commandCenter': false,
   'security.workspace.trust.enabled': false,
+  // Giving a value a type of your own is experimental: the pictures that show it need it on.
+  'cel-lens.experimental': ['cellens-types'],
   'telemetry.telemetryLevel': 'off',
   'update.mode': 'none',
   'extensions.autoUpdate': false,
@@ -953,6 +969,80 @@ async function takeGiveType(page: Page): Promise<void> {
 }
 
 /**
+ * cellens-types.gif: the whole loop of giving a value a type in `.cellens`, with the experimental
+ * feature on: `params: dyn · Give it a type` above a rule, **Write a schema in .cellens…** picked,
+ * `.cellens` opening beside the rule, the schema typed with completion, and the line above the
+ * rule following to `params: {maxReplicas} · Edit`. It starts from a workspace with no `.cellens`
+ * and leaves none.
+ */
+async function takeCellensTypes(page: Page, workspace: string): Promise<void> {
+  await rm(join(workspace, '.cellens'), { force: true });
+  await startPicture(page, REPLICA_POLICY);
+  await expectCleanStart(page, 'cellens-types.gif', { problems: 0, ready: 'Give it a type' });
+  await scrollToEnd(page, 'cellens-types.gif');
+  await parkMouse(page);
+  const writing = await record(page, 'cellens-types.gif', true, async (recording) => {
+    await holdFrame(recording, CELLENS_TYPES_HOLDS_MS.start);
+    await clickWhenReady(
+      page.locator('.codelens-decoration a', { hasText: 'Give it a type' }).first(),
+      'the line above the rule to offer Give it a type',
+    );
+    await waitForState(
+      page.locator('.quick-input-widget .quick-input-title', { hasText: 'Give params a type' }),
+      'the picker titled Give params a type',
+    );
+    const schema = page.locator('.quick-input-list .monaco-list-row', {
+      hasText: 'Write a schema in .cellens…',
+    });
+    await waitForState(schema.first(), 'the picker to list Write a schema in .cellens…');
+    await holdFrame(recording, CELLENS_TYPES_HOLDS_MS.pickerShown);
+    await clickWhenReady(schema.first(), 'Write a schema in .cellens… to be clickable');
+    await waitForQuickInputClosed(page);
+    await waitForState(
+      page.locator('.tab.active', { hasText: '.cellens' }).first(),
+      'the tab of .cellens to open beside the rule',
+    );
+    await waitForState(
+      page.locator('.monaco-editor .view-line', { hasText: 'properties:' }).first(),
+      'the new entry to show its properties',
+    );
+    await holdFrame(recording, CELLENS_TYPES_HOLDS_MS.cellensOpen);
+    await typeText(page, recording, CELLENS_TYPES_TYPED_BEFORE, CELLENS_TYPES_TYPING_MS);
+    await page.keyboard.press('Control+Space');
+    await waitForState(
+      page.locator('.suggest-widget.visible .monaco-list-row').first(),
+      'the completion list to show the types of the schema',
+    );
+    await waitForWidgetShown(page, '.suggest-widget.visible', 'the completion list');
+    await holdFrame(recording, CELLENS_TYPES_HOLDS_MS.listShown);
+    // The list narrows to the type as it is typed, and Tab takes it.
+    await typeText(page, recording, CELLENS_TYPES_FILTER, CELLENS_TYPES_TYPING_MS);
+    await waitForState(
+      page.locator('.suggest-widget.visible .monaco-list-row.focused', { hasText: 'integer' }),
+      'the completion list to highlight integer',
+    );
+    await page.keyboard.press('Tab');
+    await waitForState(
+      page.locator('.suggest-widget').first(),
+      'the completion list to close after the pick',
+      'hidden',
+    );
+    await holdFrame(recording, CELLENS_TYPES_HOLDS_MS.typePicked);
+    await typeText(page, recording, CELLENS_TYPES_TYPED_AFTER, CELLENS_TYPES_TYPING_MS);
+    await waitForState(
+      page.locator('.codelens-decoration a', { hasText: 'Edit' }).first(),
+      'the line above the rule to offer Edit once the value has a type',
+    );
+    await waitForState(
+      page.locator('.codelens-decoration a', { hasText: 'params: {maxReplicas}' }).first(),
+      'the line above the rule to show params: {maxReplicas}',
+    );
+    await holdFrame(recording, CELLENS_TYPES_HOLDS_MS.afterWrite);
+  });
+  await save('cellens-types.gif', writing);
+}
+
+/**
  * example-results-line.png and example-results-picker.png: a CRD whose rule refuses one of the
  * three examples of the workspace, which expects to be allowed. The script puts the examples in
  * `config/samples/` for these two pictures and takes them out again. The first picture shows the
@@ -1062,6 +1152,14 @@ async function takePolicyResults(page: Page, workspace: string): Promise<void> {
 
 async function takePictures(page: Page, workspace: string): Promise<void> {
   await prepare(page);
+  if (ONLY.length > 0) {
+    // `npm run pictures -- cellens-types`: the pictures named, and no other, so the rest stay as they are.
+    if (ONLY.includes('cellens-types')) {
+      await takeCellensTypes(page, workspace);
+      await rm(join(workspace, '.cellens'), { force: true });
+    }
+    return;
+  }
   await takeInlineInfo(page);
 
   await startPicture(page, CRD);
@@ -1187,10 +1285,19 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
 
   await takeExampleResults(page, workspace);
   await takePolicyResults(page, workspace);
+  await takeCellensTypes(page, workspace);
+  // The engine's edit created an empty .cellens on disk, which the next picture must not find.
+  await rm(join(workspace, '.cellens'), { force: true });
   await takeGiveType(page);
 }
 
 async function main(): Promise<void> {
+  const unknown = ONLY.filter((name) => !TAKEN_ALONE.includes(name));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown picture ${unknown.join(', ')}: only ${TAKEN_ALONE.join(', ')} can be taken alone.`,
+    );
+  }
   const { openvscodeServer } = await pinnedVersions();
   log('building the extension');
   run('npm', ['run', 'build', '--silent']);
@@ -1217,7 +1324,7 @@ async function main(): Promise<void> {
 
     const workspace = join(work, 'workspace');
     await mkdir(join(workspace, '.vscode'), { recursive: true });
-    for (const name of [CRD, POLICY, PARAMS_POLICY, LIMIT_CRD, DEPLOY_POLICY]) {
+    for (const name of [CRD, POLICY, PARAMS_POLICY, REPLICA_POLICY, LIMIT_CRD, DEPLOY_POLICY]) {
       await cp(join(FIXTURES, name), join(workspace, name));
     }
     await mkdir(join(workspace, dirname(SAMPLE_IN_WORKSPACE)), { recursive: true });
@@ -1248,7 +1355,11 @@ async function main(): Promise<void> {
     await waitForServer(url, server);
 
     await mkdir(IMAGES, { recursive: true });
-    const browser = await chromium.launch({ headless: true });
+    const chrome = process.env['CEL_LENS_CHROME'];
+    const browser = await chromium.launch({
+      headless: true,
+      ...(chrome !== undefined && chrome !== '' && { executablePath: chrome }),
+    });
     try {
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       await withTimeout('the workbench page to load', WORKBENCH_TIMEOUT_MS, (ms) =>

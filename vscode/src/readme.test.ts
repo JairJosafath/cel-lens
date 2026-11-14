@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   readmeDefaultKubernetesVersion,
@@ -6,6 +6,7 @@ import {
   readmeImages,
   readmeKubernetesVersions,
   readmePicturePlaceholders,
+  readmeRelativeLinks,
   readmeSection,
   readmeSettingDefaults,
 } from './readme';
@@ -23,6 +24,8 @@ const PICTURES = [
   'quick-fix.png',
   'colors.png',
 ];
+/** The GIF at the top of the section Give a value a type, which follows those above in the README. */
+const CELLENS_TYPES_GIF = 'cellens-types.gif';
 /** The pictures of the section Example results, which follow those above in the README. */
 const EXAMPLE_RESULTS_PICTURES = [
   'example-results-line.png',
@@ -144,7 +147,9 @@ describe('README.md as the store page', () => {
   it('links the picture of the line above the rules and the GIF of Give it a type first, then the two GIFs and the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(
-      [...PICTURES, ...EXAMPLE_RESULTS_PICTURES].map((name) => IMAGE_BASE + name),
+      [...PICTURES, CELLENS_TYPES_GIF, ...EXAMPLE_RESULTS_PICTURES].map(
+        (name) => IMAGE_BASE + name,
+      ),
     );
     expect(images.every((image) => image.alt.length > 0)).toBe(true);
     const section = readmeSection(README, 'What it looks like') ?? '';
@@ -205,6 +210,52 @@ describe('README.md as the store page', () => {
     expect(readmeSection(README, 'Give a value a type')).toContain(text);
   });
 
+  it('opens the section with one sentence on how to turn the feature on, then the GIF of the whole loop with its alt text', () => {
+    const [sentence, , picture] = (readmeSection(README, 'Give a value a type') ?? '')
+      .trimStart()
+      .split('\n');
+
+    expect(sentence).toMatch(/\.$/);
+    expect(sentence).not.toMatch(/\.\s+[A-Z]/);
+    expect(sentence).toContain('the experimental feature `cellens-types`');
+    expect(sentence).toContain('add `cellens-types` to `cel-lens.experimental`');
+    expect(sentence).toContain('**Turn on cellens-types**');
+    expect(picture).toBe(
+      `![Give it a type with a schema in .cellens: params: dyn · Give it a type above a rule of a ValidatingAdmissionPolicy, Write a schema in .cellens… picked, .cellens opening beside the rule, the schema typed with completion, and the line following to params: {maxReplicas} · Edit](${IMAGE_BASE}${CELLENS_TYPES_GIF})`,
+    );
+  });
+
+  it('says in the line under the top picture that Give it a type needs the feature', () => {
+    const line = (readmeSection(README, 'What it looks like') ?? '')
+      .split('\n')
+      .find((each) => each.startsWith('Click **Give it a type**'));
+
+    expect(line).toContain('needs the experimental feature `cellens-types`');
+  });
+
+  it('lists cellens-types in the Experimental table with why it is experimental, and not in the Stable one', () => {
+    const section = readmeSection(README, 'Experimental features') ?? '';
+    const [stable, experimental] = section.split(/^Experimental:\s*$/m);
+
+    expect(stable).not.toContain('cellens-types');
+    expect(experimental).toMatch(
+      /\|\s*`cellens-types`\s*\|\s*The language server types the `dyn` values a `.cellens` file names/,
+    );
+    expect(experimental).toMatch(
+      /\|\s*The types are yours: nothing checks them against a cluster\s*\|/,
+    );
+  });
+
+  it('names cellens-types in the settings table and says what the command does while it is off', () => {
+    const settings = readmeSection(README, 'Settings') ?? '';
+    const commands = readmeSection(README, 'Commands') ?? '';
+
+    expect(settings).toContain('`cellens-types` (your own types in `.cellens`)');
+    expect(commands).toContain(
+      'With `cellens-types` off it says so and offers a button that turns it on.',
+    );
+  });
+
   it('says how to give a type in each form, in the order of the picker, each under its heading with a picture for a person to take', () => {
     const section = readmeSection(README, 'Give a value a type') ?? '';
     const forms = section.split(/^(?=### )/m).slice(1);
@@ -219,7 +270,6 @@ describe('README.md as the store page', () => {
       '### Edit or remove a type',
     ]);
     expect(readmePicturePlaceholders(section)).toEqual([
-      'images/give-type-schema.png',
       'images/give-type-go.png',
       'images/give-type-short.png',
       'images/give-type-example.png',
@@ -229,7 +279,7 @@ describe('README.md as the store page', () => {
     expect(
       forms.slice(0, 5).map((form) => readmePicturePlaceholders(form.split('\n')[2] ?? '')),
     ).toEqual([
-      ['images/give-type-schema.png'],
+      [],
       ['images/give-type-go.png'],
       ['images/give-type-short.png'],
       ['images/give-type-example.png'],
@@ -498,8 +548,8 @@ describe('README.md on running the examples in CI', () => {
 
   it.each([
     '`cel-lens-core examples [paths...]`',
-    'the file of the release `core-v0.31.0` for your system',
-    'it is named `cel-lens-core_v0.31.0_<os>_<arch>`, with `.exe` on Windows; rename it `cel-lens-core`',
+    'the file of the release `core-v0.32.0` for your system',
+    'it is named `cel-lens-core_v0.32.0_<os>_<arch>`, with `.exe` on Windows; rename it `cel-lens-core`',
     'each rule with a wrong verdict or that ended in an error',
     'the problems of the examples (such as a CRD, policy or binding the API server cannot read)',
     '1 that a verdict or a problem of the examples did',
@@ -508,7 +558,7 @@ describe('README.md on running the examples in CI', () => {
     'a rule that did not run never does',
     'runs every rule of the CRDs and ValidatingAdmissionPolicies in the files and folders given',
     'exits 1 when a verdict is not what its example expects',
-    '`go install github.com/JairJosafath/cel-lens/engine@v0.31.0`',
+    '`go install github.com/JairJosafath/cel-lens/engine@v0.32.0`',
     'the binary is named `engine`; rename it `cel-lens-core`',
     '`12 rules, 40 examples: 2 wrong, 1 error, 3 not run`',
     'Exit code 0 means nothing failed',
@@ -525,5 +575,34 @@ describe('README.md on running the examples in CI', () => {
       .version;
     expect(section()).toContain(`engine@${pinned}`);
     expect(section()).toContain(`core-${pinned}`);
+  });
+});
+
+describe('the links of the README to files of the repository', () => {
+  it.each([
+    ['a file', 'See [the guide](docs/cellens.md).', ['docs/cellens.md']],
+    ['a file with an anchor', '[x](CONTRIBUTING.md#build)', ['CONTRIBUTING.md']],
+    ['a URL', '[x](https://example.com/a.md)', []],
+    ['an anchor', '[x](#settings)', []],
+    ['a mail address', '[x](mailto:a@example.com)', []],
+    ['an image URL', '![x](https://example.com/a.png)', []],
+    ['an angle-bracket link', '<https://example.com>', []],
+  ])('finds %s', (_name, text, expected) => {
+    expect(readmeRelativeLinks(text)).toEqual(expected);
+  });
+
+  it('names a file that exists in this repository for every relative link: vsce and GitHub resolve them from vscode/', () => {
+    const missing = readmeRelativeLinks(README).filter((target) => !existsSync(target));
+
+    expect(missing).toEqual([]);
+  });
+
+  it('would have found the link of the engine README’s row, which is no file of this repository', () => {
+    const row =
+      '| `cellens-types` | guides its editing ([docs/cellens.md](docs/cellens.md)). Off, no |';
+
+    expect(readmeRelativeLinks(row).filter((target) => !existsSync(target))).toEqual([
+      'docs/cellens.md',
+    ]);
   });
 });

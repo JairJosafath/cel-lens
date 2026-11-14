@@ -8,8 +8,12 @@ import {
   settle,
   shownErrors,
   shownInfos,
+  settingUpdates,
+  settings,
   shownWarnings,
+  updateFailure,
   warningChoice,
+  workspaceSettings,
   window,
 } from '../test/vscode';
 import { SHOW_LOGS_COMMAND } from './actions_menu';
@@ -93,5 +97,156 @@ describe('EngineMessages', () => {
 
     expect(row.shown()).toBe(1);
     expect(shownWarnings.flatMap((shown) => shown.buttons)).toEqual([]);
+  });
+
+  describe('a showMessageRequest with an action that turns on a feature', () => {
+    const NOTICE = {
+      type: 2,
+      message:
+        'cel-lens does not read deploy/.cellens: giving a value a type of your own in .cellens is the experimental feature cellens-types, which is off: add cellens-types to the experimental features (cel-lens.experimental in VS Code) to read it.',
+      actions: [{ title: 'Turn on cellens-types', experimental: 'cellens-types' }],
+    };
+
+    it('shows the message with the action’s title as the button', async () => {
+      await newMessages().request(NOTICE);
+
+      expect(shownWarnings).toEqual([
+        { message: NOTICE.message, buttons: ['Turn on cellens-types'] },
+      ]);
+    });
+
+    it.each([
+      ['no experimental feature is listed', undefined, undefined, ['cellens-types'], 1],
+      ['the user scope lists others', ['kyverno'], undefined, ['kyverno', 'cellens-types'], 1],
+      [
+        'the workspace scope lists others',
+        ['kyverno'],
+        ['fitting-completion'],
+        ['fitting-completion', 'cellens-types'],
+        2,
+      ],
+    ])(
+      'adds cellens-types to cel-lens.experimental at the scope that sets it when the button is pressed: %s',
+      async (_what, user, workspace, written, target) => {
+        if (user !== undefined) {
+          settings.set('cel-lens.experimental', user);
+        }
+        if (workspace !== undefined) {
+          workspaceSettings.set('cel-lens.experimental', workspace);
+        }
+        warningChoice.next = 'Turn on cellens-types';
+
+        const answer = await newMessages().request(NOTICE);
+
+        expect(answer).toEqual({ title: 'Turn on cellens-types' });
+        expect(settingUpdates).toEqual([{ name: 'cel-lens.experimental', value: written, target }]);
+      },
+    );
+
+    it.each([['kyverno'], ['crd-typed-policies'], ['fitting-completion']])(
+      'turns on %s too, a name the setting offers',
+      async (name) => {
+        warningChoice.next = 'Turn it on';
+
+        await newMessages().request({
+          type: 2,
+          message: 'x',
+          actions: [{ title: 'Turn it on', experimental: name }],
+        });
+
+        expect(settingUpdates).toEqual([
+          { name: 'cel-lens.experimental', value: [name], target: 1 },
+        ]);
+      },
+    );
+
+    it.each([
+      ['a name the setting does not offer', 'telemetry'],
+      ['a name with other casing', 'Cellens-Types'],
+      ['a name with a space', 'cellens-types '],
+      ['a path', '../../etc'],
+    ])(
+      'writes nothing for an action that names %s, and says so in the log',
+      async (_what, name) => {
+        warningChoice.next = 'Turn it on';
+
+        const answer = await newMessages().request({
+          type: 2,
+          message: 'x',
+          actions: [{ title: 'Turn it on', experimental: name }],
+        });
+
+        expect(answer).toEqual({ title: 'Turn it on' });
+        expect(settingUpdates).toEqual([]);
+        expect(log()).toEqual([
+          `The engine asked to turn on "${name}", which cel-lens.experimental does not offer, so nothing was changed.`,
+        ]);
+      },
+    );
+
+    it('answers null and writes nothing when the message is dismissed', async () => {
+      const answer = await newMessages().request(NOTICE);
+
+      expect(answer).toBeNull();
+      expect(settingUpdates).toEqual([]);
+    });
+
+    it('leaves a feature that is on alone: nothing is written twice', async () => {
+      settings.set('cel-lens.experimental', ['cellens-types']);
+      warningChoice.next = 'Turn on cellens-types';
+
+      await newMessages().request(NOTICE);
+
+      expect(settingUpdates).toEqual([]);
+    });
+
+    it('answers the action picked and changes no setting for an action that names no feature', async () => {
+      warningChoice.next = 'Show it';
+
+      const answer = await newMessages().request({
+        type: 2,
+        message: 'Something',
+        actions: [{ title: 'Show it' }, { title: 'Other' }],
+      });
+
+      expect(answer).toEqual({ title: 'Show it' });
+      expect(settingUpdates).toEqual([]);
+    });
+
+    it.each([
+      ['no actions', undefined],
+      ['a list that holds no action', ['x', 3, { experimental: 'a' }, { title: '' }]],
+    ])('shows the message with no button for %s', async (_what, actions) => {
+      const answer = await newMessages().request({ type: 2, message: 'Hello', actions });
+
+      expect(shownWarnings).toEqual([{ message: 'Hello', buttons: [] }]);
+      expect(answer).toBeNull();
+    });
+
+    it.each([
+      { type: 1, shown: () => shownErrors.length },
+      { type: 2, shown: () => shownWarnings.length },
+      { type: 3, shown: () => shownInfos.length },
+    ])('shows a message of type $type as the client would', async (row) => {
+      await newMessages().request({ type: row.type, message: 'x', actions: [] });
+
+      expect(row.shown()).toBe(1);
+    });
+
+    it('logs and shows how to do it by hand when the setting cannot be written', async () => {
+      warningChoice.next = 'Turn on cellens-types';
+      updateFailure.error = new Error('settings.json is not valid');
+
+      const answer = await newMessages().request(NOTICE);
+
+      expect(answer).toEqual({ title: 'Turn on cellens-types' });
+      expect(log()).toEqual([
+        'Could not turn on cellens-types in cel-lens.experimental: Error: settings.json is not valid',
+      ]);
+      expect(shownWarnings.map((shown) => shown.buttons)).toEqual([
+        ['Turn on cellens-types'],
+        ['Open Experimental Setting'],
+      ]);
+    });
   });
 });

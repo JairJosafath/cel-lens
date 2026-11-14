@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   FakeEditor,
@@ -9,6 +9,7 @@ import {
   PRESS_BACK,
   activeEditor,
   addWorkspaceFolder,
+  ConfigurationTarget,
   closeDocument,
   commandFailure,
   commandResults,
@@ -16,6 +17,12 @@ import {
   errorChoice,
   executedCommands,
   fileTexts,
+  shownWarnings,
+  updateFailure,
+  workspaceSettings,
+  settingUpdates,
+  shownInfoButtons,
+  infoChoice,
   quickPicks,
   reset,
   runCommand,
@@ -33,7 +40,12 @@ import {
   workspace,
 } from '../test/vscode';
 import { ExampleEditors, ExampleNotes } from './example_editor';
-import { OPEN_YAML_MESSAGE, giveValueType, typeUi } from './type_commands';
+import {
+  CELLENS_TYPES_OFF_MESSAGE,
+  OPEN_YAML_MESSAGE,
+  giveValueType,
+  typeUi,
+} from './type_commands';
 import { INLINE_INFO_OFF_MESSAGE, NO_VALUES_MESSAGE, TypeFlow } from './type_flow';
 import { GO_TYPE_PLACEHOLDER } from './value_types';
 
@@ -692,6 +704,9 @@ describe('typeUi', () => {
 });
 
 describe('giveValueType', () => {
+  beforeEach(() => {
+    settings.set('cel-lens.experimental', ['cellens-types']);
+  });
   afterEach(reset);
 
   const lens = {
@@ -774,5 +789,120 @@ describe('giveValueType', () => {
     expect(log.lines).toEqual([
       `Could not read the lines above the rules of ${activeEditor.uri}: Error: no provider`,
     ]);
+  });
+
+  describe('with the experimental feature cellens-types off', () => {
+    const OFF_BUTTONS = ['Turn on cellens-types'];
+
+    it.each([
+      ['no experimental feature is listed', undefined],
+      ['another one is', ['kyverno']],
+      ['the setting is not a list', 'cellens-types'],
+    ])(
+      'says so with a button that turns it on, and lists no value, when %s',
+      async (_name, value) => {
+        const { flow, ui, log } = setUp();
+        activeEditor.languageId = 'yaml';
+        settings.set('cel-lens.experimental', value);
+        commandResults.set('vscode.executeCodeLensProvider', [lens]);
+
+        await giveValueType(flow, ui, log);
+
+        expect(shownInfos).toEqual([CELLENS_TYPES_OFF_MESSAGE]);
+        expect(shownInfoButtons).toEqual([OFF_BUTTONS]);
+        expect(executedCommands).toEqual([]);
+        expect(quickPicks.shown).toEqual([]);
+        expect(settingUpdates).toEqual([]);
+      },
+    );
+
+    it('says so before it asks for a YAML file', async () => {
+      const { flow, ui, log } = setUp();
+      activeEditor.languageId = 'json';
+      settings.delete('cel-lens.experimental');
+
+      await giveValueType(flow, ui, log);
+
+      expect(shownInfos).toEqual([CELLENS_TYPES_OFF_MESSAGE]);
+    });
+
+    it('adds cellens-types to the setting at the user scope when the button is pressed and the user scope sets it', async () => {
+      const { flow, ui, log } = setUp();
+      activeEditor.languageId = 'yaml';
+      settings.set('cel-lens.experimental', ['kyverno']);
+      infoChoice.next = 'Turn on cellens-types';
+
+      await giveValueType(flow, ui, log);
+
+      expect(settingUpdates).toEqual([
+        {
+          name: 'cel-lens.experimental',
+          value: ['kyverno', 'cellens-types'],
+          target: ConfigurationTarget.Global,
+        },
+      ]);
+    });
+
+    it('adds it at the workspace scope when the workspace sets the setting', async () => {
+      const { flow, ui, log } = setUp();
+      activeEditor.languageId = 'yaml';
+      settings.set('cel-lens.experimental', ['kyverno']);
+      workspaceSettings.set('cel-lens.experimental', ['fitting-completion']);
+      infoChoice.next = 'Turn on cellens-types';
+
+      await giveValueType(flow, ui, log);
+
+      expect(settingUpdates).toEqual([
+        {
+          name: 'cel-lens.experimental',
+          value: ['fitting-completion', 'cellens-types'],
+          target: ConfigurationTarget.Workspace,
+        },
+      ]);
+    });
+
+    it('writes the user scope as a list of its own when no scope sets the setting', async () => {
+      const { flow, ui, log } = setUp();
+      activeEditor.languageId = 'yaml';
+      settings.delete('cel-lens.experimental');
+      infoChoice.next = 'Turn on cellens-types';
+
+      await giveValueType(flow, ui, log);
+
+      expect(settingUpdates).toEqual([
+        {
+          name: 'cel-lens.experimental',
+          value: ['cellens-types'],
+          target: ConfigurationTarget.Global,
+        },
+      ]);
+    });
+
+    it('writes nothing when the message is dismissed', async () => {
+      const { flow, ui, log } = setUp();
+      activeEditor.languageId = 'yaml';
+      settings.delete('cel-lens.experimental');
+
+      await giveValueType(flow, ui, log);
+
+      expect(settingUpdates).toEqual([]);
+    });
+
+    it('logs a write that fails and shows once how to do it by hand', async () => {
+      const { flow, ui, log } = setUp();
+      activeEditor.languageId = 'yaml';
+      settings.delete('cel-lens.experimental');
+      infoChoice.next = 'Turn on cellens-types';
+      updateFailure.error = new Error('settings.json is not valid');
+
+      await giveValueType(flow, ui, log);
+
+      expect(log.lines).toEqual([
+        'Could not turn on cellens-types in cel-lens.experimental: Error: settings.json is not valid',
+      ]);
+      expect(shownWarnings.map((warning) => warning.buttons)).toEqual([
+        ['Open Experimental Setting'],
+      ]);
+    });
   });
 });

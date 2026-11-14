@@ -1,9 +1,14 @@
 import * as vscode from 'vscode';
 
-import { OPEN_ENGINE_SETTING_LABEL, SHOW_LOGS_LABEL } from './button_labels';
+import {
+  OPEN_ENGINE_SETTING_LABEL,
+  SHOW_LOGS_LABEL,
+  TURN_ON_CELLENS_TYPES_LABEL,
+} from './button_labels';
 import { openBesideRule } from './cellens_editor';
 import type { ExampleEditors, ExampleNotes } from './example_editor';
-import { EXPERIMENTAL_SETTING } from './experimental';
+import { CELLENS_TYPES_FEATURE, EXPERIMENTAL_SETTING } from './experimental';
+import { featureOn, turnOnCellensTypes } from './experimental_feature';
 import { readInlineInfo } from './inline_info_setting';
 import { openServerPathSetting } from './open_server_setting';
 import {
@@ -18,6 +23,10 @@ import { OUTDATED_ENGINE_MESSAGE, type PickLine } from './value_types';
 
 /** What `cel-lens: Give a Value a Type…` says without a YAML file open. */
 export const OPEN_YAML_MESSAGE = 'Open a Kubernetes YAML file to give one of its values a type.';
+
+/** What `cel-lens: Give a Value a Type…` says while the experimental feature `cellens-types` is off. */
+export const CELLENS_TYPES_OFF_MESSAGE =
+  'Giving a value a type of your own is the experimental feature cellens-types, which is off. Turn it on to give a value a type.';
 
 /** A quick pick line with the value it stands for; a separator has none. */
 interface ShownItem<T> extends vscode.QuickPickItem {
@@ -181,6 +190,17 @@ export function typeUi(
  * YAML file, its code lenses, so the list names what the lines name.
  */
 export async function giveValueType(flow: TypeFlow, ui: TypeUi, log: FlowLog): Promise<void> {
+  if (!featureOn(CELLENS_TYPES_FEATURE)) {
+    // The command stays in the palette where people look for it, and says why it does nothing yet.
+    const button = await vscode.window.showInformationMessage(
+      CELLENS_TYPES_OFF_MESSAGE,
+      TURN_ON_CELLENS_TYPES_LABEL,
+    );
+    if (button === TURN_ON_CELLENS_TYPES_LABEL) {
+      await turnOnCellensTypes(log);
+    }
+    return;
+  }
   const document = vscode.window.activeTextEditor?.document;
   if (document?.languageId !== 'yaml') {
     await ui.inform(OPEN_YAML_MESSAGE);

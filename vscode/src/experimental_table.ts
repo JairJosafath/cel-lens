@@ -82,6 +82,15 @@ function addsOnlyColorNote(extensionText: string, engineText: string): boolean {
   );
 }
 
+/**
+ * A cell with each Markdown link reduced to its text. The extension's README sits in `vscode/` and
+ * the engine's in `engine/`, so the same page is linked by another target; the words are what is
+ * compared.
+ */
+export function withoutLinkTargets(text: string): string {
+  return text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+}
+
 /** What differs between two tables, one line per feature missing from a side or worded differently. */
 export function compareExperimentalRows(
   extension: Map<string, string>,
@@ -92,7 +101,7 @@ export function compareExperimentalRows(
     const engineText = engine.get(name);
     if (engineText === undefined) {
       problems.push(`${name}: the engine README lacks this feature`);
-    } else if (!addsOnlyColorNote(text, engineText)) {
+    } else if (!addsOnlyColorNote(withoutLinkTargets(text), withoutLinkTargets(engineText))) {
       problems.push(`${name}: differs\n  extension: ${text}\n  engine:    ${engineText}`);
     }
   }

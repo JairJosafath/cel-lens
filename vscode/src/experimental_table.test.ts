@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compareExperimentalRows,
+  withoutLinkTargets,
   descriptionReason,
   experimentalReasons,
   experimentalRows,
@@ -194,5 +195,32 @@ describe('featureNameProblems', () => {
     ],
   ])('reports %s', (_label, listed, engine, expected) => {
     expect(featureNameProblems('package.json', listed, engine)).toEqual(expected);
+  });
+});
+
+describe('withoutLinkTargets', () => {
+  it.each([
+    ['a link', 'see [docs/cellens.md](docs/cellens.md) for more', 'see docs/cellens.md for more'],
+    ['two links', '[a](x) and [b](https://e/y)', 'a and b'],
+    ['no link', 'plain `text` (in brackets)', 'plain `text` (in brackets)'],
+    ['an empty text', '[](x)', ''],
+  ])('keeps the words of %s', (_name, text, expected) => {
+    expect(withoutLinkTargets(text)).toBe(expected);
+  });
+
+  it('lets a row differ from the engine’s only in where a link points', () => {
+    const extension = new Map([
+      ['f', 'Does a ([guide](https://github.com/o/r/blob/main/docs/g.md))'],
+    ]);
+    const engine = new Map([['f', 'Does a ([guide](docs/g.md))']]);
+
+    expect(compareExperimentalRows(extension, engine)).toEqual([]);
+  });
+
+  it('still reports a row whose link text differs', () => {
+    const extension = new Map([['f', 'Does a ([guide](docs/g.md))']]);
+    const engine = new Map([['f', 'Does a ([manual](docs/g.md))']]);
+
+    expect(compareExperimentalRows(extension, engine)).toHaveLength(1);
   });
 });

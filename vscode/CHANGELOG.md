@@ -6,6 +6,20 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-14
+
+### Added
+
+- Giving a value a type of your own, the `.cellens` files and **Give it a type**, is the experimental feature `cellens-types`, which `cel-lens.experimental` lists with the other three. The setting's description and the README's settings table name it, and the README's _Experimental_ table says what it does and why it is experimental: the types are yours, and nothing checks them against a cluster. _Give a value a type_ in the README opens with how to turn it on.
+- **cel-lens: Give a Value a Type…** with the feature off says so and offers **Turn on cellens-types**, which adds the name to `cel-lens.experimental` at the scope that already sets the setting (the workspace's, else yours). The command stays in the Command Palette, where people look for it.
+- With the feature off, a workspace that holds a `.cellens` gets one notice per session from the engine, with the action **Turn on cellens-types**. The extension answers the action itself: it adds the feature to `cel-lens.experimental` at the scope that sets the setting, as the button of the notice about a misspelt name does.
+- The README shows giving a value a type in `.cellens` with a GIF, `images/cellens-types.gif`: `params: dyn · Give it a type` above a rule of a ValidatingAdmissionPolicy, **Write a schema in .cellens…** picked, `.cellens` opening beside the rule, the schema typed with completion, and the line above the rule following to `params: {maxReplicas} · Edit`. The README also says what the engine writes for a new schema: a block with `properties:` and the cursor on the line under it.
+
+### Changed
+
+- **A workspace with a `.cellens` needs `cellens-types` in `cel-lens.experimental` from this version on.** Since v0.36.0 the types of a `.cellens` were on for everyone; now, without the feature, no `.cellens` is searched for or read, the values it types are `dyn` (hover says the feature is off), the line above a rule offers no **Give it a type**, **Edit** or **Remove**, and an open `.cellens` gets no diagnostics, hover or completion. Turning the feature on or off takes effect at once, with no restart.
+- The extension ships `cel-lens-core` v0.32.0, which has all of the above, with nothing to set in `cel-lens.serverPath`.
+
 ## [0.39.0] - 2026-11-13
 
 ### Added
@@ -728,7 +742,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.39.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.40.0...HEAD
+[0.40.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.39.0...vscode-v0.40.0
 [0.39.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.38.0...vscode-v0.39.0
 [0.38.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.37.0...vscode-v0.38.0
 [0.37.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.36.0...vscode-v0.37.0

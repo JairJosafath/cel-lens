@@ -59,3 +59,12 @@ export function readmeSettingDefaults(section: string): Map<string, string> {
 export function readmeDefaultKubernetesVersion(section: string): string | undefined {
   return /\bdefault is `(1\.\d+)`/i.exec(section)?.[1];
 }
+
+/** The targets of the Markdown links of a README that name a file of the repository: not a URL, an anchor or a mail address, and without their anchor. */
+export function readmeRelativeLinks(readme: string): string[] {
+  return [...readme.matchAll(/\]\(([^)\s]+)\)/g)]
+    .map((match) => match[1] ?? '')
+    .filter((target) => !/^([a-z][a-z0-9+.-]*:|#)/i.test(target))
+    .map((target) => target.split('#')[0] ?? '')
+    .filter((target) => target !== '');
+}

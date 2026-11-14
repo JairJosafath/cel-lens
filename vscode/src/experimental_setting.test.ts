@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { KNOWN_EXPERIMENTAL } from './experimental';
 import {
   COLOR_WORD,
   descriptionReason,
@@ -77,8 +78,11 @@ describe('the cel-lens.experimental setting against the README', () => {
   it.each(settingItems().enum.map((name, index) => [name, index] as const))(
     'names for %s the same capabilities as the README',
     (name, index) => {
-      const description = settingItems().enumDescriptions[index] ?? '';
-      expect(capabilities(description)).toEqual(capabilities(readmeRows().get(name) ?? ''));
+      // What the feature does, not why it is experimental: a reason may say "checks" of what it lacks.
+      const description = (settingItems().enumDescriptions[index] ?? '').split(
+        'experimental because',
+      )[0];
+      expect(capabilities(description ?? '')).toEqual(capabilities(readmeRows().get(name) ?? ''));
     },
   );
 
@@ -145,5 +149,9 @@ describe('the cel-lens.experimental setting against the README', () => {
     ['collar', false],
   ])('reads "%s" as a color mention: %s', (word, expected) => {
     expect(COLORS.test(`Gives ${word} to documents`)).toBe(expected);
+  });
+
+  it('has the names of the setting as the list an engine action is checked against', () => {
+    expect([...KNOWN_EXPERIMENTAL]).toEqual(settingItems().enum);
   });
 });
