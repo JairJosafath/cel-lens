@@ -80,6 +80,13 @@ spec:
 // .cellens, empty.
 func newGuided(t *testing.T, caps map[string]any) *guided {
 	t.Helper()
+	return newGuidedHover(t, caps, nil)
+}
+
+// newGuidedHover is newGuided with a client that sends hover as
+// initializationOptions.hover, nil for none.
+func newGuidedHover(t *testing.T, caps, hover map[string]any) *guided {
+	t.Helper()
 	dir := goWorkspace(t, "")
 	writeFile(t, filepath.Join(dir, "crd.yaml"), lensCRD+"---\n"+otherCRD)
 	writeFile(t, filepath.Join(dir, "policy.yaml"), inlinePolicy)
@@ -90,6 +97,7 @@ func newGuided(t *testing.T, caps map[string]any) *guided {
 		writeFile(t, filepath.Join(dir, d, "x.yml"), "a: 1\n")
 	}
 	g := &guided{client: start(t), dir: dir, lens: fileURI(filepath.Join(dir, ".cellens")), version: 1}
+	g.client.hover = hover
 	initializeIn(t, g.client, dir, caps)
 	g.openURI(g.lens, "")
 	return g
@@ -380,10 +388,18 @@ func (g *guided) hover(text string) string {
 // TestLensHover is the second acceptance criterion of #16: hover on an
 // entry's file, document or path says which value it names and whether it is
 // dyn there, and on a kind, go or schema the type it gives, in the short
-// form of the line above a rule.
+// form of the line above a rule. What it takes from the files is escaped
+// (#52).
 func TestLensHover(t *testing.T) {
 	t.Parallel()
-	g := newGuided(t, map[string]any{})
+	lensHoverTable(t, nil)
+}
+
+// lensHoverTable is the table of TestLensHover, for a client that sends
+// hover as initializationOptions.hover, nil for none.
+func lensHoverTable(t *testing.T, hover map[string]any) {
+	t.Helper()
+	g := newGuidedHover(t, map[string]any{}, hover)
 	config := crdEntry + "    version: v1\n    path: spec.config\n    type: int\n"
 	params := policyEntry + "    variable: params\n"
 	tests := []struct {
@@ -397,10 +413,10 @@ func TestLensHover(t *testing.T) {
 		{"on params no kind types", "‸" + params + "    type: int\n", nil},
 		{"on the variable params", strings.Replace(params, "params", "par‸ams", 1) + "    type: int\n", []string{"(value) params: dyn", "spec.paramKind"}},
 		{"on a kind", params + "    kind: v1 Config‸Map\n", []string{"```cel\n(kind) params: v1 ConfigMap\n```", "ConfigMap holds configuration data for pods to consume."}},
-		{"on a kind a CRD's value cannot have", crdEntry + "    version: v1\n    path: spec.config\n    kind: v1 Config‸Map\n", []string{"```cel\n(kind) self.spec.config\n```", "The entry does not apply: spec.config is x-kubernetes-int-or-string, an int or a string to a rule: give it int or string."}},
+		{"on a kind a CRD's value cannot have", crdEntry + "    version: v1\n    path: spec.config\n    kind: v1 Config‸Map\n", []string{"```cel\n(kind) self.spec.config\n```", `The entry does not apply: spec.config is x\-kubernetes\-int\-or\-string, an int or a string to a rule: give it int or string.`}},
 		{"on a kind not found", params + "    kind: example.com/v1 No‸such\n", []string{"(kind) params\n", "no CustomResourceDefinition of the workspace defines it"}},
 		{"on a schema", params + "    sche‸ma:\n      type: object\n      properties:\n        maxReplicas: {type: integer}\n        team: {type: string}\n", []string{"```cel\n(schema) params: {maxReplicas, team}\n```", "`{maxReplicas: int, team: string}`"}},
-		{"on a Go type", params + "    go: ./api/v1#Quota‸Spec\n", []string{"```cel\n(go) params: {maxReplicas, since, team}\n```", "The Go type QuotaSpec in api/v1/quota_types.go:10. QuotaSpec is the quota of a team.", "other.Owner"}},
+		{"on a Go type", params + "    go: ./api/v1#Quota‸Spec\n", []string{"```cel\n(go) params: {maxReplicas, since, team}\n```", `The Go type QuotaSpec in api/v1/quota\_types.go:10. QuotaSpec is the quota of a team.`, "other.Owner"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

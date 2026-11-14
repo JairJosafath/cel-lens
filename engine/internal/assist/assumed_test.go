@@ -154,7 +154,7 @@ func TestAssumedTypesHover(t *testing.T) {
 		{"params field", assumedPolicy, "params.spec.max", len("params.spec.m"), params, []string{"(field) max: int", "from .cellens, line 5"}},
 		// #15: hover says where a schema or a Go type comes from.
 		{"params from a schema", assumedPolicy, "params.spec.max", len("par"), fromSchema, []string{"(variable) params: {spec: {max: int}}", "Typed from the schema at .cellens, line 8: Kubernetes"}},
-		{"params field from a Go type", assumedPolicy, "params.spec.max", len("params.spec.m"), fromGo, []string{"Typed from the Go type QuotaSpec in api/v1/quota_types.go:12, named in .cellens, line 5"}},
+		{"params field from a Go type", assumedPolicy, "params.spec.max", len("params.spec.m"), fromGo, []string{`Typed from the Go type QuotaSpec in api/v1/quota\_types.go:12, named in .cellens, line 5`}}, // escaped (#52)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

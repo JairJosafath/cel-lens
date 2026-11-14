@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assume"
+	"github.com/JairJosafath/cel-lens/engine/internal/hover"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
@@ -173,10 +174,11 @@ func assumedType(s schema) string {
 	return s.name()
 }
 
-// withAssumed adds to desc the sentence that says where the type of s is
-// written, when s comes from an assumed type.
+// withAssumed adds to desc, Markdown, the sentence that says where the type
+// of s is written, when s comes from an assumed type. The sentence names
+// files and values, so it is escaped.
 func withAssumed(desc string, s schema) string {
-	note := s.str(assumedKey)
+	note := hover.Escape(s.str(assumedKey))
 	switch {
 	case note == "":
 		return desc

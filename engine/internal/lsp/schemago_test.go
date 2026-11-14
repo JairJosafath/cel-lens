@@ -232,7 +232,7 @@ func TestLensGo(t *testing.T) {
 	var hover struct{ Contents struct{ Value string } }
 	c.request("textDocument/hover", policy, quotaPolicy, "params.maxReplicas", len("params.max"), &hover)
 	if got := hover.Contents.Value; !strings.Contains(got, "(field) maxReplicas: int") || !strings.Contains(got, "MaxReplicas is the most replicas a team may run.") ||
-		!strings.Contains(got, "Typed from the Go type QuotaSpec in api/v1/quota_types.go:10, named in .cellens, line 2") {
+		!strings.Contains(got, `Typed from the Go type QuotaSpec in api/v1/quota\_types.go:10, named in .cellens, line 2`) { // escaped (#52)
 		t.Errorf("hover on maxReplicas = %q, want int, its doc, and the Go type and file it is from", got)
 	}
 	lines := c.codeLenses(policy)

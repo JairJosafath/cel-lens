@@ -939,3 +939,91 @@ func BenchmarkClosedCRDs(b *testing.B) {
 		})
 	}
 }
+
+// lastRule is the line and column BenchmarkHover hovers on in text: on
+// self in the last rule of the file, as far from the start as a request
+// gets.
+func lastRule(text string) (line, char int) {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "rule:") && strings.Contains(l, "self") {
+			line = i
+		}
+	}
+	return line, strings.Index(lines[line], "self") + 2
+}
+
+// nearBenchCRD is big with the near rule and list of fixCRD added to its
+// spec: a 1,000-line CRD with one rule near its budget, whose hover sizes
+// its fix.
+func nearBenchCRD(big string) string {
+	const ports = `                ports:
+                  type: array
+                  x-kubernetes-validations:
+                    - rule: "` + nearRule + `"
+                  items:
+                    type: object
+                    properties:
+                      port: {type: integer}
+`
+	head, rest, _ := strings.Cut(big, "              properties:\n")
+	return head + "              properties:\n" + ports + rest
+}
+
+// BenchmarkRuleHover measures the hover of a rule with its Cost: paragraph,
+// from the request to the response, through the server's whole message
+// loop: on BenchmarkHover's 1,000-line CRD, the first hover after a change,
+// which estimates the costs of the document (the change and its check are
+// not timed), and a hover asked again, which estimates nothing; the first
+// hover after a change on the same CRD at 2,000 lines, to see how it grows;
+// on the CRD of 500 rules of BenchmarkCodeLens; and on a rule near its
+// budget in the 1,000-line CRD, whose first hover also sizes its fix
+// (budget 300 ms).
+// The budget of the first is 100 ms; the one asked again is within 1 ms of
+// BenchmarkHover.
+func BenchmarkRuleHover(b *testing.B) {
+	big := bigCRD(1000)
+	for _, bc := range []struct {
+		name    string
+		text    string
+		changed bool
+		// at is where the hover goes: the last rule when it is "", else
+		// just inside the first place of this text.
+		at string
+	}{
+		{"1000 lines/first after a change", big, true, ""},
+		{"1000 lines/again", big, false, ""},
+		{"2000 lines/first after a change", bigCRD(2000), true, ""},
+		{"500 rules/first after a change", manyRulesCRD(500, 5), true, ""},
+		{"near rule/first after a change", nearBenchCRD(big), true, nearRule},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			b.Logf("input: %d lines", strings.Count(bc.text, "\n"))
+			send, read := benchClient(b)
+			send(didOpen(bc.text, 2))
+			read()
+			line, char := lastRule(bc.text)
+			if bc.at != "" {
+				before, _, _ := strings.Cut(bc.text, bc.at)
+				line, char = strings.Count(before, "\n"), len(before)-strings.LastIndex(before, "\n")
+			}
+			for id := 3; b.Loop(); id++ {
+				if bc.changed {
+					b.StopTimer()
+					send(map[string]any{"jsonrpc": "2.0", "method": "textDocument/didChange", "params": map[string]any{
+						"textDocument":   map[string]any{"uri": uri, "version": id},
+						"contentChanges": []map[string]any{{"text": bc.text}},
+					}})
+					read()
+					b.StartTimer()
+				}
+				send(map[string]any{"jsonrpc": "2.0", "id": id, "method": "textDocument/hover", "params": map[string]any{
+					"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": line, "character": char},
+				}})
+				if m := read(); !strings.Contains(string(m.Result), "**Cost:**") {
+					b.Fatalf("hover = %.300s, want its Cost: paragraph", m.Result)
+				}
+			}
+		})
+	}
+}

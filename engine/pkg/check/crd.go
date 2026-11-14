@@ -38,7 +38,7 @@ func (r *reporter) crd(ctx context.Context, node *yaml.Node, exprs map[string]ex
 	apiextensionsv1.SetObjectDefaults_CustomResourceDefinition(&versioned)
 	r.yaml11Enums(node)
 	base := len(r.diags)
-	if err := r.validateCRD(ctx, node, exprs, &versioned, partial); err != nil {
+	if err := r.validateCRD(ctx, node, exprs, &versioned, partial, true); err != nil {
 		return err
 	}
 	types := r.assumedIn(node)
@@ -51,13 +51,15 @@ func (r *reporter) crd(ctx context.Context, node *yaml.Node, exprs map[string]ex
 		return nil
 	}
 	return r.addAssumed(ctx, base, exprs, typesOfVersion(&versioned, types), func() error {
-		return r.validateCRD(ctx, node, exprs, typed, partial)
+		return r.validateCRD(ctx, node, exprs, typed, partial, false)
 	})
 }
 
 // validateCRD runs the API server's validation of versioned, read from node,
-// partial when read left wrong-typed fields out, and reports its errors.
-func (r *reporter) validateCRD(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression, versioned *apiextensionsv1.CustomResourceDefinition, partial bool) error {
+// partial when read left wrong-typed fields out, and reports its errors. With
+// shared, the validation is kept in r.validations for Costs, or read from it
+// when Costs or a check of the same text kept it.
+func (r *reporter) validateCRD(ctx context.Context, node *yaml.Node, exprs map[string]extract.Expression, versioned *apiextensionsv1.CustomResourceDefinition, partial, shared bool) error {
 	var internal apiextensions.CustomResourceDefinition
 	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(versioned, &internal, nil); err != nil {
 		return fmt.Errorf("convert CustomResourceDefinition: %w", err)
@@ -74,13 +76,29 @@ func (r *reporter) validateCRD(ctx context.Context, node *yaml.Node, exprs map[s
 		cancel()
 		wait()
 	}()
-	if err := UnderVersion(r.version, func() { problems = validation.ValidateCustomResourceDefinition(ctx, &internal) }); err != nil {
-		return err
+	var whole []string
+	kept := false
+	if shared {
+		problems, whole, kept = r.validations.get(r.textSum, r.version, r.doc)
 	}
-	problems = slices.DeleteFunc(problems, r.ruleOfGuessedSchema)
-	whole, err := r.wholeSchemaErrors(ctx, &internal, problems)
-	if err != nil {
-		return err
+	if !kept {
+		if err := UnderVersion(r.version, func() { problems = validation.ValidateCustomResourceDefinition(ctx, &internal) }); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	all := problems
+	problems = slices.DeleteFunc(slices.Clone(problems), r.ruleOfGuessedSchema)
+	if !kept {
+		var err error
+		if whole, err = r.wholeSchemaErrors(ctx, &internal, problems); err != nil {
+			return err
+		}
+		if shared {
+			r.validations.put(r.textSum, r.version, r.doc, all, whole)
+		}
 	}
 	for _, fe := range problems {
 		if fe.Detail == "" {
@@ -326,11 +344,40 @@ var listItemsErrors = []string{
 // listItemsErrors).
 func errorNode(fe *kfield.Error) string {
 	if slices.ContainsFunc(listItemsErrors, func(m string) bool { return strings.Contains(fe.Detail, m) }) {
-		if i := strings.LastIndex(fe.Field, ".items"); i >= 0 {
+		if i := lastItemsSegment(fe.Field); i >= 0 {
 			return fe.Field[:i]
 		}
 	}
 	return fe.Field
+}
+
+// lastItemsSegment returns the index of the last ".items" that is a segment
+// of the field path, outside the brackets of a property name and followed by
+// the end of the path, a dot or a bracket, or -1: a name such as "a.items" or
+// "a.itemsKey" holds the text but is no segment. A bracket's content ends at
+// the first "]" that a ".", a "[" or the end of the path follows, as package
+// extract writes a path, so a name may hold brackets itself.
+func lastItemsSegment(field string) int {
+	last := -1
+	for i := 0; i < len(field); i++ {
+		switch field[i] {
+		case '[':
+			end := len(field)
+			for j := i + 1; j < len(field); j++ {
+				if field[j] == ']' && (j+1 == len(field) || field[j+1] == '.' || field[j+1] == '[') {
+					end = j
+					break
+				}
+			}
+			i = end
+		case '.':
+			rest, ok := strings.CutPrefix(field[i:], ".items")
+			if ok && (rest == "" || rest[0] == '.' || rest[0] == '[') {
+				last = i
+			}
+		}
+	}
+	return last
 }
 
 // uncompiledBy returns the expressions of exprs that the API server does not

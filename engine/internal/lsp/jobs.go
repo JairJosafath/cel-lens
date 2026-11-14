@@ -32,6 +32,11 @@ type jobSpec struct {
 	// settle, when not nil, runs on the message loop with what work
 	// returned, and returns the answer; it may change the session.
 	settle func(any) (any, error)
+	// answer, when not nil, makes the answer of this request from what
+	// settle returned, on the message loop: requests that share a job may
+	// each want their own, such as hovers at different places that wait
+	// for the same estimate.
+	answer func(any) (any, error)
 }
 
 // job is the work of a command that runs in its own goroutine, so the
@@ -40,9 +45,11 @@ type jobSpec struct {
 // then.
 type job struct {
 	spec jobSpec
-	// ids are the requests that wait for the answer.
-	ids    []json.RawMessage
-	cancel context.CancelFunc
+	// ids are the requests that wait for the answer, and answers what makes
+	// the answer of each, nil for the job's own (see jobSpec.answer).
+	ids     []json.RawMessage
+	answers []func(any) (any, error)
+	cancel  context.CancelFunc
 	// cancelled is true once no request waits any more: what the work
 	// returns then is dropped.
 	cancelled bool
@@ -74,6 +81,7 @@ func (ss *session) startJob(ctx context.Context, msg jsonrpc.Message, spec jobSp
 	for _, seq := range slices.Sorted(maps.Keys(ss.jobs)) {
 		if j := ss.jobs[seq]; same(j) && j.spec.key == spec.key {
 			j.ids = append(j.ids, msg.ID)
+			j.answers = append(j.answers, spec.answer)
 			return nil
 		}
 	}
@@ -101,7 +109,11 @@ func (ss *session) runJob(ctx context.Context, spec jobSpec, ids []json.RawMessa
 	ss.jobSeq++
 	seq, done := ss.jobSeq, ss.jobDone
 	ctx, cancel := context.WithCancel(ctx)
-	ss.jobs[seq] = &job{spec: spec, ids: ids, cancel: cancel}
+	answers := make([]func(any) (any, error), len(ids))
+	for i := range answers {
+		answers[i] = spec.answer
+	}
+	ss.jobs[seq] = &job{spec: spec, ids: ids, answers: answers, cancel: cancel}
 	go func() {
 		result, err := spec.work(ctx)
 		done <- jobResult{seq, result, err}
@@ -139,7 +151,11 @@ func (ss *session) finishJob(r jobResult) error {
 	if err == nil && j.spec.settle != nil {
 		result, err = j.spec.settle(result)
 	}
-	for _, id := range j.ids {
+	for i, id := range j.ids {
+		result, err := result, err
+		if err == nil && j.answers[i] != nil {
+			result, err = j.answers[i](result)
+		}
 		var re *rpcError
 		var werr error
 		switch {
@@ -168,6 +184,7 @@ func (ss *session) cancelJob(id json.RawMessage) (bool, error) {
 			continue
 		}
 		j.ids = slices.Delete(j.ids, i, i+1)
+		j.answers = slices.Delete(j.answers, i, i+1)
 		if len(j.ids) == 0 {
 			j.cancelled = true
 			j.cancel()

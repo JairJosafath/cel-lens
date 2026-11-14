@@ -191,7 +191,7 @@ func TestExamplesHover(t *testing.T) {
 		{File: "samples/c.yaml", URI: "file:///ws/samples/c.yaml", Line: 1, Verdict: inline.NotRun, Skip: inline.SkipNotUpdate, Message: "the example is not an update and the rule needs oldSelf"},
 		{File: "samples/d.yaml", URI: "file:///ws/samples/d.yaml", Line: 1, Verdict: inline.Failed, Message: "division by zero\nevaluating rule"},
 	}
-	want := "**Examples:** refuses 1 example it should allow · allows 1 it should refuse · 1 error · 2 pass\n\n" +
+	want := "refuses 1 example it should allow · allows 1 it should refuse · 1 error · 2 pass\n\n" +
 		"- [samples/big.yaml:3](<file:///ws/samples/big.yaml#L3>) **refused as an update**, expected to be allowed: spec.size: Invalid value: 20: at most \\*10\\*\n" +
 		"- [test/invalid/y.yaml:2](<file:///ws/test/invalid/y.yaml#L2>) **allowed**, expected to be refused with \"at most 5\"\n" +
 		"- [samples/d.yaml:1](<file:///ws/samples/d.yaml#L1>) **error**: division by zero evaluating rule\n" +
@@ -294,7 +294,7 @@ func TestPolicyHoverAndWarnings(t *testing.T) {
 	e := inline.Example{File: "deploy.yaml", URI: "file:///ws/deploy.yaml", Line: 1, Verdict: inline.Refused, Wrong: true, Binding: "limits", Param: "params.yaml:1", Message: "at most 3"}
 	w := inline.Example{File: "deploy.yaml", URI: "file:///ws/deploy.yaml", Line: 6, Verdict: inline.Warned, Binding: "limits", Message: "at most 3"}
 	n := inline.Example{File: "deploy.yaml", URI: "file:///ws/deploy.yaml", Line: 11, Verdict: inline.Refused, Binding: inline.Unbound, Message: "no zero"}
-	want := "**Examples:** refuses 1 example it should allow · warns 1 · 1 passes · under 2 bindings\n\n" +
+	want := "refuses 1 example it should allow · warns 1 · 1 passes · under 2 bindings\n\n" +
 		"- [deploy.yaml:1](<file:///ws/deploy.yaml#L1>) **refused** under binding limits with param params.yaml:1, expected to be allowed: at most 3\n" +
 		"- [deploy.yaml:6](<file:///ws/deploy.yaml#L6>) **warned** under binding limits: at most 3\n" +
 		"- [deploy.yaml:11](<file:///ws/deploy.yaml#L11>) refused under no binding: no zero\n"
@@ -308,5 +308,17 @@ func TestPolicyHoverAndWarnings(t *testing.T) {
 		if tc.got != tc.want {
 			t.Errorf("warning = %q, want %q", tc.got, tc.want)
 		}
+	}
+}
+
+// TestExamplesHoverLinkTarget checks that a URI the client gave, with what
+// would end a link's destination or the link, is percent-encoded in the
+// link to the example (#52).
+func TestExamplesHoverLinkTarget(t *testing.T) {
+	t.Parallel()
+	got := inline.ExamplesHover([]inline.Example{{File: "a b/(x)<y>.yaml", URI: "file:///ws/a b/(x)<y>\\z.yaml", Line: 2, Verdict: inline.Allowed}})
+	want := "[a b/\\(x\\)\\<y\\>.yaml:2](<file:///ws/a%20b/%28x%29%3Cy%3E%5Cz.yaml#L2>) allowed"
+	if !strings.Contains(got, want) {
+		t.Errorf("ExamplesHover() =\n%s\nwant it to hold\n%s", got, want)
 	}
 }

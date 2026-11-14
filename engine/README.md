@@ -143,7 +143,7 @@ Actions, with Go on the runner:
 ```yaml
 - name: Run the examples
   run: |
-    go install github.com/JairJosafath/cel-lens/engine@v0.33.0
+    go install github.com/JairJosafath/cel-lens/engine@v0.34.0
     mv "$(go env GOPATH)/bin/engine" "$(go env GOPATH)/bin/cel-lens-core"
     "$(go env GOPATH)/bin/cel-lens-core" examples ./config
 ```
@@ -181,7 +181,7 @@ Experimental:
 |---|---|---|
 | `kyverno` | Checks, hover and completion for Kyverno `ValidatingPolicy` (`policies.kyverno.io/v1`). Off, these documents are parsed but get no diagnostic, hover or completion | Compiled with Kyverno's compiler but never run against Kyverno's engine; `namespaceObject` is still `dyn` in hover; only `ValidatingPolicy` is read |
 | `crd-typed-policies` | Types `params` of a custom resource, and `object` and `oldObject` of a policy that matches one, from a CustomResourceDefinition found in the workspace. Off, they are `dyn` and hover says the feature is off | A CRD in a neighbouring `---` document of the same file still types it (`docs/type-sources.md`). The workspace scan runs only while the feature is on: at `initialize`, or when `didChangeConfiguration` turns it on, and it runs in the background, so the session stays responsive; the open documents are checked again when it ends. The scan reads at most 20000 YAML files and skips files over 1 MiB; if it stops at the file cap the client gets one warning (`window/showMessage`), and one file skipped for its size is named in its own `window/logMessage` line, while many are reported in one summary line with their count, the limit and the first three names |
-| `fitting-completion` | After a dot completion offers only what the receiver has, before a dot only the names of this kind of document, and hover says why a value is `dyn`. Off, completion and hover behave as in v0.17.1 | Built after v0.17.1 and not yet proven on real use |
+| `fitting-completion` | After a dot completion offers only what the receiver has, and before a dot only the names of this kind of document. Off, completion behaves as in v0.17.1. Hover does not depend on it: it says why a value is `dyn` either way | Built after v0.17.1 and not yet proven on real use |
 | `cellens-types` | The language server types the `dyn` values a `.cellens` file names, writes its entries for the editor through `workspace/applyEdit` (**Give it a type**), and guides its editing with completion, hover and problems as it is typed ([docs/cellens.md](docs/cellens.md)). Off, no `.cellens` is read: those values are `dyn` and hover says the feature is off, the line above a rule offers no type, and a workspace with a `.cellens` gets one notice per session with a button to turn it on | The types are yours: nothing checks them against a cluster |
 
 How the types of `object`, `params` and the policy variables are found is in

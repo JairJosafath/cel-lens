@@ -36,12 +36,16 @@ type RuleList struct {
 // file's slash-separated path below that folder (outside every folder, its
 // path, or its URI when it is no file), the document as
 // cel-lens.exampleResults names it, its kind and metadata.name, its range in
-// the file and its rules, in the order of the file.
+// the file, IDPart, the part of its rules' ids that names the document (the
+// document, followed by "#n" for the nth document of that kind and name in
+// the file, listed or not, from the second), and its rules, in the order of
+// the file.
 type RuleDocument struct {
 	URI      string       `json:"uri"`
 	Folder   string       `json:"folder,omitempty"`
 	File     string       `json:"file"`
 	Document string       `json:"document"`
+	IDPart   string       `json:"idPart"`
 	Kind     string       `json:"kind"`
 	Name     string       `json:"name"`
 	Range    lspRange     `json:"range"`
@@ -56,8 +60,8 @@ type RuleDocument struct {
 // annotation's key) and index. ID is the file's URI, as a file URI is
 // written from its path whoever opened it, "#", and those parts joined
 // with "#", the document's name followed by "#2" for the second document
-// of the same kind and name in the file: it does not change with the
-// rule's text or its line. Label and LabelFrom are what inline.RuleLabel
+// of the same kind and name in the file, whether it has rules or not: it
+// does not change with the rule's text or its line. Label and LabelFrom are what inline.RuleLabel
 // makes of it, Location the place of its expression as cel-lens.showRule
 // takes it, Span the range from the line of its list item to the end of the
 // item, Compile what the check of its file says of it, Examples what its
@@ -201,12 +205,14 @@ func listRules(ctx context.Context, uri string, text []byte, kyverno bool) ([]li
 	var out []listedDoc
 	for i, d := range docs {
 		root := yamlResolve(d.Node)
-		kind, ok := listedKind(root, kyverno)
-		if !ok || len(byDoc[d.Index]) == 0 {
+		// The ordinal counts every document of the kind and name, listed or
+		// not, so it stays when a document above gains its first rule.
+		kind, name := yamlString(yamlChild(root, "kind")), yamlString(yamlChild(yamlChild(root, "metadata"), "name"))
+		document := strings.TrimSpace(kind + " " + name)
+		seen[document]++
+		if _, ok := listedKind(root, kyverno); !ok || len(byDoc[d.Index]) == 0 {
 			continue
 		}
-		name := yamlString(yamlChild(yamlChild(root, "metadata"), "name"))
-		document := strings.TrimSpace(kind + " " + name)
 		next := extract.Position{Line: len(lines) + 1, Column: 1}
 		if i+1 < len(docs) {
 			next = nodeStart(docs[i+1].Node)
@@ -241,11 +247,11 @@ func listRules(ctx context.Context, uri string, text []byte, kyverno bool) ([]li
 		if len(ld.doc.Rules) == 0 {
 			continue
 		}
-		seen[document]++
 		idDoc := document
 		if n := seen[document]; n > 1 {
 			idDoc += "#" + strconv.Itoa(n)
 		}
+		ld.doc.IDPart = idDoc
 		for j := range ld.doc.Rules {
 			ld.doc.Rules[j].ID = idURI + "#" + idDoc + "#" + ruleIDParts(ld.doc.Rules[j])
 		}

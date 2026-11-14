@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
+	"github.com/JairJosafath/cel-lens/engine/internal/hover"
 	"github.com/JairJosafath/cel-lens/engine/internal/infer"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
@@ -43,11 +44,14 @@ const (
 	// commandRuleList answers the CEL rules of the workspace, each with its
 	// compile state (see answerRuleList).
 	commandRuleList = "cel-lens.ruleList"
+	// commandApplyFix applies a quick fix of a range of an open document,
+	// which a hover links to (see applyFix).
+	commandApplyFix = hover.ApplyFixCommand
 )
 
 // commandNames are the commands the server runs, as initialize declares them.
 func commandNames() []string {
-	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType, commandExampleResults, commandRuleList}
+	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType, commandExampleResults, commandRuleList, commandApplyFix}
 }
 
 // typeCommand reports whether command is one of those behind Give it a
@@ -69,9 +73,9 @@ type editCaps struct {
 // answers once the client answers it.
 type pendingEdit struct {
 	id     json.RawMessage // the workspace/executeCommand request
-	key    string          // the key of the .cellens file it edits
-	path   string          // that file, as messages name it
-	result commandResult
+	key    string          // the key of the .cellens file it edits, "" for none
+	path   string          // the file it edits, as messages name it
+	result any             // what the command answers once the edit is applied
 	// cancelled is true once the command was answered as cancelled: the
 	// edit waits for the client's answer all the same, as the client may
 	// still apply it.
@@ -146,7 +150,7 @@ func failed(msg string) error { return &rpcError{jsonrpc.CodeRequestFailed, msg}
 // are listed and, with a value, its examples are found, and inferType once
 // its work ends, and exampleResults once its rules ran: they run in a
 // goroutine (see startJob). ruleList answers once the rule index ran, in a
-// goroutine of its own (see answerRuleList). setType and removeType send the client a workspace/applyEdit
+// goroutine of its own (see answerRuleList). setType, removeType and applyFix send the client a workspace/applyEdit
 // and answer when it answers (see answered): nothing is written to disk but
 // by the client.
 func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, reply func(any, error) error) error {
@@ -161,7 +165,7 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 		return reply(nil, failed(p.Command+": "+lensesOffText+": turn it on to give a value a type"))
 	}
 	var a valueArgs
-	if len(p.Arguments) > 0 && p.Command != commandInferType && p.Command != commandExampleResults && p.Command != commandRuleList {
+	if len(p.Arguments) > 0 && p.Command != commandInferType && p.Command != commandExampleResults && p.Command != commandRuleList && p.Command != commandApplyFix {
 		if err := json.Unmarshal(p.Arguments[0], &a); err != nil {
 			return reply(nil, badParams(p.Command, err))
 		}
@@ -194,6 +198,8 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 		edit, err = ss.setType(ctx, a)
 	case commandRemoveType:
 		edit, err = ss.removeType(a)
+	case commandApplyFix:
+		edit, err = ss.applyFix(ctx, p.Arguments)
 	default:
 		return reply(nil, invalid(fmt.Sprintf("unknown command %q: cel-lens runs %s", p.Command, strings.Join(commandNames(), ", "))))
 	}
@@ -584,7 +590,7 @@ func (ss *session) valueProblem(ctx context.Context, v valueRef) (msg string, no
 type workspaceEdit struct {
 	label, key, path string
 	edit             map[string]any
-	result           commandResult
+	result           any
 }
 
 // setType gives the value a names the type or kind of a in a .cellens: in the

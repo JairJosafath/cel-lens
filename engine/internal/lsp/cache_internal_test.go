@@ -154,9 +154,17 @@ func TestCodeActionReusesDiagnostics(t *testing.T) {
 		checks++
 		return check.Check(ctx, file, data, opts...)
 	}
+	// The fixes of the problems: an expression near its cost budget has a
+	// fix of its own, with no problem (#56), which this test is not about.
 	action := func() []any {
 		t.Helper()
-		return codeActions(t, ss)
+		var out []any
+		for _, a := range codeActions(t, ss) {
+			if m, ok := a.(map[string]any); ok && m["diagnostics"] != nil {
+				out = append(out, a)
+			}
+		}
+		return out
 	}
 	text := widget(t)
 	open, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": cacheURI, "version": 1, "text": text}})

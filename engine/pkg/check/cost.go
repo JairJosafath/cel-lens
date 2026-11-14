@@ -21,6 +21,7 @@ import (
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"k8s.io/apiserver/pkg/cel/environment"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/shortnum"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 )
 
@@ -88,6 +89,8 @@ type ruleCost struct {
 	isMessage   bool
 	cost        uint64
 	cardinality uint64
+	// failed is true for a rule that does not compile; its cost is then 0.
+	failed bool
 }
 
 // costs explains the cost errors costErrs of the CRD with the numbers of the
@@ -347,7 +350,7 @@ func nodeRules(n *schemaNode, envSet *compiler, out *[]ruleCost) error {
 			}
 			cost := multiply(cr.cost, cardinality)
 			n.cel.TotalCost.ObserveExpressionCost(rule, cost)
-			*out = append(*out, ruleCost{path: rule, node: n, index: i, text: n.schema.XValidations[i].Rule, cost: cost, cardinality: cardinality})
+			*out = append(*out, ruleCost{path: rule, node: n, index: i, text: n.schema.XValidations[i].Rule, cost: cost, cardinality: cardinality, failed: cr.failed})
 			if cr.hasMessage {
 				msg := n.path.Child("x-kubernetes-validations").Index(i).Child("messageExpression")
 				n.cel.TotalCost.ObserveExpressionCost(msg, cr.messageCost)
@@ -367,6 +370,8 @@ type compiled struct {
 	// messageCost is the cost of the messageExpression, if hasMessage.
 	messageCost uint64
 	hasMessage  bool
+	// failed is true for a rule that does not compile.
+	failed bool
 }
 
 // compiler compiles the rules of schema nodes with the API server's compiler
@@ -528,7 +533,7 @@ func (c *compiler) compileTyped(n *schemaNode, info *validation.CELTypeInfo, key
 	}
 	out := make([]compiled, len(results))
 	for i, cr := range results {
-		out[i] = compiled{cost: cr.MaxCost, cardinality: cr.MaxCardinality}
+		out[i] = compiled{cost: cr.MaxCost, cardinality: cr.MaxCardinality, failed: cr.Error != nil}
 		if cr.MessageExpression != nil && cr.MessageExpressionError == nil {
 			out[i].hasMessage, out[i].messageCost = true, cr.MessageExpressionMaxCost
 		}
@@ -564,22 +569,27 @@ type driver struct {
 	size uint64
 	// text is the sentence that explains it.
 	text string
+	// repeats is true for a list or map above the expression's node, which it
+	// runs once for each element of.
+	repeats bool
 }
 
 // maxDrivers is the most drivers one message names.
 const maxDrivers = 3
 
 // drivers finds what makes the expression of rc expensive: the unbounded lists
-// and maps it runs once per element of, the unbounded strings, lists and maps of
-// its schema node that it uses, and the number-to-text conversions.
+// and maps a rule runs once per element of, the unbounded strings, lists and
+// maps of its schema node that it uses, and the number-to-text conversions. The
+// cost of a messageExpression is its own, not multiplied by how many times its
+// rule may run, so the lists and maps above it are none of its drivers.
 func drivers(rc ruleCost) []driver {
 	var found []driver
-	if rc.node.cel.MaxCardinality == nil {
+	if rc.node.cel.MaxCardinality == nil && !rc.isMessage {
 		for a := rc.node.parent; a != nil; a = a.parent {
 			if fix, ok := unboundedLimit(a); ok {
 				fix.FieldPath = nodeName(a)
 				found = append(found, driver{
-					fix: fix, size: rc.cardinality,
+					fix: fix, size: rc.cardinality, repeats: true,
 					text: fmt.Sprintf("it runs for every element of %s, which has no %s, and the estimator assumes up to %s elements", quote(fix.FieldPath), quote(fix.Limit), count(rc.cardinality)),
 				})
 			}
@@ -694,27 +704,7 @@ func nodeName(n *schemaNode) string {
 func quote(s string) string { return "`" + s + "`" }
 
 // count writes n with a K, M, B or T suffix, or as a power of ten from 10^15 on.
-func count(n uint64) string {
-	f := float64(n)
-	switch {
-	case n >= 1e15:
-		return fmt.Sprintf("%.1e", f)
-	case n >= 1e12:
-		return trim(f/1e12) + "T"
-	case n >= 1e9:
-		return trim(f/1e9) + "B"
-	case n >= 1e6:
-		return trim(f/1e6) + "M"
-	case n >= 1e4:
-		return trim(f/1e3) + "K"
-	}
-	return strconv.FormatUint(n, 10)
-}
-
-// trim writes f with one decimal, without a trailing ".0".
-func trim(f float64) string {
-	return strings.TrimSuffix(fmt.Sprintf("%.1f", f), ".0")
-}
+func count(n uint64) string { return shortnum.Format(n) }
 
 // explained says why an expression is expensive and what would help.
 type explained struct {

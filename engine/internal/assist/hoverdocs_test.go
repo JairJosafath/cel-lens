@@ -10,21 +10,32 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
 )
 
+// The pinned links of the hover's Docs: (#57).
 const (
-	celSpec     = "(https://github.com/google/cel-spec/blob/master/doc/langdef.md)"
-	celRegex    = "(https://github.com/google/cel-spec/blob/master/doc/langdef.md#regular-expressions)"
-	k8sQuantity = "(https://kubernetes.io/docs/reference/using-api/cel/#kubernetes-quantity-library)"
-	k8sCEL      = "(https://kubernetes.io/docs/reference/using-api/cel/)"
-	k8sList     = "(https://kubernetes.io/docs/reference/using-api/cel/#kubernetes-list-library)"
-	celSize     = "(https://github.com/google/cel-spec/blob/master/doc/langdef.md#list-operators)"
-	celString   = "(https://github.com/google/cel-spec/blob/master/doc/langdef.md#string-functions)"
-	celMacros   = "(https://github.com/google/cel-spec/blob/master/doc/langdef.md#presence-and-comprehension-macros)"
-	celGoPage   = "https://pkg.go.dev/github.com/google/cel-go/cel#hdr-"
+	spec        = "https://github.com/google/cel-spec/blob/v0.25.2/doc/langdef.md"
+	celSpec     = "(" + spec + "#types-and-conversions) (cel-spec v0.25.2)"
+	celRegex    = "(" + spec + "#regular-expressions) (cel-spec v0.25.2)"
+	celSize     = "(" + spec + "#list-operators) (cel-spec v0.25.2)"
+	celString   = "(" + spec + "#string-functions) (cel-spec v0.25.2)"
+	celMacros   = "(" + spec + "#presence-and-comprehension-macros) (cel-spec v0.25.2)"
+	k8sCELPage  = "https://kubernetes.io/docs/reference/using-api/cel/"
+	k8sQuantity = "(" + k8sCELPage + "#kubernetes-quantity-library) (Kubernetes 1.37)"
+	k8sList     = "(" + k8sCELPage + "#kubernetes-list-library) (Kubernetes 1.37)"
+	k8sURL      = "(" + k8sCELPage + "#kubernetes-url-library) (Kubernetes 1.37)"
+	k8sIP       = "(" + k8sCELPage + "#kubernetes-ip-address-library) (Kubernetes 1.37)"
+	celGoExt    = "https://pkg.go.dev/github.com/google/cel-go@v0.30.0/ext#hdr-"
+	celGoPage   = "https://pkg.go.dev/github.com/google/cel-go@v0.30.0/cel#hdr-"
 )
 
-// celGoLink is the Markdown link a hover has to the cel-go section called name.
-func celGoLink(name string) string {
-	return "[CEL optional values](" + celGoPage + name + "-OptionalTypes)"
+// celGoLink is the Markdown link a hover has to the cel-go section called
+// name, for the function called fn.
+func celGoLink(fn, name string) string {
+	return "[`" + fn + "`, cel-go optional values](" + celGoPage + name + "-OptionalTypes) (cel-go v0.30.0)"
+}
+
+// twoVar is the link to cel-go's two-variable comprehension called name.
+func twoVar(name string) string {
+	return "(" + celGoExt + name + "-TwoVarComprehensions) (cel-go v0.30.0)"
 }
 
 // hoverIn hovers on the first rune of word in a policy whose only validation
@@ -39,7 +50,7 @@ func hoverIn(t *testing.T, v kubeversion.Version, expr, word string) (string, bo
 	data := head + expr + "\n"
 	col := len("    - expression: ") + strings.Index(expr, word) + 1
 	got, ok := a.Hover(assist.Parse(context.Background(), "p.yaml", []byte(data)), extract.Position{Line: 7, Column: col})
-	return got.Markdown, ok
+	return got.Markdown + "\n\n" + got.Docs, ok
 }
 
 func TestHoverFunctionDocs(t *testing.T) {
@@ -49,31 +60,32 @@ func TestHoverFunctionDocs(t *testing.T) {
 		want             []string
 	}{
 		{"size", "size(object.items) > 0", "size", []string{"size(list(<A>)) -> int", "```cel\nsize([1, 2, 3]) // -> 3\n```", celSize}},
-		{"matches", "object.name.matches('^a')", "matches", []string{"string.matches(string) -> bool", "'app-1'.matches('^app-[0-9]+$') // -> true", "[CEL language definition]" + celRegex}},
+		{"matches", "object.name.matches('^a')", "matches", []string{"string.matches(string) -> bool", "'app-1'.matches('^app-[0-9]+$') // -> true", "[`matches`, CEL regular expressions]" + celRegex}},
 		{"startsWith", "object.name.startsWith('a')", "startsWith", []string{"string.startsWith(string) -> bool", "'kubernetes'.startsWith('kube') // -> true", celString}},
-		{"has", "has(object.spec)", "has", []string{"has(e.f) -> bool", "has({'a': 1}.a) // -> true", celSpec}},
+		{"has", "has(object.spec)", "has", []string{"has(e.f) -> bool", "has({'a': 1}.a) // -> true", celMacros}},
 		{"all", "object.items.all(i, i > 0)", "all", []string{"range.all(x, predicate) -> bool", "[1, 2, 3].all(x, x > 0) // -> true", celMacros}},
-		{"exists", "object.items.exists(i, i > 0)", "exists", []string{"range.exists(x, predicate) -> bool", "// -> true", celSpec}},
-		{"exists_one", "object.items.exists_one(i, i > 0)", "exists_one", []string{"range.exists_one(x, predicate) -> bool", "// -> true", celSpec}},
-		{"map", "object.items.map(i, i)", "map", []string{"range.map(x, transform) -> list", "range.map(x, filter, transform) -> list", "[1, 2, 3].map(x, x * 2) // -> [2, 4, 6]", celSpec}},
-		{"filter", "object.items.filter(i, i > 0)", "filter", []string{"range.filter(x, predicate) -> list", "// -> [2, 3]", celSpec}},
+		{"exists", "object.items.exists(i, i > 0)", "exists", []string{"range.exists(x, predicate) -> bool", "// -> true", celMacros}},
+		{"exists_one", "object.items.exists_one(i, i > 0)", "exists_one", []string{"range.exists_one(x, predicate) -> bool", "// -> true", celMacros}},
+		{"map", "object.items.map(i, i)", "map", []string{"range.map(x, transform) -> list", "range.map(x, filter, transform) -> list", "[1, 2, 3].map(x, x * 2) // -> [2, 4, 6]", celMacros}},
+		{"filter", "object.items.filter(i, i > 0)", "filter", []string{"range.filter(x, predicate) -> list", "// -> [2, 3]", celMacros}},
 		{"all two variables", "object.items.all(i, v, v > 0)", "all", []string{"range.all(x, predicate) -> bool", "range.all(i, v, predicate) -> bool", celMacros}},
-		{"existsOne", "object.items.existsOne(i, v, v > 0)", "existsOne", []string{"range.existsOne(i, v, predicate) -> bool", "[1, 2, 3].existsOne(i, v, v > 2) // -> true", k8sCEL}},
-		{"transformList", "object.items.transformList(i, v, v)", "transformList", []string{"range.transformList(i, v, transform) -> list", "range.transformList(i, v, filter, transform) -> list", "// -> [2, 4, 6]", k8sCEL}},
-		{"optMap", "object.opt.optMap(x, x)", "optMap", []string{"opt.optMap(x, transform) -> optional", "// -> 4", celGoLink("OptMap")}},
-		{"optFlatMap", "object.opt.optFlatMap(x, optional.of(x))", "optFlatMap", []string{"opt.optFlatMap(x, transform) -> optional", celGoLink("OptFlatMap")}},
-		{"hasValue", "object.opt.hasValue()", "hasValue", []string{"optional_type(<V>).hasValue() -> bool", celGoLink("HasValue")}},
-		{"value", "object.opt.value()", "value", []string{"optional_type(<V>).value() -> <V>", celGoLink("Value")}},
-		{"or", "object.opt.or(optional.none())", "or", []string{"optional_type(<V>).or(optional_type(<V>)) -> optional_type(<V>)", celGoLink("Or")}},
-		{"optional.of", "optional.of(1).hasValue()", "of", []string{"optional.of(<V>) -> optional_type(<V>)", celGoLink("Optional_Of")}},
-		{"optional.none", "optional.none().hasValue()", "none", []string{"optional.none() -> optional_type(<V>)", celGoLink("Optional_None")}},
-		{"isSorted", "object.items.isSorted()", "isSorted", []string{"list(int).isSorted() -> bool", "[1, 2, 3].isSorted() // -> true", k8sCEL}},
+		{"existsOne", "object.items.existsOne(i, v, v > 0)", "existsOne", []string{"range.existsOne(i, v, predicate) -> bool", "[1, 2, 3].existsOne(i, v, v > 2) // -> true", twoVar("ExistsOne")}},
+		{"transformList", "object.items.transformList(i, v, v)", "transformList", []string{"range.transformList(i, v, transform) -> list", "range.transformList(i, v, filter, transform) -> list", "// -> [2, 4, 6]", twoVar("TransformList")}},
+		{"optMap", "object.opt.optMap(x, x)", "optMap", []string{"opt.optMap(x, transform) -> optional", "// -> 4", celGoLink("optMap", "OptMap")}},
+		{"optFlatMap", "object.opt.optFlatMap(x, optional.of(x))", "optFlatMap", []string{"opt.optFlatMap(x, transform) -> optional", celGoLink("optFlatMap", "OptFlatMap")}},
+		{"hasValue", "object.opt.hasValue()", "hasValue", []string{"optional_type(<V>).hasValue() -> bool", celGoLink("hasValue", "HasValue")}},
+		{"value", "object.opt.value()", "value", []string{"optional_type(<V>).value() -> <V>", celGoLink("value", "Value")}},
+		{"or", "object.opt.or(optional.none())", "or", []string{"optional_type(<V>).or(optional_type(<V>)) -> optional_type(<V>)", celGoLink("or", "Or")}},
+		{"optional.of", "optional.of(1).hasValue()", "of", []string{"optional.of(<V>) -> optional_type(<V>)", celGoLink("optional.of", "Optional_Of")}},
+		{"optional.none", "optional.none().hasValue()", "none", []string{"optional.none() -> optional_type(<V>)", celGoLink("optional.none", "Optional_None")}},
+		{"isSorted", "object.items.isSorted()", "isSorted", []string{"list(int).isSorted() -> bool", "[1, 2, 3].isSorted() // -> true", k8sList}},
 		{"sum", "object.items.sum()", "sum", []string{"[1, 2, 3].sum() // -> 6", k8sList}},
 		{"isLessThan", "quantity(object.a).isLessThan(quantity(object.b))", "isLessThan", []string{"isLessThan", k8sQuantity}},
-		{"orValue", "object.opt.orValue(0)", "orValue", []string{"optional.none().orValue(0) // -> 0", celGoLink("OrValue")}},
-		{"quantity", "quantity(object.mem).isInteger()", "quantity", []string{"quantity(string) -> kubernetes.Quantity", "quantity('500Mi').asInteger() // -> 524288000", "[Kubernetes CEL reference]" + k8sQuantity}},
-		{"isURL", "isURL(object.url)", "isURL", []string{"isURL(string) -> bool", "isURL('https://example.com') // -> true", k8sCEL}},
-		{"ip", "ip(object.addr).isLoopback()", "ip", []string{"ip(string) -> net.IP", "ip('::1').family() // -> 6", k8sCEL}},
+		{"orValue", "object.opt.orValue(0)", "orValue", []string{"optional.none().orValue(0) // -> 0", celGoLink("orValue", "OrValue")}},
+		{"quantity", "quantity(object.mem).isInteger()", "quantity", []string{"quantity(string) -> kubernetes.Quantity", "quantity('500Mi').asInteger() // -> 524288000", "[`quantity`, Kubernetes quantity library]" + k8sQuantity}},
+		{"isURL", "isURL(object.url)", "isURL", []string{"isURL(string) -> bool", "isURL('https://example.com') // -> true", k8sURL}},
+		{"string", "string(object.replicas) == '1'", "string", []string{"string(int) -> string", "[`string`, CEL types and conversions]" + celSpec}},
+		{"ip", "ip(object.addr).isLoopback()", "ip", []string{"ip(string) -> net.IP", "ip('::1').family() // -> 6", k8sIP}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

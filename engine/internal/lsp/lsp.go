@@ -24,7 +24,6 @@ import (
 
 	"github.com/JairJosafath/cel-lens/engine/internal/assist"
 	"github.com/JairJosafath/cel-lens/engine/internal/examples"
-	"github.com/JairJosafath/cel-lens/engine/internal/inline"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
@@ -69,6 +68,12 @@ type session struct {
 	folders []string
 	// checker finds the problems of a document; nil means check.Check.
 	checker func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Diagnostic, error)
+	// coster estimates the costs of a document's expressions for hover, off
+	// the message loop; nil means check.Costs.
+	coster func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Cost, error)
+	// limiter sizes the fix of an expression near its budget; nil means
+	// check.Limits.
+	limiter func(ctx context.Context, file string, data []byte, c check.Cost, budget uint64, opts ...check.Option) ([]check.Fix, bool, error)
 	// scanner reads the CRDs of the folders into dst and returns what to tell the
 	// user; nil means scanWorkspace.
 	scanner func(ctx context.Context, folders []string, dst *check.CRDs) []message
@@ -136,6 +141,8 @@ type session struct {
 	// files on disk. The problems found at one count are kept until another
 	// (see lensDiagnostics).
 	lensGen int
+	// hoverOpts are what the client said of its hovers at initialize.
+	hoverOpts hoverOptions
 	// inlineOff is true while the client's setting inlineInfo is false: the
 	// server then answers no code lenses.
 	inlineOff bool
@@ -254,6 +261,14 @@ type document struct {
 	// document, at any version: an editor shows them, and asks again on a
 	// refresh (see lensesOwed).
 	shown bool
+	// validations keeps the API server's validation of the document's
+	// CustomResourceDefinitions, which its check and its costs share.
+	validations check.Validations
+	// costs are the estimates of this version's expressions, made by the
+	// first hover or code action that needed them, for costsFor, with the
+	// fixes of the near ones sized so far; nil until then (see knownCosts).
+	costs    *estimates
+	costsFor costKey
 }
 
 // diagnostics returns the problems of the document as it is, checking it only
@@ -269,7 +284,7 @@ func (ss *session) diagnostics(ctx context.Context, uri string, doc *document) (
 	}
 	// Check's error is for YAML that does not parse, which it also returns as
 	// diagnostics, or for ctx.
-	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds), check.WithAssumedTypes(doc.assumed))
+	diags, _ := run(ctx, uri, doc.text, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds), check.WithAssumedTypes(doc.assumed), check.WithValidations(&doc.validations))
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -536,8 +551,7 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 	case "workspace/didChangeWorkspaceFolders":
 		return ss.didChangeWorkspaceFolders(ctx, msg.Params)
 	case "textDocument/hover":
-		res, err := ss.hover(ctx, msg.Params)
-		return reply(res, err)
+		return ss.answerHover(ctx, msg, reply)
 	case "textDocument/completion":
 		res, err := ss.completion(ctx, msg.Params)
 		return reply(res, err)
@@ -579,6 +593,9 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 		InitializationOptions struct {
 			// RuleList asks for cel-lens/ruleListChanged (see rulesChanged).
 			RuleList bool `json:"ruleList"`
+			// Hover says what the client does with a hover (see
+			// readHoverOptions).
+			Hover json.RawMessage `json:"hover"`
 		} `json:"initializationOptions"`
 	}
 	var problems []message
@@ -586,6 +603,9 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 		_, problems, _ = ss.configure(p.InitializationOptions)
 	}
 	_ = decode(params, &start)
+	var ignored []message
+	ss.hoverOpts, ignored = readHoverOptions(start.InitializationOptions.Hover)
+	problems = append(problems, ignored...)
 	ss.rules.follow = start.InitializationOptions.RuleList
 	ss.rules.base = time.Now().UnixMilli()
 	ss.rules.gen = ss.rules.base
@@ -798,9 +818,15 @@ func (ss *session) initializeInfo() map[string]any {
 // the Kubernetes version and the server's name.
 func (ss *session) initializeResult() any {
 	res := ss.initializeInfo()
+	caps, _ := res["capabilities"].(map[string]any)
 	if !ss.completionRegistration {
-		caps, _ := res["capabilities"].(map[string]any)
 		caps["completionProvider"] = map[string]any{"triggerCharacters": lensTriggerCharacters}
+	}
+	if ss.hoverOpts.sent {
+		exp, _ := caps["experimental"].(map[string]any)
+		if celLens, ok := exp["celLens"].(map[string]any); ok {
+			celLens["hover"] = ss.hoverOpts.echo()
+		}
 	}
 	return res
 }
@@ -1014,47 +1040,6 @@ func severity(s check.Severity) int {
 		return 2
 	}
 	return 1
-}
-
-func (ss *session) hover(ctx context.Context, params json.RawMessage) (any, error) {
-	var p positionParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, badParams("textDocument/hover", err)
-	}
-	if isLens(p.TextDocument.URI) {
-		return ss.lensHover(ctx, p.TextDocument.URI, p.Position)
-	}
-	doc, ok := ss.docs[p.TextDocument.URI]
-	if !ok {
-		return nil, nil
-	}
-	lines := doc.runes()
-	parsed := doc.parse(ctx, p.TextDocument.URI)
-	pos := fromPosition(lines, p.Position)
-	h, ok := ss.assist.Hover(parsed, pos)
-	// A CRD's rule says what it does to the examples, as far as the last
-	// check of the examples found it, below what the place says, or alone
-	// where the place says nothing.
-	section := ""
-	if key := crdKey(p.TextDocument.URI); ss.knowsRules(key) {
-		if e, found := parsed.Expression(pos); found {
-			if section = inline.ExamplesHover(ss.ruleExamples(key, e)); section != "" && !ok {
-				h = assist.Hover{Start: e.Start, End: e.End}
-			}
-		}
-	}
-	switch {
-	case !ok && section == "":
-		return nil, nil
-	case h.Markdown == "":
-		h.Markdown = section
-	case section != "":
-		h.Markdown += "\n\n---\n\n" + section
-	}
-	return map[string]any{
-		"contents": map[string]any{"kind": "markdown", "value": h.Markdown},
-		"range":    toRange(lines, h.Start, h.End),
-	}, nil
 }
 
 // triggerCharacters are the characters after which the client asks for

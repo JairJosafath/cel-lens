@@ -3,7 +3,9 @@ package assist
 import (
 	"context"
 	"strings"
+	"sync"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/meaning"
 	"github.com/JairJosafath/cel-lens/engine/internal/yamlfield"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
@@ -25,6 +27,45 @@ type Document struct {
 	assumed []check.AssumedType
 	// lensesOff is true when the types of .cellens are off (WithoutCellens).
 	lensesOff bool
+	// memo holds what Rule works out of each expression that depends on
+	// nothing but the file, by the expression's start, made by the first
+	// Rule that needs it; memoMu guards it.
+	memoMu sync.Mutex
+	memo   map[extract.Position]*exprMemo
+}
+
+// exprMemo is what Rule keeps of an expression of a Document.
+type exprMemo struct {
+	// expr is the expression parsed, once done is true; ok is false when
+	// it does not parse. Uses: and Checks: share it (see parsed).
+	expr     meaning.Expression
+	done, ok bool
+	// reads are the names the expression reads (see names), once read is
+	// true.
+	reads []string
+	read  bool
+	// uses is the Uses section of a CustomResourceDefinition's rule, which
+	// depends only on the file, once used is true.
+	uses string
+	used bool
+	// sentence is what the expression checks (see meaning), "" for none,
+	// once said is true.
+	sentence string
+	said     bool
+}
+
+// memoOf returns what is kept of the expression that starts at start. The
+// caller holds d.memoMu.
+func (d *Document) memoOf(start extract.Position) *exprMemo {
+	if d.memo == nil {
+		d.memo = map[extract.Position]*exprMemo{}
+	}
+	m := d.memo[start]
+	if m == nil {
+		m = &exprMemo{}
+		d.memo[start] = m
+	}
+	return m
 }
 
 // Option changes how Parse reads a file.

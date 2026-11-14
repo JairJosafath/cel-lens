@@ -1,97 +1,9 @@
 package assist
 
-import "strings"
-
-// Where the hover of a function or macro sends the reader.
-const (
-	celSpecURL = "https://github.com/google/cel-spec/blob/master/doc/langdef.md"
-	k8sCELURL  = "https://kubernetes.io/docs/reference/using-api/cel/"
-	celGoURL   = "https://pkg.go.dev/github.com/google/cel-go/cel"
-)
-
-// Link titles of the docs pages.
-const (
-	celSpecTitle = "CEL language definition"
-	k8sCELTitle  = "Kubernetes CEL reference"
-	celGoTitle   = "CEL optional values"
-)
-
-// section is a heading of a docs page, with the title of the link to it.
-type section struct{ page, title, anchor string }
-
-// sections returns the heading that documents the function called name, if any. It maps a function to the heading that documents it, for the functions
-// that have one. Every anchor exists on its page, checked on 2026-10-09:
-//   - celSpecURL: regular-expressions, list-operators, string-functions and
-//     presence-and-comprehension-macros are headings of the CEL language definition.
-//   - k8sCELURL: kubernetes-list-library and kubernetes-quantity-library are
-//     headings of the Kubernetes CEL page.
-//   - celGoURL: the hdr-*-OptionalTypes anchors are the headings, under Optional
-//     Types, of the cel-go package documentation.
-func sections(name string) (section, bool) {
-	switch name {
-	case "matches":
-		return section{celSpecURL, celSpecTitle, "regular-expressions"}, true
-	case "size":
-		return section{celSpecURL, celSpecTitle, "list-operators"}, true
-	case "startsWith":
-		return section{celSpecURL, celSpecTitle, "string-functions"}, true
-	case "all":
-		return section{celSpecURL, celSpecTitle, "presence-and-comprehension-macros"}, true
-	case "sum":
-		return section{k8sCELURL, k8sCELTitle, "kubernetes-list-library"}, true
-	case "quantity", "isQuantity", "isLessThan":
-		return section{k8sCELURL, k8sCELTitle, "kubernetes-quantity-library"}, true
-	case "orValue":
-		return section{celGoURL, celGoTitle, "hdr-OrValue-OptionalTypes"}, true
-	case "optMap":
-		return section{celGoURL, celGoTitle, "hdr-OptMap-OptionalTypes"}, true
-	case "optFlatMap":
-		return section{celGoURL, celGoTitle, "hdr-OptFlatMap-OptionalTypes"}, true
-	case "hasValue":
-		return section{celGoURL, celGoTitle, "hdr-HasValue-OptionalTypes"}, true
-	case "value":
-		return section{celGoURL, celGoTitle, "hdr-Value-OptionalTypes"}, true
-	case "or":
-		return section{celGoURL, celGoTitle, "hdr-Or-OptionalTypes"}, true
-	case "optional.of":
-		return section{celGoURL, celGoTitle, "hdr-Optional_Of-OptionalTypes"}, true
-	case "optional.none":
-		return section{celGoURL, celGoTitle, "hdr-Optional_None-OptionalTypes"}, true
-	}
-	return section{}, false
-}
-
 // snippet is a short, valid expression using a function or macro, and what it
 // returns.
 type snippet struct {
 	expr, result string
-}
-
-// standard reports whether name is one of the functions and macros of the CEL language definition. Every other function belongs to a Kubernetes library or a
-// CEL extension that kubernetes.io documents.
-func standard(name string) bool {
-	switch name {
-	case "has", "all", "exists", "exists_one", "map", "filter",
-		"size", "contains", "startsWith", "endsWith", "matches", "int",
-		"uint", "double", "string", "bytes", "bool", "duration",
-		"timestamp", "type", "dyn", "getFullYear", "getMonth", "getDayOfMonth",
-		"getDayOfWeek", "getDayOfYear", "getDate", "getHours", "getMinutes", "getSeconds",
-		"getMilliseconds":
-		return true
-	}
-	return false
-}
-
-// docsURL returns the page, at the function's section when it has one, that documents
-// the function or macro called name.
-func docsURL(name string) (title, url string) {
-	if sec, ok := sections(name); ok {
-		return sec.title, sec.page + "#" + sec.anchor
-	}
-	if standard(name) {
-		return celSpecTitle, celSpecURL
-	}
-	return k8sCELTitle, k8sCELURL
 }
 
 // example returns the example for the function or macro called name, if any. It
@@ -398,13 +310,12 @@ func example(name string) (snippet, bool) {
 	return snippet{}, false
 }
 
-// docsMarkdown renders the example and the link for the function or macro called name.
-func docsMarkdown(name string) string {
-	var b strings.Builder
-	if ex, ok := example(name); ok {
-		b.WriteString("\n\n```cel\n" + ex.expr + " // -> " + ex.result + "\n```")
+// exampleMarkdown renders the example for the function or macro called
+// name, "" for none.
+func exampleMarkdown(name string) string {
+	ex, ok := example(name)
+	if !ok {
+		return ""
 	}
-	title, url := docsURL(name)
-	b.WriteString("\n\n[" + title + "](" + url + ")")
-	return b.String()
+	return "\n\n```cel\n" + ex.expr + " // -> " + ex.result + "\n```"
 }

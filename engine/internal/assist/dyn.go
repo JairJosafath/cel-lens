@@ -99,11 +99,8 @@ func dynReasonOf(s schema) dynReason {
 }
 
 // withDynReason adds to the hover text md the reason the value with schema s is
-// dyn, when it is and the experimental feature fitting-completion is on.
-func (a *Assistant) withDynReason(md string, s schema) string {
-	if !a.fitting() {
-		return md
-	}
+// dyn, when it is, whatever the experimental features.
+func withDynReason(md string, s schema) string {
 	if why := dynReasonOf(s); why != "" {
 		return md + "\n\ndyn: " + why.text()
 	}

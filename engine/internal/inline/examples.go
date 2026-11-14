@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/JairJosafath/cel-lens/engine/internal/hover"
 )
 
 // ShowExampleResults is the command of the part that says what a rule does
@@ -397,10 +399,13 @@ func examplesPart(r Rule, title string) Part {
 }
 
 // ExamplesHover returns the section of a rule's hover about the examples
-// ex, in Markdown: the line's part in words, then each example, linked to
-// its file and line, with its verdict and the API server's message, the
-// wrong verdicts first, then the errors, then the others in the order of
-// ex, at most 10, then "and N more". It is "" for no example.
+// ex, in Markdown, without its label, which hover.Render adds: the line's
+// part in words, then each example, linked to its file and line, with its
+// verdict and the API server's message, the wrong verdicts first, then the
+// errors, then the others in the order of ex, at most 10, then "and N
+// more". What it takes from the files (their names, the bindings and
+// params, the messages) is escaped with hover.Escape. It is "" for no
+// example.
 func ExamplesHover(ex []Example) string {
 	titles := examplesTitles(ex)
 	if titles == nil {
@@ -425,7 +430,7 @@ func ExamplesHover(ex []Example) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString("**Examples:** " + escape(titles[0]) + "\n\n")
+	b.WriteString(hover.Escape(titles[0]) + "\n\n")
 	for _, e := range sorted[:min(len(sorted), maxListed)] {
 		b.WriteString("- " + listed(e) + "\n")
 	}
@@ -438,7 +443,7 @@ func ExamplesHover(ex []Example) string {
 // listed is e as the hover lists it: "[config/samples/big.yaml:3](link)
 // **refused**, expected to be allowed: <message>".
 func listed(e Example) string {
-	link := "[" + escape(e.File+":"+strconv.Itoa(e.Line)) + "](<" + e.URI + "#L" + strconv.Itoa(e.Line) + ">)"
+	link := "[" + hover.Escape(e.File+":"+strconv.Itoa(e.Line)) + "](<" + linkTarget(e.URI) + "#L" + strconv.Itoa(e.Line) + ">)"
 	verdict := verdictWord(e.Verdict)
 	if e.Update {
 		verdict += " as an update"
@@ -446,20 +451,28 @@ func listed(e Example) string {
 	if k := kindOf(e); k != passes && k != notRun && k != annotates && k != excludes {
 		verdict = "**" + verdict + "**"
 	}
-	verdict += under(e)
+	verdict += hover.Escape(under(e))
 	switch {
 	case e.Wrong && e.OnExample:
 		verdict += ", expected to be refused"
 		if e.Want != "" {
-			verdict += " with " + strconv.Quote(e.Want)
+			verdict += " with " + hover.Escape(strconv.Quote(e.Want))
 		}
 	case e.Wrong:
 		verdict += ", expected to be allowed"
 	}
 	if e.Message != "" {
-		verdict += ": " + escape(oneLine(e.Message))
+		verdict += ": " + hover.Escape(oneLine(e.Message))
 	}
 	return link + " " + verdict
+}
+
+// linkTarget is uri as a link's destination between < and >: with <, >,
+// spaces, line breaks, parentheses and backslashes percent-encoded, which a
+// URI the client gave may hold as it is, so that it cannot end the
+// destination or the link (#52).
+func linkTarget(uri string) string {
+	return strings.NewReplacer("<", "%3C", ">", "%3E", " ", "%20", "\n", "%0A", "\r", "%0D", "(", "%28", ")", "%29", "\\", "%5C").Replace(uri)
 }
 
 // verdictWord is v in a word or two.
@@ -534,18 +547,6 @@ const maxRule = 60
 // oneLine is s with each run of white space, line breaks included, as one
 // space, and none at its ends.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-// escape writes s so Markdown shows it as it is.
-func escape(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if strings.ContainsRune("\\`*_{}[]<>()#+-!|~", r) {
-			b.WriteRune('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
 
 // titleWidth is how many characters t is.
 func titleWidth(t string) int { return utf8.RuneCountInString(t) }

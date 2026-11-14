@@ -12,6 +12,16 @@ The check before a release tag is these `make` targets, in this order:
 CI's `full` job of `.gitea/workflows/check.yaml` runs all four on a push to a
 `release-check/**` branch.
 
+`CEL_LENS_LINKS_TEST=1 go test -count=1 -run Links ./internal/assist/` is a release step
+outside `make check`: it needs the network. It fetches every page the hover's **Docs:** links,
+once, for the docs host of each supported Kubernetes version, and fails on a status of 400 or
+more, on a heading missing from its page (cel-spec's from its raw Markdown on
+raw.githubusercontent.com), and when the newest supported version's `v1-NN.docs.kubernetes.io`
+answers while the hover still sends that version to kubernetes.io (`kubeDocsHost`). Run it
+before each release, and fix the table in `internal/assist/links.go` when it fails.
+Run it where github.com is reachable; the agents' sandbox proxy refuses github.com with 403,
+so there cel-spec's page fails though its headings are checked from raw.githubusercontent.com.
+
 `scripts/public-tags.sh` is a release step outside `make check`: it needs the network, runs
 `git ls-remote --tags` on the public repository and lists each tag in
 `testdata/public-core-tags.txt` that is not public and each public `core-v` tag the list lacks.

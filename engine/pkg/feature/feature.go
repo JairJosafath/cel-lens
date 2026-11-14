@@ -23,8 +23,10 @@ const (
 	// CRDTypedPolicies types object, oldObject and params of a custom resource
 	// from a CustomResourceDefinition found in the workspace.
 	CRDTypedPolicies Feature = "crd-typed-policies"
-	// FittingCompletion is completion that fits the spot, and hover that says
-	// why a value is dyn.
+	// FittingCompletion is completion that fits the spot: after a dot only
+	// what the receiver has, before a dot only the names of the kind of
+	// document. It gates nothing else; hover says why a value is dyn
+	// whether it is on or not.
 	FittingCompletion Feature = "fitting-completion"
 	// CellensTypes reads the .cellens files of the workspace, whose types
 	// cel-lens assumes where Kubernetes leaves a value dyn, and gives a value

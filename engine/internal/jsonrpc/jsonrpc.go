@@ -36,6 +36,9 @@ const (
 	CodeRequestFailed = -32803
 	// CodeRequestCancelled means the client cancelled the request.
 	CodeRequestCancelled = -32800
+	// CodeContentModified means the document changed while the request was
+	// worked on, so its answer would be about text the client no longer has.
+	CodeContentModified = -32801
 )
 
 // Error is the error of a response.

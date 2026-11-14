@@ -189,8 +189,12 @@ func TestExampleLine(t *testing.T) {
 		c.use(t)
 		got := c.hoverAt(crdURI, lineCRD, limit)
 		want := "**Examples:** refuses 1 example it should allow · 4 pass\n\n- [config/samples/big.yaml:1](<" + bigURI + "#L1>) **refused**, expected to be allowed: spec: Invalid value: "
-		if !strings.Contains(got, "\n\n---\n\n"+want) || !strings.Contains(got, "testdata/invalid/huge.yaml:1") {
-			t.Errorf("hover on %s =\n%s\nwant what self is, then\n%s...", limit, got, want)
+		// The rule's paragraphs follow what self is: what it checks, the
+		// variables it uses, what it costs, then the examples (#52, #53, #55).
+		uses := "**Checks:** `self.size` is at most `10`.\n\n**Uses:** `self`: `Widget.spec` (object), the value the rule is on.\n\n"
+		cost := "**Cost:** estimated 3 of the per-expression budget of 10M (under 1%). All rules of `v1`'s schema: 314.6K of 100M (under 1%). Kubernetes 1.37\n\n"
+		if !strings.Contains(got, "\n\n---\n\n"+uses+cost+want) || !strings.Contains(got, "testdata/invalid/huge.yaml:1") {
+			t.Errorf("hover on %s =\n%s\nwant what self is, then\n%s%s%s...", limit, got, uses, cost, want)
 		}
 	})
 	t.Run("the warning on the example", func(t *testing.T) {

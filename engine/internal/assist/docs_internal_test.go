@@ -87,15 +87,8 @@ func TestEveryFunctionHasExampleAndDocs(t *testing.T) {
 			if !ok || ex.expr == "" || ex.result == "" {
 				t.Errorf("Kubernetes %s declares %q, which has no example", v, name)
 			}
-			wantTitle, wantURL := k8sCELTitle, k8sCELURL
-			if standard(name) {
-				wantTitle, wantURL = celSpecTitle, celSpecURL
-			}
-			if sec, ok := sections(name); ok {
-				wantTitle, wantURL = sec.title, sec.page+"#"+sec.anchor
-			}
-			if title, url := docsURL(name); title != wantTitle || url != wantURL {
-				t.Errorf("docsURL(%q) = %q, %q, want %q, %q", name, title, url, wantTitle, wantURL)
+			if _, ok := funcDocs(name, ""); !ok {
+				t.Errorf("Kubernetes %s declares %q, which has no docs link (funcDocs)", v, name)
 			}
 		}
 	}
