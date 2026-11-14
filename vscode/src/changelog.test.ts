@@ -128,25 +128,26 @@ describe('CHANGELOG.md', () => {
       .find((part) => part.startsWith(`### ${kind}\n`));
   }
 
+  const V41 = '0.41.0';
   const V40 = '0.40.0';
   const V39 = '0.39.0';
   const V38 = '0.38.0';
 
   it('has the notes of the latest release right under Unreleased, with the date of its preparation, and the version of package.json', () => {
-    expect(sectionOf(V40)).toMatch(/^## \[0\.40\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[1]?.version).toBe(V40);
+    expect(sectionOf(V41)).toMatch(/^## \[0\.41\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sections[1]?.version).toBe(V41);
     const version = (
       JSON.parse(readFileSync(`${__dirname}/../package.json`, 'utf8')) as { version: string }
     ).version;
-    expect(version).toBe(V40);
+    expect(version).toBe(V41);
   });
 
   it('lists the kinds of the latest release in order: Added, Changed', () => {
-    expect(sections.find(({ version }) => version === V40)?.kinds).toEqual(['Added', 'Changed']);
+    expect(sections.find(({ version }) => version === V41)?.kinds).toEqual(['Added', 'Changed']);
   });
 
   it('says nothing twice in the notes of the latest release', () => {
-    const entries = sectionOf(V40)
+    const entries = sectionOf(V41)
       .split('\n')
       .filter((line) => line.startsWith('- '));
     expect(new Set(entries).size).toBe(entries.length);
@@ -160,6 +161,62 @@ describe('CHANGELOG.md', () => {
   });
 
   it('names the engine of the latest release once, and says it needs nothing set', () => {
+    expect(engineVersions(sectionOf(V41))).toEqual(['v0.33.0']);
+    expect(partOf(V41, 'Changed')).toContain(
+      'The extension ships `cel-lens-core` v0.33.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
+    );
+  });
+
+  it('says in the notes of the latest release what engine v0.33.0 brings a user: the line says not checked, and folders are followed', () => {
+    expect(partOf(V41, 'Changed')).toContain(
+      '`not checked: schema error` or `not checked: unreadable document`',
+    );
+    expect(partOf(V41, 'Added')).toContain(
+      'follows a workspace folder added or removed without a restart',
+    );
+  });
+
+  it.each([
+    'A cel-lens view in the activity bar, with its own icon, lists every CEL rule of the workspace',
+    '_Show Problems Only_',
+    'The view follows the editor',
+    '`cel-lens.ruleView.followEditor`',
+    "An entry of the engine's list that the extension cannot read is no longer left out",
+    'The README has a _Rule view_ section, with a picture, `images/rule-view.png`',
+    "`v1beta1` CRD and Kyverno's kinds other than `ValidatingPolicy`",
+  ])('names %s under Added in the notes of the latest release', (text) => {
+    expect(partOf(V41, 'Added')).toContain(text);
+  });
+
+  it('says nothing of the view needing an engine that no release has', () => {
+    expect(sectionOf(V41)).not.toContain('does not yet');
+    expect(sections[0]?.kinds).toEqual([]);
+  });
+
+  it('keeps the notes of 0.40.0 under its heading, with the date of its preparation, after those of 0.41.0', () => {
+    expect(sectionOf(V40)).toMatch(/^## \[0\.40\.0\] - \d{4}-\d{2}-\d{2}\n/);
+    expect(sections[2]?.version).toBe(V40);
+  });
+
+  it('lists the kinds of the 0.40.0 in order: Added, Changed', () => {
+    expect(sections.find(({ version }) => version === V40)?.kinds).toEqual(['Added', 'Changed']);
+  });
+
+  it('says nothing twice in the notes of the 0.40.0', () => {
+    const entries = sectionOf(V40)
+      .split('\n')
+      .filter((line) => line.startsWith('- '));
+    expect(new Set(entries).size).toBe(entries.length);
+    const sentences = entries.flatMap((entry) =>
+      entry
+        .slice(2)
+        .split(/(?<=[.:;])\s+/)
+        .filter((sentence) => sentence.length > 60),
+    );
+    expect(sentences.filter((sentence, at) => sentences.indexOf(sentence) !== at)).toEqual([]);
+  });
+
+  it('names the engine of the 0.40.0 once, and says it needs nothing set', () => {
     expect(engineVersions(sectionOf(V40))).toEqual(['v0.32.0']);
     expect(partOf(V40, 'Changed')).toContain(
       'The extension ships `cel-lens-core` v0.32.0, which has all of the above, with nothing to set in `cel-lens.serverPath`',
@@ -180,13 +237,13 @@ describe('CHANGELOG.md', () => {
     '`images/cellens-types.gif`',
     '**cel-lens: Give a Value a Type…**',
     'cel-lens.experimental',
-  ])('names %s under Added in the notes of the latest release', (text) => {
+  ])('names %s under Added in the notes of the 0.40.0', (text) => {
     expect(partOf(V40, 'Added')).toContain(text);
   });
 
   it('keeps the notes of 0.39.0 under its heading, with the date of its preparation, after those of 0.40.0', () => {
     expect(sectionOf(V39)).toMatch(/^## \[0\.39\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[2]?.version).toBe(V39);
+    expect(sections[3]?.version).toBe(V39);
   });
 
   it('lists the kinds of 0.39.0 in order: Added, Changed, Fixed', () => {
@@ -263,7 +320,7 @@ describe('CHANGELOG.md', () => {
 
   it('keeps the notes of 0.38.0 under its heading, with the date of its preparation, after those of 0.39.0 and 0.40.0', () => {
     expect(sectionOf(V38)).toMatch(/^## \[0\.38\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[3]?.version).toBe(V38);
+    expect(sections[4]?.version).toBe(V38);
   });
 
   it('lists the kinds of 0.38.0 in order: Added, Changed, Fixed', () => {
@@ -433,7 +490,7 @@ describe('CHANGELOG.md', () => {
 
   it('keeps the notes of 0.36.0 under its heading, with the date of its preparation, after those of 0.37.0, 0.38.0, 0.39.0 and 0.40.0', () => {
     expect(release).toMatch(/^## \[0\.36\.0\] - \d{4}-\d{2}-\d{2}\n/);
-    expect(sections[5]?.version).toBe(RELEASE);
+    expect(sections[6]?.version).toBe(RELEASE);
   });
 
   it('lists the kinds of the release in order: Added, Changed, Fixed, Security', () => {

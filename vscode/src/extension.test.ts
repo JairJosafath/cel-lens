@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 
 import {
+  addWorkspaceFolder,
   ConfigurationTarget,
   changeActiveEditor,
   changeConfiguration,
+  contextKeys,
   FakeEditor,
   memento,
   commands,
@@ -21,6 +23,7 @@ import {
   settings,
   shownErrors,
   statusBarItems,
+  treeViews,
 } from '../test/vscode';
 import { activate, deactivate } from './extension';
 import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
@@ -33,6 +36,8 @@ import { PICK_VERSION_COMMAND, RESTART_SERVER_COMMAND } from './kubernetes_versi
 const client = vi.hoisted(() => ({
   notifications: [] as { method: string; params: unknown }[],
   requests: [] as { method: string; params: unknown }[],
+  handlers: new Map<string, (params: unknown) => void>(),
+  answers: new Map<string, unknown>(),
 }));
 
 vi.mock('vscode-languageclient/node', () => ({
@@ -48,8 +53,8 @@ vi.mock('vscode-languageclient/node', () => ({
       };
     }
 
-    onNotification(): void {
-      return undefined;
+    onNotification(method: string, handler: (params: unknown) => void): void {
+      client.handlers.set(method, handler);
     }
 
     onRequest(): void {
@@ -68,7 +73,13 @@ vi.mock('vscode-languageclient/node', () => ({
     /** The engine applies every edit it is asked for. */
     sendRequest(method: string, params: unknown): Promise<unknown> {
       client.requests.push({ method, params });
-      return Promise.resolve({ cellens: 'file:///workspace/.cellens', change: 'added' });
+      const command =
+        typeof params === 'object' && params !== null && 'command' in params
+          ? String(params.command)
+          : method;
+      return Promise.resolve(
+        client.answers.get(command) ?? { cellens: 'file:///workspace/.cellens', change: 'added' },
+      );
     }
 
     start(): Promise<void> {
@@ -102,12 +113,27 @@ const manifest = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ) as Manifest;
 
+/** The requests the engine got besides the view's asks for the list of the rules. */
+function requestsButTheList(): { method: string; params: unknown }[] {
+  return client.requests.filter(
+    (request) =>
+      !(
+        typeof request.params === 'object' &&
+        request.params !== null &&
+        'command' in request.params &&
+        request.params.command === 'cel-lens.ruleList'
+      ),
+  );
+}
+
 const CRD = 'x-kubernetes-validations:\n  - rule: "self.a < 3"\n';
 
 describe('activate', () => {
   beforeEach(() => {
     client.notifications.length = 0;
     client.requests.length = 0;
+    client.handlers.clear();
+    client.answers.clear();
     vi.stubEnv('PATH', '/nowhere');
   });
   afterEach(async () => {
@@ -118,7 +144,12 @@ describe('activate', () => {
   });
 
   it('registers every command package.json contributes', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
 
     const registered = await commands.getCommands();
     for (const { command } of manifest.contributes.commands) {
@@ -127,13 +158,23 @@ describe('activate', () => {
   });
 
   it('registers the restart command', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
 
     expect(await commands.getCommands()).toContain(RESTART_SERVER_COMMAND);
   });
 
   it('restarts the server when the restart command runs', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(shownErrors.length).toBeGreaterThan(0);
     });
@@ -149,7 +190,12 @@ describe('activate', () => {
   });
 
   it('registers the pick version command', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
 
     expect(await commands.getCommands()).toContain(PICK_VERSION_COMMAND);
   });
@@ -157,7 +203,12 @@ describe('activate', () => {
   it('sends a version change to the running server and updates the status text', async () => {
     settings.set('cel-lens.serverPath', process.execPath);
     changeActiveEditor('yaml');
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
     });
@@ -186,7 +237,12 @@ describe('activate', () => {
   it('sends an experimental list change to the running server', async () => {
     settings.set('cel-lens.serverPath', process.execPath);
     changeActiveEditor('yaml');
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
     });
@@ -214,7 +270,12 @@ describe('activate', () => {
   it('sends the inline info setting to the running server when it changes', async () => {
     settings.set('cel-lens.serverPath', process.execPath);
     changeActiveEditor('yaml');
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
     });
@@ -259,7 +320,12 @@ describe('activate', () => {
   });
 
   it('turns the lines off in the user settings from the toggle command', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
 
     await runCommand(TOGGLE_INLINE_INFO_COMMAND);
 
@@ -271,7 +337,12 @@ describe('activate', () => {
   it('sends the example results setting to the running server when it changes', async () => {
     settings.set('cel-lens.serverPath', process.execPath);
     changeActiveEditor('yaml');
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
     });
@@ -297,7 +368,12 @@ describe('activate', () => {
   });
 
   it('turns example results off in the user settings from the toggle command', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
 
     await runCommand(TOGGLE_EXAMPLE_RESULTS_COMMAND);
 
@@ -309,7 +385,12 @@ describe('activate', () => {
   it('asks the engine for the results of the rule when the part of its line runs, and shows them in a picker', async () => {
     settings.set('cel-lens.serverPath', process.execPath);
     changeActiveEditor('yaml');
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
     });
@@ -320,13 +401,152 @@ describe('activate', () => {
 
     await runCommand(SHOW_EXAMPLE_RESULTS_COMMAND, rule);
 
-    expect(client.requests).toEqual([
+    expect(requestsButTheList()).toEqual([
       {
         method: 'workspace/executeCommand',
         params: { command: 'cel-lens.exampleResults', arguments: [rule] },
       },
     ]);
     expect(quickPicks.created).toMatchObject([{ title: 'Example results of the rule on line 16' }]);
+  });
+
+  it('makes the cel-lens view, and asks the engine for the list of the rules once it runs', async () => {
+    settings.set('cel-lens.serverPath', process.execPath);
+    addWorkspaceFolder('workspace');
+    client.answers.set('cel-lens.ruleList', {
+      documents: [
+        {
+          uri: 'file:///workspace/workspace/crd.yaml',
+          folder: 'file:///workspace/workspace',
+          file: 'crd.yaml',
+          document: 'CustomResourceDefinition widgets.example.com',
+          kind: 'CustomResourceDefinition',
+          name: 'widgets.example.com',
+          rules: [
+            {
+              id: 'file:///workspace/workspace/crd.yaml#r',
+              label: 'at most 3',
+              location: {
+                uri: 'file:///workspace/workspace/crd.yaml',
+                range: { start: { line: 4, character: 8 }, end: { line: 4, character: 20 } },
+              },
+              compile: { state: 'ok', problems: 0, messages: [] },
+            },
+          ],
+        },
+      ],
+    });
+
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
+
+    expect(treeViews.map((view) => view.viewId)).toEqual(['cel-lens.rules']);
+    await vi.waitFor(() => {
+      expect(client.requests).toContainEqual({
+        method: 'workspace/executeCommand',
+        params: { command: 'cel-lens.ruleList', arguments: [] },
+      });
+    });
+    const provider = treeViews[0]?.provider;
+    await vi.waitFor(() => {
+      expect(provider?.getChildren()).toMatchObject([{ label: 'widgets.example.com' }]);
+    });
+  });
+
+  it('hands the engine’s notification of a change in the list to the view, which asks for what changed', async () => {
+    settings.set('cel-lens.serverPath', process.execPath);
+    addWorkspaceFolder('workspace');
+    client.answers.set('cel-lens.ruleList', { generation: 1, documents: [] });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
+    await vi.waitFor(() => {
+      expect(client.requests).toHaveLength(1);
+    });
+
+    client.handlers.get('cel-lens/ruleListChanged')?.({ generation: 2 });
+
+    await vi.waitFor(() => {
+      expect(client.requests.at(-1)).toEqual({
+        method: 'workspace/executeCommand',
+        params: { command: 'cel-lens.ruleList', arguments: [{ since: 1 }] },
+      });
+    });
+  });
+
+  it('switches the view to the rules with a problem with the title menu’s commands, and keeps the choice in the workspace’s state', async () => {
+    const workspaceState = memento();
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento(), workspaceState });
+
+    await runCommand('cel-lens.rules.showProblemsOnly');
+
+    expect(contextKeys.get('cel-lens.ruleView.problemsOnly')).toBe(true);
+    expect(workspaceState.get('cel-lens.ruleView.problemsOnly')).toBe(true);
+
+    await runCommand('cel-lens.rules.showAll');
+
+    expect(contextKeys.get('cel-lens.ruleView.problemsOnly')).toBe(false);
+    expect(workspaceState.get('cel-lens.ruleView.problemsOnly')).toBe(false);
+  });
+
+  it('reads the filter kept for the workspace when it activates', () => {
+    const workspaceState = memento();
+    void workspaceState.update('cel-lens.ruleView.problemsOnly', true);
+
+    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento(), workspaceState });
+
+    expect(contextKeys.get('cel-lens.ruleView.problemsOnly')).toBe(true);
+  });
+
+  it('turns following the editor off and on with the title menu’s commands, and applies the setting live', async () => {
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
+    expect(contextKeys.get('cel-lens.ruleView.followEditor')).toBe(true);
+
+    await runCommand('cel-lens.rules.stopFollowing');
+    settings.set('cel-lens.ruleView.followEditor', false);
+    changeConfiguration('cel-lens.ruleView.followEditor');
+
+    expect(settingUpdates).toContainEqual({
+      name: 'cel-lens.ruleView.followEditor',
+      value: false,
+      target: ConfigurationTarget.Global,
+    });
+    expect(contextKeys.get('cel-lens.ruleView.followEditor')).toBe(false);
+
+    await runCommand('cel-lens.rules.followEditor');
+    settings.set('cel-lens.ruleView.followEditor', true);
+    changeConfiguration('cel-lens.ruleView.followEditor');
+
+    expect(contextKeys.get('cel-lens.ruleView.followEditor')).toBe(true);
+  });
+
+  it('runs Show Problems from the view’s context menu for the rule the menu was opened on', async () => {
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
+    const location = {
+      uri: 'file:///workspace/crd.yaml',
+      range: { start: { line: 4, character: 8 }, end: { line: 4, character: 20 } },
+    };
+
+    await runCommand('cel-lens.rules.showProblems', { kind: 'rule', location });
+
+    expect(executedCommands).toContainEqual({ command: 'cel-lens.showRule', args: [location] });
   });
 
   it('contributes the experimental setting as an empty list of the four known names', () => {
@@ -351,7 +571,12 @@ describe('activate', () => {
   it('sends nothing when another setting changes', async () => {
     settings.set('cel-lens.serverPath', process.execPath);
     changeActiveEditor('yaml');
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
     });
@@ -398,7 +623,12 @@ describe('activate', () => {
   });
 
   it('runs the color style quick pick from the command', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     quickPicks.next = 'Classic';
 
     await runCommand(CHOOSE_COLOR_STYLE_COMMAND);
@@ -410,7 +640,12 @@ describe('activate', () => {
     const editor = new FakeEditor({ languageId: 'yaml', getText: () => CRD });
     visibleEditors.push(editor);
     const subscriptions: vscode.Disposable[] = [];
-    activate({ subscriptions, extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions,
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     expect(decorationTypes.length).toBeGreaterThan(0);
 
     for (const subscription of subscriptions) {
@@ -428,7 +663,12 @@ describe('activate', () => {
 
   it('hands every registration to VS Code to dispose', async () => {
     const subscriptions: vscode.Disposable[] = [];
-    activate({ subscriptions, extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions,
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
 
     for (const subscription of subscriptions) {
       subscription.dispose();
@@ -439,7 +679,12 @@ describe('activate', () => {
 
   it('registers the commands of the parts of the line once, and frees them on dispose for the next activation', async () => {
     const subscriptions: vscode.Disposable[] = [];
-    activate({ subscriptions, extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions,
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     expect(await commands.getCommands()).toEqual(
       expect.arrayContaining([
         SHOW_RULE_COMMAND,
@@ -454,12 +699,22 @@ describe('activate', () => {
     await deactivate();
 
     expect(() => {
-      activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+      activate({
+        subscriptions: [],
+        extensionPath: '/ext',
+        globalState: memento(),
+        workspaceState: memento(),
+      });
     }).not.toThrow();
   });
 
   it('shows the hover of a rule with no problem when its summary part runs', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     const range = { start: { line: 1, character: 10 }, end: { line: 1, character: 20 } };
 
     await runCommand(SHOW_RULE_COMMAND, { uri: 'file:///workspace/crd.yaml', range });
@@ -472,7 +727,12 @@ describe('activate', () => {
   });
 
   it('lists the values a line leaves out when its +N more part runs, and runs the one picked', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     const target = { path: 'spec.port' };
     quickPicks.next = 'self.spec.port: dyn';
 
@@ -493,7 +753,12 @@ describe('activate', () => {
   it('gives a value of a CRD a type from its Give it a type part, through the engine', async () => {
     settings.set('cel-lens.serverPath', process.execPath);
     changeActiveEditor('yaml');
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
     await vi.waitFor(() => {
       expect(statusBarItems[0]?.text).toBe('CEL · K8s 1.37');
     });
@@ -510,7 +775,7 @@ describe('activate', () => {
     await runCommand(GIVE_TYPE_COMMAND, surge);
     await runCommand(REMOVE_TYPE_COMMAND, { ...surge, type: 'string' });
 
-    expect(client.requests).toEqual([
+    expect(requestsButTheList()).toEqual([
       {
         method: 'workspace/executeCommand',
         params: { command: 'cel-lens.setType', arguments: [{ ...surge, type: 'string' }] },
@@ -536,7 +801,12 @@ describe('activate', () => {
   });
 
   it('registers no command that package.json does not contribute', async () => {
-    activate({ subscriptions: [], extensionPath: '/ext', globalState: memento() });
+    activate({
+      subscriptions: [],
+      extensionPath: '/ext',
+      globalState: memento(),
+      workspaceState: memento(),
+    });
 
     const contributed = manifest.contributes.commands.map((c) => c.command);
     for (const registered of await commands.getCommands()) {
@@ -564,7 +834,7 @@ describe('published text', () => {
   });
 
   it('names the cel-lens-core release the extension is built for', () => {
-    expect(guide).toContain('cel-lens-core` v0.32.0');
+    expect(guide).toContain('cel-lens-core` v0.33.0');
   });
 
   it('shows no message the engine does not give', () => {

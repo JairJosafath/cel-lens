@@ -6,6 +6,24 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-11-14
+
+### Added
+
+- A cel-lens view in the activity bar, with its own icon, lists every CEL rule of the workspace under the CustomResourceDefinition or policy it belongs to, each with its label and its state: the words of the line above the rule (`compiles`, `2 problems`, then the example words such as `refuses 1 example it should allow · 2 pass`) and an icon, worst first: an error, a warning, passing examples, or a check. A click opens the file at the rule, in a preview editor; a document or a folder row only expands. The rows are the workspace folders when there are several, in the workspace's order, each with its documents (a file in no folder is under _Open files_, last). A rule's tooltip shows its CEL, where it is (`v1 · spec.ports[] · rule 0`, `validations[0]`), its first problems and its example words, and says example results do not cover a kind they do not. Right-click a rule for _Show Problems_ and, for a rule with example words, _Show Example Results_. A folder whose `cel-lens.exampleResults` is off shows no example words or icon for its rules. The view asks the engine for the list once it runs, and again when the workspace folders change or a setting that changes what the engine says does. Until the engine has sent its first notification of a change, it also asks again when a file is saved, changed (once typing pauses), opened or closed; from then on the engine says when its list changed, and the view asks for what changed since. It redraws only the documents an answer changed, so what you expanded stays expanded.
+- When there is nothing to list the view says why, with a link to the step that helps: no folder is open (_Open Folder_), the engine is not running (_Show Logs_, _Restart Engine_), the engine cannot list rules (a link to the engine setting), the engine is still looking (with VS Code's progress bar on the view, and `Scanning: 4,210 YAML files read, 37 with rules` as the view's message), or it found none (the kinds cel-lens lists, a link to the README, and a link to the `cel-lens.experimental` setting while `kyverno` is off). When the scan left files out, the first row is a warning, `1,203 YAML files not read: the scan reads at most 20,000 files of at most 1 MiB`, with the engine's own limits, which shows the logs when clicked.
+- The view can show only the rules with a problem: _Show Problems Only_ in its title bar switches the tree to them, with their documents and folders, and _Show All Rules_ switches back; the choice is kept for the workspace. With the filter on and no rule with a problem, the view says _No rule has a problem_ with a link to show all rules.
+- The view's badge, on its icon in the activity bar and also while the view is closed, is the number of rules with a problem, whatever the filter shows, with the tooltip `1 rule with a problem` or `3 rules with problems`; it follows each answer of the engine, counts what is known while a scan runs, and is gone at 0.
+- The view follows the editor: while the view shows, the rule the cursor is in, else its document, is selected a moment after the cursor moves or the editor changes, without taking the focus and without opening the view; a rule the filter hides is answered by its document. The setting `cel-lens.ruleView.followEditor` (on by default, applied at once) is turned off and on with _Stop Following_ and _Follow Editor_ in the view's title menu.
+- An entry of the engine's list that the extension cannot read is no longer left out: a rule shows as a warning row in its document, a document as a warning row in its file, and entries with no file as a row at the top that shows the logs; each counts as a problem on the badge. A document with no `metadata.name` shows as `(no name)` and its kind.
+- The README has a _Rule view_ section, with a picture, `images/rule-view.png`, of the view beside a CRD with the count on its icon: what it lists (and what it does not: a `v1beta1` CRD and Kyverno's kinds other than `ValidatingPolicy`), a rule's label, words and icon, the click and the context menu, the filter, the count, following the editor and its setting, what the view says when it has nothing to list, and the limits of the scan. _What it looks like_ links to it, and _Not supported yet_ says what is not listed.
+- With the engine's new `cel-lens.ruleList` the view lists each rule's state without opening its file, and follows a workspace folder added or removed without a restart. The engine also follows a folder added or removed for the other things it reads from the workspace: the CRDs that type a policy's `params`, the `.cellens` files and the examples of the example results, which a folder added after the start did not give it.
+
+### Changed
+
+- The line above a rule no longer says `compiles` for a rule the check did not compile. For a CustomResourceDefinition whose schema the API server refuses before its rules (such as a missing `type` under array `items`), or a document it cannot read, the line says `not checked: schema error` or `not checked: unreadable document`, and its command shows the problem that stopped the check; the view shows the error icon on the same rules.
+- The extension ships `cel-lens-core` v0.33.0, which has all of the above, with nothing to set in `cel-lens.serverPath`.
+
 ## [0.40.0] - 2026-11-14
 
 ### Added
@@ -742,7 +760,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.40.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.41.0...HEAD
+[0.41.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.40.0...vscode-v0.41.0
 [0.40.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.39.0...vscode-v0.40.0
 [0.39.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.38.0...vscode-v0.39.0
 [0.38.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.37.0...vscode-v0.38.0

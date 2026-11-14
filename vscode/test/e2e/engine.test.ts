@@ -5,7 +5,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -50,6 +50,13 @@ import { experimentalSettingEnum } from '../../src/manifest_setting';
 import { ExampleResultsFlow, type ResultsUi } from '../../src/example_results_flow';
 import { requireEngineFile } from '../../src/engine_file';
 import { isRecord } from '../../src/is_record';
+import {
+  ENGINE_RULE_LIST,
+  RuleList,
+  parseRuleListAnswer,
+  parseScanLimits,
+} from '../../src/rule_list';
+import { RuleTree, type TreeNode } from '../../src/rule_tree';
 import { resolveServer } from '../../src/server_path';
 import { spawnEngine } from '../../src/spawn_engine';
 
@@ -84,6 +91,8 @@ interface Engine {
   readonly registrations: Registration[];
   /** The commands the engine lists in `executeCommandProvider`, from its `initialize` result. */
   readonly commands: readonly string[];
+  /** The engine's whole `initialize` result. */
+  readonly initializeResult: unknown;
   /** The `window/showMessageRequest` the engine sent, as it sent them. */
   readonly messageRequests: { readonly params: unknown }[];
   /** How many times the engine asked the client to ask again for the lines above the rules. */
@@ -117,6 +126,8 @@ async function checkedExtensionPath(): Promise<string> {
 interface SessionOptions {
   /** A workspace folder on disk, scanned by the engine. */
   readonly folder?: string;
+  /** Several workspace folders on disk, named by their folder's name, in this order. */
+  readonly folders?: readonly string[];
   /** Tells the engine the client registers file watchers. */
   readonly dynamicRegistration?: boolean;
   readonly experimental?: readonly string[];
@@ -126,6 +137,8 @@ interface SessionOptions {
   readonly writesCellens?: boolean;
   /** Whether the engine shows what each rule does to its examples: the extension's `cel-lens.exampleResults`. */
   readonly exampleResults?: boolean;
+  /** Whether the engine keeps the list of the rules of the workspace: what the cel-lens view asks with `ruleList: true`. */
+  readonly ruleList?: boolean;
 }
 
 /** The offset in `text` of an LSP position (characters count UTF-16 code units, as JavaScript's do). */
@@ -233,9 +246,14 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
       // eslint-disable-next-line @typescript-eslint/no-deprecated -- LSP still requires rootUri, deprecated as it is: the type has no way to leave it out, and the extension's client sends it too
       rootUri: null,
       workspaceFolders:
-        options.folder === undefined
-          ? null
-          : [{ uri: pathToFileURL(options.folder).href, name: 'workspace' }],
+        options.folders !== undefined
+          ? options.folders.map((folder) => ({
+              uri: pathToFileURL(folder).href,
+              name: basename(folder),
+            }))
+          : options.folder === undefined
+            ? null
+            : [{ uri: pathToFileURL(options.folder).href, name: 'workspace' }],
       capabilities: {
         workspace: {
           codeLens: { refreshSupport: true },
@@ -252,6 +270,7 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
         ...serverOptions('', undefined, options.experimental),
         inlineInfo: options.inlineInfo ?? true,
         exampleResults: options.exampleResults ?? true,
+        ...(options.ruleList === true && { ruleList: true }),
       },
     }),
     exited,
@@ -267,6 +286,7 @@ async function startEngine(extensionPath: string, options: SessionOptions = {}):
     published,
     registrations,
     commands: listedCommands(initialized),
+    initializeResult: initialized,
     messageRequests,
     refreshes,
     nextPublish: () =>
@@ -1210,6 +1230,316 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
     } finally {
       await stopEngine(session);
       engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the cel-lens.ruleList command, which the cel-lens view lists the rules of the workspace with', () => {
+  it('answers the documents with rules of a workspace folder, and the view draws them', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    await mkdir(join(root, 'config'), { recursive: true });
+    for (const [fixture, path] of [
+      ['valid_crd.yaml', 'config/valid.yaml'],
+      ['broken_crd.yaml', 'config/broken.yaml'],
+      ['widget_policy.yaml', 'config/policy.yaml'],
+    ]) {
+      await copyFile(join(FIXTURES, fixture ?? ''), join(root, path ?? ''));
+    }
+    // A CRD being written, before it is named: the engine lists it with an empty name (review of #27).
+    await writeFile(
+      join(root, 'config/unnamed.yaml'),
+      (await readFile(join(FIXTURES, 'valid_crd.yaml'), 'utf8')).replace(/^ {2}name: .*\n/m, ''),
+    );
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      ruleList: true,
+    });
+    try {
+      expect(session.commands).toContain(ENGINE_RULE_LIST);
+
+      const answer = parseRuleListAnswer(
+        await session.connection.sendRequest('workspace/executeCommand', {
+          command: ENGINE_RULE_LIST,
+          arguments: [],
+        }),
+      );
+
+      expect(answer).toBeDefined();
+      expect(answer?.documents.map((document) => document.file).sort()).toEqual([
+        'config/broken.yaml',
+        'config/policy.yaml',
+        'config/unnamed.yaml',
+        'config/valid.yaml',
+      ]);
+      const folder = pathToFileURL(root).href;
+      const list = new RuleList();
+      const limits = parseScanLimits(session.initializeResult);
+      expect(limits.files).toBeGreaterThan(0);
+      expect(limits.fileBytes).toBeGreaterThan(0);
+      const tree = new RuleTree(list, {
+        folders: [{ uri: folder, name: 'workspace' }],
+        normalize: (uri) => new URL(uri).href.replace(/\/+$/, ''),
+        showExamples: () => true,
+        limits,
+        problemsOnly: false,
+      });
+      if (answer === undefined) {
+        throw new Error('the engine answered something the extension does not read');
+      }
+      tree.update(list.apply(answer, 'all'));
+      const rows = (node: TreeNode): string[] => [
+        `${node.label} | ${node.description ?? ''}`,
+        ...node.children.flatMap(rows),
+      ];
+
+      const drawn = tree.roots().flatMap(rows);
+      expect(drawn).toContain('widgets.example.com | CRD · config/valid.yaml');
+      expect(drawn).toContain('self.replicas > 1 | compiles');
+      expect(drawn).toContain('widgets.example.com | CRD · config/broken.yaml');
+      expect(drawn.some((row) => row.endsWith('| 1 problem'))).toBe(true);
+      expect(drawn).toContain('widget-limit | ValidatingAdmissionPolicy · config/policy.yaml');
+      expect(drawn).toContain('(no name) CRD | CRD · config/unnamed.yaml');
+      // A rule opens at its expression: the line of `rule:` in its file.
+      const valid = answer.documents.find((document) => document.file === 'config/valid.yaml');
+      const text = await readFile(join(root, 'config/valid.yaml'), 'utf8');
+      expect(valid?.rules[0]?.location.range.start.line).toBe(lineOf(text, 'rule:'));
+      expect(list.totals.rules).toBeGreaterThanOrEqual(3);
+      // The badge counts the rule that does not compile, and the cursor on it finds its row.
+      expect(list.problems).toBeGreaterThanOrEqual(1);
+      const broken = await readFile(join(root, 'config/broken.yaml'), 'utf8');
+      const ruleLine = lineOf(broken, 'rule:');
+      const found = tree.at(`${folder}/config/broken.yaml`, ruleLine, 8);
+      expect(found?.kind).toBe('rule');
+      expect(found?.icon.id).toBe('error');
+    } finally {
+      await stopEngine(session);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('tells a client that asked for the list when it changed, and answers what changed since', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    await mkdir(join(root, 'config'), { recursive: true });
+    await copyFile(join(FIXTURES, 'valid_crd.yaml'), join(root, 'config/valid.yaml'));
+    await copyFile(join(FIXTURES, 'broken_crd.yaml'), join(root, 'config/other.yaml'));
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      ruleList: true,
+    });
+    try {
+      expect(session.commands).toContain(ENGINE_RULE_LIST);
+      const notifications: unknown[] = [];
+      session.connection.onNotification('cel-lens/ruleListChanged', (params: unknown) => {
+        notifications.push(params);
+      });
+      const ask = async (
+        argument?: unknown,
+      ): Promise<NonNullable<ReturnType<typeof parseRuleListAnswer>>> => {
+        const answer = parseRuleListAnswer(
+          await session.connection.sendRequest('workspace/executeCommand', {
+            command: ENGINE_RULE_LIST,
+            arguments: argument === undefined ? [] : [argument],
+          }),
+        );
+        if (answer === undefined) {
+          throw new Error('the engine answered something the extension does not read');
+        }
+        return answer;
+      };
+      const first = await ask();
+      expect(first.generation).toBeDefined();
+      const generation = first.generation ?? 0;
+      expect(generation).toBeGreaterThan(1_000_000_000_000);
+
+      // Edit the valid CRD in the editor: a rule that does not compile.
+      const uri = pathToFileURL(join(root, 'config/valid.yaml')).href;
+      const text = await readFile(join(root, 'config/valid.yaml'), 'utf8');
+      notifications.length = 0;
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+      await session.connection.sendNotification(DidChangeTextDocumentNotification.type, {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: text.replace('self.replicas > 1', 'self.replicas >') }],
+      });
+      // The edit's own notification: one that came after the edit, with a generation beyond the one held before it.
+      await vi.waitFor(
+        () => {
+          expect(
+            notifications.some(
+              (notice) =>
+                isRecord(notice) &&
+                typeof notice['generation'] === 'number' &&
+                notice['generation'] > generation,
+            ),
+          ).toBe(true);
+        },
+        { timeout: 10_000 },
+      );
+
+      const change = await ask({ since: generation });
+      expect(change.full).toBe(false);
+      expect(change.documents.map((document) => document.uri)).toEqual([uri]);
+      expect(change.generation).toBeGreaterThan(generation);
+      const lastNotice = notifications.at(-1);
+      expect(lastNotice).toMatchObject({ generation: expect.any(Number) as number });
+
+      // The model applies it file by file: only that file changes, and the badge follows.
+      const list = new RuleList();
+      list.apply(first, 'all');
+      const before = list.problems;
+      const applied = list.apply(change, 'since');
+      expect(applied.files).toEqual([uri]);
+      expect(list.problems).toBeGreaterThan(before);
+
+      // An older generation than the engine has is answered with the whole list.
+      const whole = await ask({ since: 1 });
+      expect(whole.full).toBe(true);
+      expect(whole.documents.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await stopEngine(session);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('lists a workspace of two folders with its states, as the view reads them, and gives back an edited file through since', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    const one = join(root, 'one');
+    const two = join(root, 'two');
+    for (const [fixture, path] of [
+      ['broken_crd.yaml', 'one/crd/broken.yaml'],
+      ['limit_crd.yaml', 'one/crd/limit.yaml'],
+      ['limit_small.yaml', 'one/config/samples/small.yaml'],
+      ['limit_big.yaml', 'one/config/samples/big.yaml'],
+      ['widget_policy.yaml', 'two/policy.yaml'],
+      ['mutating_policy.yaml', 'two/mutating.yaml'],
+    ]) {
+      await mkdir(dirname(join(root, path ?? '')), { recursive: true });
+      await copyFile(join(FIXTURES, fixture ?? ''), join(root, path ?? ''));
+    }
+    const session = await startEngine(await checkedExtensionPath(), {
+      folders: [one, two],
+      ruleList: true,
+    });
+    try {
+      const notifications: unknown[] = [];
+      session.connection.onNotification('cel-lens/ruleListChanged', (params: unknown) => {
+        notifications.push(params);
+      });
+      const ask = async (
+        argument?: unknown,
+      ): Promise<NonNullable<ReturnType<typeof parseRuleListAnswer>>> => {
+        const answer = parseRuleListAnswer(
+          await session.connection.sendRequest('workspace/executeCommand', {
+            command: ENGINE_RULE_LIST,
+            arguments: argument === undefined ? [] : [argument],
+          }),
+        );
+        if (answer === undefined) {
+          throw new Error('the engine answered something the extension does not read');
+        }
+        return answer;
+      };
+      // The check of the examples runs in the background: ask until the rule of the CRD says what its examples did.
+      let first = await ask();
+      await vi.waitFor(
+        async () => {
+          first = await ask();
+          expect(
+            first.documents
+              .flatMap((document) => document.rules)
+              .map((rule) => rule.examples?.state),
+          ).toContain('wrong');
+        },
+        { timeout: 20_000, interval: 250 },
+      );
+
+      const list = new RuleList();
+      const folderOf = (path: string): string => pathToFileURL(path).href;
+      const tree = new RuleTree(list, {
+        folders: [
+          { uri: folderOf(one), name: 'one' },
+          { uri: folderOf(two), name: 'two' },
+        ],
+        normalize: (uri) => new URL(uri).href.replace(/\/+$/, ''),
+        showExamples: () => true,
+        limits: parseScanLimits(session.initializeResult),
+        problemsOnly: false,
+      });
+      tree.update(list.apply(first, 'all'));
+
+      // The folders in the workspace's order, then their documents, then the rules of each.
+      const outline = (nodes: readonly TreeNode[], depth = 0): string[] =>
+        nodes.flatMap((node) => [
+          `${'  '.repeat(depth)}${node.label}`,
+          ...outline(node.children, depth + 1),
+        ]);
+      const roots = tree.roots();
+      expect(roots.map((node) => node.label)).toEqual(['one', 'two']);
+      expect(roots.map((node) => node.children.map((child) => child.description))).toEqual([
+        ['CRD · crd/broken.yaml', 'CRD · crd/limit.yaml'],
+        ['MutatingAdmissionPolicy · mutating.yaml', 'ValidatingAdmissionPolicy · policy.yaml'],
+      ]);
+      const rules = roots.flatMap((node) => node.children.flatMap((child) => child.children));
+      const byDocument = (name: string): TreeNode[] =>
+        roots.flatMap((node) => node.children.filter((child) => child.label === name))[0]
+          ?.children ?? [];
+      // A rule that does not compile is an error with its problem counted; one whose example is wrong is a warning with the line's words.
+      const [broken] = roots[0]?.children[0]?.children ?? [];
+      expect(broken).toMatchObject({ description: '1 problem', icon: { id: 'error' } });
+      expect(broken?.rule?.problem).toBe(true);
+      const [limit] = roots[0]?.children[1]?.children ?? [];
+      expect(limit?.description).toContain('refuses 1 example it should allow');
+      expect(limit).toMatchObject({ icon: { id: 'warning' }, contextValue: 'ruleWithExamples' });
+      expect(limit?.rule?.problem).toBe(true);
+      // The policies compile; a rule with no example has none of its words.
+      for (const node of rules.filter((rule) => rule.document?.kind.endsWith('Policy') === true)) {
+        expect(node.rule?.compile.state).not.toBe('error');
+      }
+      expect(byDocument('widget-limit').length).toBeGreaterThan(0);
+      expect(outline(roots)).toContain('  sidecar-policy.example.com');
+      const problems = list.problems;
+      expect(problems).toBeGreaterThanOrEqual(2);
+
+      // An edit of an open file reaches the view as that file alone, through since.
+      const generation = first.generation ?? 0;
+      const uri = pathToFileURL(join(two, 'policy.yaml')).href;
+      const text = await readFile(join(two, 'policy.yaml'), 'utf8');
+      notifications.length = 0;
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+      await session.connection.sendNotification(DidChangeTextDocumentNotification.type, {
+        textDocument: { uri, version: 2 },
+        contentChanges: [
+          { text: text.replace('params.spec.maxReplica > 0', 'params.spec.maxReplica >') },
+        ],
+      });
+      // The edit's own notification: one that came after the edit, with a generation beyond the one held before it.
+      await vi.waitFor(
+        () => {
+          expect(
+            notifications.some(
+              (notice) =>
+                isRecord(notice) &&
+                typeof notice['generation'] === 'number' &&
+                notice['generation'] > generation,
+            ),
+          ).toBe(true);
+        },
+        { timeout: 10_000 },
+      );
+      const change = await ask({ since: generation });
+      expect(change.full).toBe(false);
+      expect(change.documents.map((document) => document.uri)).toEqual([uri]);
+      const refresh = tree.update(list.apply(change, 'since'));
+      expect(list.problems).toBe(problems + 1);
+      expect(refresh).toHaveLength(1);
+      expect(refresh[0]?.label).toBe('widget-limit');
+      expect(tree.at(uri, lineOf(text, '- expression:'), 6)?.kind).toBe('rule');
+    } finally {
+      await stopEngine(session);
       await rm(root, { recursive: true, force: true });
     }
   });

@@ -27,6 +27,8 @@ const PICTURES = [
 /** The GIF at the top of the section Give a value a type, which follows those above in the README. */
 const CELLENS_TYPES_GIF = 'cellens-types.gif';
 /** The pictures of the section Example results, which follow those above in the README. */
+/** The picture of the section Rule view, which follows those of Example results. */
+const RULE_VIEW_PICTURE = 'rule-view.png';
 const EXAMPLE_RESULTS_PICTURES = [
   'example-results-line.png',
   'example-results-picker.png',
@@ -97,6 +99,7 @@ describe('README.md as the store page', () => {
       'Install',
       'Give a value a type',
       'Example results',
+      'Rule view',
       'Commands',
       'Settings',
       'Supported Kubernetes versions',
@@ -147,7 +150,7 @@ describe('README.md as the store page', () => {
   it('links the picture of the line above the rules and the GIF of Give it a type first, then the two GIFs and the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(
-      [...PICTURES, CELLENS_TYPES_GIF, ...EXAMPLE_RESULTS_PICTURES].map(
+      [...PICTURES, CELLENS_TYPES_GIF, ...EXAMPLE_RESULTS_PICTURES, RULE_VIEW_PICTURE].map(
         (name) => IMAGE_BASE + name,
       ),
     );
@@ -156,7 +159,8 @@ describe('README.md as the store page', () => {
     const lines = section
       .split('\n')
       .filter((line) => line.trim() !== '' && !line.startsWith('![') && !line.startsWith('<!--'));
-    expect(lines).toHaveLength(PICTURES.length + readmePicturePlaceholders(section).length);
+    // The nine pictures, each with its line, and the line that links to the Rule view.
+    expect(lines).toHaveLength(PICTURES.length + readmePicturePlaceholders(section).length + 1);
   });
 
   it('shows the line above the rules of a policy with a dyn value first, with its line', () => {
@@ -548,8 +552,8 @@ describe('README.md on running the examples in CI', () => {
 
   it.each([
     '`cel-lens-core examples [paths...]`',
-    'the file of the release `core-v0.32.0` for your system',
-    'it is named `cel-lens-core_v0.32.0_<os>_<arch>`, with `.exe` on Windows; rename it `cel-lens-core`',
+    'the file of the release `core-v0.33.0` for your system',
+    'it is named `cel-lens-core_v0.33.0_<os>_<arch>`, with `.exe` on Windows; rename it `cel-lens-core`',
     'each rule with a wrong verdict or that ended in an error',
     'the problems of the examples (such as a CRD, policy or binding the API server cannot read)',
     '1 that a verdict or a problem of the examples did',
@@ -558,7 +562,7 @@ describe('README.md on running the examples in CI', () => {
     'a rule that did not run never does',
     'runs every rule of the CRDs and ValidatingAdmissionPolicies in the files and folders given',
     'exits 1 when a verdict is not what its example expects',
-    '`go install github.com/JairJosafath/cel-lens/engine@v0.32.0`',
+    '`go install github.com/JairJosafath/cel-lens/engine@v0.33.0`',
     'the binary is named `engine`; rename it `cel-lens-core`',
     '`12 rules, 40 examples: 2 wrong, 1 error, 3 not run`',
     'Exit code 0 means nothing failed',
@@ -605,4 +609,65 @@ describe('the links of the README to files of the repository', () => {
       'docs/cellens.md',
     ]);
   });
+});
+
+describe('the Rule view section of the README', () => {
+  const section = readmeSection(README, 'Rule view') ?? '';
+
+  it('follows Example results, opens with its picture and alt text, and is linked from What it looks like', () => {
+    const headings = readmeHeadings(README);
+    expect(headings.indexOf('Rule view')).toBe(headings.indexOf('Example results') + 1);
+    const [picture] = section.trimStart().split('\n');
+    expect(picture).toBe(
+      `![Rule view: the cel-lens icon in the activity bar with its count, and the view listing the documents of a workspace with their rules, one that does not compile selected as the cursor is in it, one with a wrong example, and rules that compile](${IMAGE_BASE}rule-view.png)`,
+    );
+    expect(readmeSection(README, 'What it looks like')).toContain('[Rule view](#rule-view)');
+  });
+
+  it.each([
+    'A CustomResourceDefinition of `apiextensions.k8s.io/v1`, a ValidatingAdmissionPolicy and a MutatingAdmissionPolicy',
+    'with `kyverno` in `cel-lens.experimental`, a Kyverno `ValidatingPolicy` of `policies.kyverno.io/v1`',
+    'its CEL, on one line and cut after 60 characters',
+    '`compiles` or `2 problems`',
+    '`refuses 1 example it should allow · 2 pass`',
+    'a check mark in green (its examples pass), or a plain check mark (it compiles)',
+    'Click a rule to open its file at the start of the rule’s CEL'.replace('’', "'"),
+    '**Show Problems**',
+    '**Show Example Results**',
+    '**Show Problems Only**',
+    '**Show All Rules**',
+    'the choice is kept for the workspace',
+    '`3 rules with problems`',
+    'it never takes the focus, never opens the view',
+    '**Stop Following** and **Follow Editor**',
+    '`cel-lens.ruleView.followEditor`',
+    'a file in none of them is under **Open files**',
+    '(with **Open Folder**)',
+    '(**Show Logs**, **Restart Engine**)',
+    '`Scanning: 4,210 YAML files read, 37 with rules`',
+    'it reads at most 20,000 YAML files of at most 1 MiB',
+    '`1,203 YAML files not read: the scan reads at most 20,000 files of at most 1 MiB`',
+    'A `v1beta1` CRD and Kyverno’s other kinds are not listed'.replace('’', "'"),
+  ])('says %s', (text) => {
+    expect(section).toContain(text);
+  });
+
+  it('says in Not supported yet that a v1beta1 CRD and the other kinds of Kyverno are not listed', () => {
+    const notSupported = readmeSection(README, 'Not supported yet') ?? '';
+
+    expect(notSupported).toContain('A `v1beta1` CustomResourceDefinition');
+    expect(notSupported).toContain("Kyverno's kinds other than `ValidatingPolicy`");
+    expect(notSupported).toContain('[Rule view](#rule-view)');
+  });
+
+  it(
+    'names the view’s title-bar commands and the setting outside the palette table, and the setting in the Settings table'.replace(
+      '’',
+      "'",
+    ),
+    () => {
+      expect(readmeSection(README, 'Commands')).toContain('**Show Problems Only**');
+      expect(readmeSection(README, 'Settings')).toContain('`cel-lens.ruleView.followEditor`');
+    },
+  );
 });

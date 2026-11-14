@@ -2,7 +2,7 @@
   "name": "cel-lens-vscode",
   "displayName": "cel-lens for VS Code",
   "description": "CEL errors, hover and completion inside Kubernetes YAML.",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "publisher": "cel-lens",
   "repository": {
     "type": "git",
@@ -109,6 +109,93 @@
         "title": "Use This Example as the Type",
         "category": "cel-lens",
         "icon": "$(check)"
+      },
+      {
+        "command": "cel-lens.rules.showProblems",
+        "title": "Show Problems",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.rules.showExampleResults",
+        "title": "Show Example Results",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.rules.showProblemsOnly",
+        "title": "Show Problems Only",
+        "category": "cel-lens",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "cel-lens.rules.showAll",
+        "title": "Show All Rules",
+        "category": "cel-lens",
+        "icon": "$(filter-filled)"
+      },
+      {
+        "command": "cel-lens.rules.followEditor",
+        "title": "Follow Editor",
+        "category": "cel-lens"
+      },
+      {
+        "command": "cel-lens.rules.stopFollowing",
+        "title": "Stop Following",
+        "category": "cel-lens"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cel-lens",
+          "title": "cel-lens",
+          "icon": "images/cel-lens.svg"
+        }
+      ]
+    },
+    "views": {
+      "cel-lens": [
+        {
+          "id": "cel-lens.rules",
+          "name": "Rules",
+          "contextualTitle": "cel-lens"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "cel-lens.rules",
+        "contents": "Open a folder to list the CEL rules in it.\n[Open Folder](command:workbench.action.files.openFolder)",
+        "when": "cel-lens.ruleView.state == 'noFolder'"
+      },
+      {
+        "view": "cel-lens.rules",
+        "contents": "The cel-lens engine is not running.\n[Show Logs](command:cel-lens.showLogs)\n[Restart Engine](command:cel-lens.restartServer)",
+        "when": "cel-lens.ruleView.state == 'engineDown'"
+      },
+      {
+        "view": "cel-lens.rules",
+        "contents": "This cel-lens engine cannot list rules, which a newer one does. Update the extension, or point the engine setting to a newer cel-lens-core.\n[Open the Engine Setting](command:workbench.action.openSettings?%5B%22cel-lens.serverPath%22%5D)\n[Show Logs](command:cel-lens.showLogs)",
+        "when": "cel-lens.ruleView.state == 'unsupported'"
+      },
+      {
+        "view": "cel-lens.rules",
+        "contents": "Looking for CEL rules in the workspace…",
+        "when": "cel-lens.ruleView.state == 'scanning'"
+      },
+      {
+        "view": "cel-lens.rules",
+        "contents": "No CEL rules in this workspace yet. cel-lens lists the rules of CustomResourceDefinitions, ValidatingAdmissionPolicies and MutatingAdmissionPolicies.\n[Read What cel-lens Lists](https://github.com/JairJosafath/cel-lens/tree/main/vscode#readme)\nKyverno ValidatingPolicies are listed once the kyverno experimental feature is on.\n[Open the Experimental Setting](command:workbench.action.openSettings?%5B%22cel-lens.experimental%22%5D)",
+        "when": "cel-lens.ruleView.state == 'empty' && cel-lens.ruleView.kyvernoOff"
+      },
+      {
+        "view": "cel-lens.rules",
+        "contents": "No CEL rules in this workspace yet. cel-lens lists the rules of CustomResourceDefinitions, ValidatingAdmissionPolicies, MutatingAdmissionPolicies and Kyverno ValidatingPolicies.\n[Read What cel-lens Lists](https://github.com/JairJosafath/cel-lens/tree/main/vscode#readme)",
+        "when": "cel-lens.ruleView.state == 'empty' && !cel-lens.ruleView.kyvernoOff"
+      },
+      {
+        "view": "cel-lens.rules",
+        "contents": "No rule has a problem.\n[Show All Rules](command:cel-lens.rules.showAll)",
+        "when": "cel-lens.ruleView.state == 'noProblems'"
       }
     ],
     "configuration": {
@@ -198,6 +285,13 @@
           "scope": "machine",
           "order": 5,
           "markdownDescription": "Advanced: path to a `cel-lens-core` binary to use instead of the engine bundled with the extension. Leave empty."
+        },
+        "cel-lens.ruleView.followEditor": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "order": 7,
+          "markdownDescription": "Selects, in the cel-lens view, the rule the cursor is in, a moment after the cursor moves. It never takes the focus and never opens the view. Turn it off and on with **Stop Following** and **Follow Editor** in the view's title menu."
         }
       }
     },
@@ -262,6 +356,30 @@
         {
           "command": "cel-lens.useExample",
           "when": "resourceScheme == cel-lens-example"
+        },
+        {
+          "command": "cel-lens.rules.showProblems",
+          "when": "false"
+        },
+        {
+          "command": "cel-lens.rules.showExampleResults",
+          "when": "false"
+        },
+        {
+          "command": "cel-lens.rules.showProblemsOnly",
+          "when": "false"
+        },
+        {
+          "command": "cel-lens.rules.showAll",
+          "when": "false"
+        },
+        {
+          "command": "cel-lens.rules.followEditor",
+          "when": "false"
+        },
+        {
+          "command": "cel-lens.rules.stopFollowing",
+          "when": "false"
         }
       ],
       "editor/title": [
@@ -269,6 +387,40 @@
           "command": "cel-lens.useExample",
           "when": "resourceScheme == cel-lens-example",
           "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cel-lens.rules.showProblems",
+          "when": "view == cel-lens.rules && viewItem =~ /^rule/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cel-lens.rules.showExampleResults",
+          "when": "view == cel-lens.rules && viewItem == ruleWithExamples",
+          "group": "navigation@2"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "cel-lens.rules.showProblemsOnly",
+          "when": "view == cel-lens.rules && !cel-lens.ruleView.problemsOnly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cel-lens.rules.showAll",
+          "when": "view == cel-lens.rules && cel-lens.ruleView.problemsOnly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cel-lens.rules.followEditor",
+          "when": "view == cel-lens.rules && !cel-lens.ruleView.followEditor",
+          "group": "1_follow@1"
+        },
+        {
+          "command": "cel-lens.rules.stopFollowing",
+          "when": "view == cel-lens.rules && cel-lens.ruleView.followEditor",
+          "group": "1_follow@1"
         }
       ]
     }

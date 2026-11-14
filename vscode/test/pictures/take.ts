@@ -70,7 +70,7 @@ const GAVE_UP_PICTURE = 'out/pictures/gave-up.png';
 /** The pictures asked for on the command line, such as `cellens-types`; none means all of them. */
 const ONLY = process.argv.slice(2);
 /** The names `npm run pictures --` takes: the pictures that can be taken alone. */
-const TAKEN_ALONE = ['cellens-types'];
+const TAKEN_ALONE = ['cellens-types', 'rule-view'];
 
 const CRD = 'widget_crd.yaml';
 const POLICY = 'pod_policy.yaml';
@@ -101,6 +101,14 @@ const DEPLOY_FILES: readonly (readonly [string, string])[] = [
 const DEPLOY_WARNINGS = 2;
 /** The line of the rule in limit_crd.yaml, and the warnings its wrong verdict makes in the status bar: one on the rule and one on the example. */
 const EXAMPLE_RULE_LINE = 22;
+/** The line of the rule that does not compile in the CRD of `rule-view.png`, which the cursor is on, and the label of its row. */
+const RULE_VIEW_LINE = 28;
+/** Where the right edge of the side bar is at the viewport's size (its activity bar is 48 px), and how much wider it is made for `rule-view.png`. */
+const RULE_VIEW_SIDE_BAR_EDGE_X = 322;
+const RULE_VIEW_WIDER_PX = 260;
+const RULE_VIEW_SELECTED = 'a widget runs at least one copy';
+/** The documents of the view that are opened for `rule-view.png`, besides the CRD the cursor is in. */
+const RULE_VIEW_OPEN = ['limits.example.com', 'no-latest-tag'];
 const EXAMPLE_WARNINGS = 2;
 
 const QUICK_SUGGESTIONS_OFF = { other: 'off', comments: 'off', strings: 'off' };
@@ -1043,6 +1051,78 @@ async function takeCellensTypes(page: Page, workspace: string): Promise<void> {
 }
 
 /**
+ * rule-view.png: the cel-lens view open beside a CRD, with the badge on its icon in the activity
+ * bar: the documents of the workspace with their rules, one rule that does not compile, one whose
+ * example is wrong, rules that pass, and the rule the cursor is in selected by following the
+ * editor. The activity bar is the one picture that shows it; the examples come and go with it, as
+ * with the example results pictures.
+ */
+async function takeRuleView(page: Page, workspace: string): Promise<void> {
+  await mkdir(join(workspace, EXAMPLES_FOLDER), { recursive: true });
+  for (const [fixture, file] of LIMIT_EXAMPLES) {
+    await mkdir(dirname(join(workspace, EXAMPLES_FOLDER, file)), { recursive: true });
+    await cp(join(FIXTURES, `limit_${fixture}.yaml`), join(workspace, EXAMPLES_FOLDER, file));
+  }
+  const settings = join(workspace, '.vscode/settings.json');
+  await writeFile(
+    settings,
+    JSON.stringify({ ...SETTINGS, 'workbench.activityBar.location': 'default' }, null, 2),
+  );
+  await startPicture(page, CRD);
+  await page.keyboard.press('Control+g');
+  await page.keyboard.type(String(RULE_VIEW_LINE));
+  await page.keyboard.press('Enter');
+  await waitForQuickInputClosed(page);
+  await waitForCursorLine(page, '- rule: self.replica');
+  await waitForLensLine(page, '1 problem');
+  await clickWhenReady(
+    // The item, not its link: the badge on the icon sits over the link and takes the click, which reaches the item.
+    page.locator('.activitybar li.action-item[aria-label^="cel-lens"]').first(),
+    'the cel-lens icon of the activity bar to be clickable',
+  );
+  // The side bar is widened by its edge, so the words of each row show whole.
+  await page.mouse.move(RULE_VIEW_SIDE_BAR_EDGE_X, VIEWPORT.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(RULE_VIEW_SIDE_BAR_EDGE_X + RULE_VIEW_WIDER_PX, VIEWPORT.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  const rows = page.locator('.pane-body .monaco-list-row');
+  await waitForState(
+    rows.filter({ hasText: 'widgets.example.com' }).first(),
+    'the view to list the CRD of the editor',
+  );
+  await waitForState(
+    page.locator('.activitybar .badge-content:visible').first(),
+    'the badge on the icon of the cel-lens view',
+  );
+  // The documents that show the other states open; the rows between are left closed.
+  for (const name of RULE_VIEW_OPEN) {
+    await clickWhenReady(
+      rows.filter({ hasText: name }).first().locator('.monaco-tl-twistie'),
+      `the row of ${name} to open`,
+    );
+  }
+  await waitForState(
+    rows.filter({ hasText: 'refuses 1 example it should allow' }).first(),
+    'the view to list a rule with a wrong example',
+  );
+  // The cursor moves into the rule that does not compile, and the view follows it.
+  const wrong = await pointAt(page, 'self.replica > 0', 'replica ');
+  await page.mouse.click(wrong.x, wrong.y);
+  await waitForState(
+    rows.filter({ hasText: RULE_VIEW_SELECTED }).locator(':scope.selected, :scope.focused').first(),
+    `the view to select ${RULE_VIEW_SELECTED} by following the editor`,
+  );
+  await parkMouse(page);
+  await save('rule-view.png', await screenshotPage(page, 'rule-view.png'));
+  await writeFile(settings, JSON.stringify(SETTINGS, null, 2));
+  for (const [, file] of LIMIT_EXAMPLES) {
+    await rm(join(workspace, EXAMPLES_FOLDER, file));
+  }
+}
+
+/**
  * example-results-line.png and example-results-picker.png: a CRD whose rule refuses one of the
  * three examples of the workspace, which expects to be allowed. The script puts the examples in
  * `config/samples/` for these two pictures and takes them out again. The first picture shows the
@@ -1157,6 +1237,9 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
     if (ONLY.includes('cellens-types')) {
       await takeCellensTypes(page, workspace);
       await rm(join(workspace, '.cellens'), { force: true });
+    }
+    if (ONLY.includes('rule-view')) {
+      await takeRuleView(page, workspace);
     }
     return;
   }
@@ -1289,6 +1372,7 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
   // The engine's edit created an empty .cellens on disk, which the next picture must not find.
   await rm(join(workspace, '.cellens'), { force: true });
   await takeGiveType(page);
+  await takeRuleView(page, workspace);
 }
 
 async function main(): Promise<void> {

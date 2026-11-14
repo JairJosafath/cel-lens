@@ -208,11 +208,11 @@ describe('the pictures in images/', () => {
     });
   });
 
-  it('the .vsix takes only images/icon.png of them', () => {
+  it("the .vsix takes only images/icon.png and the view's icon of them", () => {
     const ignore = readFileSync('.vscodeignore', 'utf8')
       .split('\n')
       .filter((line) => line.startsWith('!images'));
-    expect(ignore).toEqual(['!images/icon.png']);
+    expect(ignore).toEqual(['!images/icon.png', '!images/cel-lens.svg']);
   });
 });
 

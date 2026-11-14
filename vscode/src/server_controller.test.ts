@@ -854,6 +854,76 @@ describe('ServerController', () => {
     },
   );
 
+  it('asks the engine for the list of the rules with ruleList: true in initializationOptions', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+
+    await newController().start();
+
+    expect(client.created).toMatchObject([
+      { options: { initializationOptions: { ruleList: true } } },
+    ]);
+  });
+
+  it('gives onStarted the initialize result of each engine that starts, once, after the state is running', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    client.initializeResult = { capabilities: { experimental: { celLens: {} } } };
+    const events: string[] = [];
+    const controller = new ServerController(
+      window.createOutputChannel('cel-lens'),
+      EXTENSION_PATH,
+      (state) => {
+        events.push(state.kind);
+      },
+      (result) => {
+        events.push(`started ${JSON.stringify(result)}`);
+      },
+    );
+
+    await controller.start();
+    await controller.restart();
+
+    expect(events).toEqual([
+      'starting',
+      'running',
+      `started ${JSON.stringify(client.initializeResult)}`,
+      'stopped',
+      'starting',
+      'running',
+      `started ${JSON.stringify(client.initializeResult)}`,
+    ]);
+  });
+
+  it('does not call onStarted for an engine that fails to start', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    client.startError = new Error('boom');
+    const started = vi.fn();
+    const controller = new ServerController(
+      window.createOutputChannel('cel-lens'),
+      EXTENSION_PATH,
+      undefined,
+      started,
+    );
+
+    await controller.start();
+
+    expect(started).not.toHaveBeenCalled();
+  });
+
+  it('registers the handler of an engine notification on the client of every start', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    const handler = vi.fn();
+    controller.onNotification('cel-lens/ruleListChanged', handler);
+
+    await controller.start();
+    client.handlers.get('cel-lens/ruleListChanged')?.({ generation: 3 } as never);
+    client.handlers.clear();
+    await controller.restart();
+    client.handlers.get('cel-lens/ruleListChanged')?.({ generation: 4 } as never);
+
+    expect(handler.mock.calls).toEqual([[{ generation: 3 }], [{ generation: 4 }]]);
+  });
+
   it('passes exampleResults on when the user turns it off but a workspace folder turns it on', async () => {
     settings.set('cel-lens.serverPath', execPath);
     settings.set('cel-lens.exampleResults', false);
