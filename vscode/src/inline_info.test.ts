@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ScopedValues } from './boolean_setting';
-import { inlineInfoInForce, inlineInfoLabel } from './inline_info';
+import { inlineInfoInForce } from './inline_info';
 
 describe('inlineInfoInForce', () => {
   it.each<[string, ScopedValues | undefined, boolean]>([
@@ -23,14 +23,5 @@ describe('inlineInfoInForce', () => {
     ['only values that are not booleans', { globalValue: 0, workspaceValue: null }, true],
   ])('is %s: %s', (_name, values, expected) => {
     expect(inlineInfoInForce(values)).toBe(expected);
-  });
-});
-
-describe('inlineInfoLabel', () => {
-  it.each([
-    [true, 'Inline info: on'],
-    [false, 'Inline info: off'],
-  ])('names the state %s as %j', (on, label) => {
-    expect(inlineInfoLabel(on)).toBe(label);
   });
 });

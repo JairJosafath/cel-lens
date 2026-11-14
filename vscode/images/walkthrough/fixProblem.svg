@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" width="560" height="300" role="img" aria-labelledby="title">
+  <title id="title">The rule self.replica &gt; 0 with replica underlined as an error, and the quick fix list below it with Change to replicas first</title>
+  <clipPath id="inside"><rect x="1" y="1" width="558" height="298" rx="6"/></clipPath>
+  <rect fill="var(--vscode-editor-background)" stroke="var(--vscode-contrastBorder, transparent)" x="0.5" y="0.5" width="559" height="299" rx="6"/>
+  <g clip-path="url(#inside)">
+    <rect fill="var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background))" x="0" y="0" width="560" height="34"/>
+    <rect fill="var(--vscode-tab-activeBackground)" stroke="var(--vscode-contrastBorder, transparent)" x="0.5" y="0.5" width="164" height="34"/>
+    <text fill="var(--vscode-list-errorForeground, var(--vscode-editorError-foreground))" font-family="var(--vscode-font-family)" font-size="12px" x="16" y="22">widgets.yaml 1</text>
+    <text fill="var(--vscode-tab-activeForeground)" font-family="var(--vscode-font-family)" font-size="12px" x="146" y="22">×</text>
+
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" text-anchor="end" x="48" y="64">30</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" x="106" y="64">message: the name starts with w- and is shorter</text>
+
+    <text fill="var(--vscode-editorCodeLens-foreground)" font-family="var(--vscode-font-family)" font-size="12px" x="88" y="90">self: Widget.spec · 1 problem</text>
+    <rect fill="var(--vscode-editor-lineHighlightBackground, transparent)" stroke="var(--vscode-editor-lineHighlightBorder, transparent)" x="0" y="98" width="560" height="26"/>
+    <path fill="var(--vscode-editorLightBulbAutoFix-foreground)" d="M66 104a6 6 0 0 1 6 10.4V117h-6v-2.6A6 6 0 0 1 66 104zm-2 14.5h4v1.5h-4z" transform="translate(4 0)"/>
+    <text fill="var(--vscode-editorLineNumber-activeForeground)" font-family="var(--vscode-editor-font-family)" font-size="15px" text-anchor="end" x="48" y="116">31</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" x="88" y="116" textLength="216" lengthAdjust="spacing">- rule: <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">replica</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&gt;</tspan> <tspan fill="var(--vscode-debugTokenExpression-number)">0</tspan></text>
+    <path fill="none" stroke="var(--vscode-editorError-foreground)" stroke-width="1.5" d="M205 121 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3 l3.5 3 l3.5 -3"/>
+
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" text-anchor="end" x="48" y="142">32</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" x="106" y="142">message: a widget runs at least one copy</text>
+    <text fill="var(--vscode-editorCodeLens-foreground)" font-family="var(--vscode-font-family)" font-size="12px" x="88" y="168">self: Widget.spec · compiles</text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" text-anchor="end" x="48" y="194">33</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" x="88" y="194">- rule: <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">replicas</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&lt;=</tspan> <tspan fill="var(--vscode-debugTokenExpression-number)">100</tspan></text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" text-anchor="end" x="48" y="220">34</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="15px" x="106" y="220">message: a widget runs at most 100 copies</text>
+
+    <rect fill="var(--vscode-editorWidget-background)" stroke="var(--vscode-contrastBorder, transparent)" x="196.5" y="130.5" width="236" height="74" rx="5"/>
+    <text fill="var(--vscode-descriptionForeground)" font-family="var(--vscode-font-family)" font-size="12px" font-weight="600" x="210" y="152">Quick Fix</text>
+    <rect fill="var(--vscode-quickInputList-focusBackground, transparent)" stroke="var(--vscode-contrastActiveBorder, transparent)" x="203.5" y="162.5" width="222" height="32" rx="4"/>
+    <path fill="var(--vscode-editorLightBulb-foreground)" d="M218 168.5a5 5 0 0 1 5 8.7V179.5h-5v-2.3A5 5 0 0 1 218 168.5zm-1.7 12h3.4v1.4h-3.4z" transform="translate(0.5 0)"/>
+    <text fill="var(--vscode-quickInputList-focusForeground, var(--vscode-editorWidget-foreground))" font-family="var(--vscode-font-family)" font-size="13px" x="234" y="183">Change to `replicas`</text>
+  </g>
+</svg>

@@ -12,6 +12,9 @@ export const LEGACY_COLOR_STYLE_SETTING_NAME = `${LEGACY_COLOR_STYLE_SETTING_SEC
 /** The `cel-lens.chooseColorStyle` command, as contributed in package.json. */
 export const CHOOSE_COLOR_STYLE_COMMAND = 'cel-lens.chooseColorStyle';
 
+/** The `cel-lens.toggleColors` command, as contributed in package.json. */
+export const TOGGLE_COLORS_COMMAND = 'cel-lens.toggleColors';
+
 /** The style used when the setting is missing or not one of the three. */
 export const DEFAULT_COLOR_STYLE: CelStyle = 'cel';
 

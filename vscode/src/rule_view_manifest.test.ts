@@ -271,7 +271,7 @@ describe('the title menu of the view', () => {
     ]);
   });
 
-  it('titles the four commands as the issue names them, and keeps them out of the palette', () => {
+  it('titles the four commands as the issue names them, and has each in the palette by its key (#37)', () => {
     const titles = Object.fromEntries(
       MANIFEST.contributes.commands.map((entry) => [entry.command, entry.title]),
     );
@@ -280,9 +280,12 @@ describe('the title menu of the view', () => {
     expect(titles['cel-lens.rules.showAll']).toBe('Show All Rules');
     expect(titles['cel-lens.rules.followEditor']).toBe('Follow Editor');
     expect(titles['cel-lens.rules.stopFollowing']).toBe('Stop Following');
-    for (const { command } of TITLE) {
-      expect(menus.commandPalette.find((entry) => entry.command === command)?.when).toBe('false');
-    }
+    const when = (command: string): string | undefined =>
+      menus.commandPalette.find((entry) => entry.command === command)?.when;
+    expect(when('cel-lens.rules.showProblemsOnly')).toBe('!cel-lens.ruleView.problemsOnly');
+    expect(when('cel-lens.rules.showAll')).toBe('cel-lens.ruleView.problemsOnly');
+    expect(when('cel-lens.rules.followEditor')).toBe('!cel-lens.ruleView.followEditor');
+    expect(when('cel-lens.rules.stopFollowing')).toBe('cel-lens.ruleView.followEditor');
   });
 });
 

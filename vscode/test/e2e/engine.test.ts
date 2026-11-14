@@ -28,6 +28,7 @@ import {
   type CompletionList,
   type Diagnostic,
   type CancellationToken,
+  type CodeAction,
   type CodeLens,
   type Registration,
   type Hover,
@@ -57,6 +58,8 @@ import {
   parseScanLimits,
 } from '../../src/rule_list';
 import { RuleTree, type TreeNode } from '../../src/rule_tree';
+import { withoutValueParts } from '../../src/value_visibility';
+import { SAMPLE_CRD, SAMPLE_PATH } from '../../src/sample_crd';
 import { resolveServer } from '../../src/server_path';
 import { spawnEngine } from '../../src/spawn_engine';
 
@@ -353,6 +356,21 @@ async function lensesOf(uri: string): Promise<{ title: string; command: string }
   );
 }
 
+/** The lines above the rules of an open document with the line each part is on, which the client's middleware needs. */
+async function linedLensesOf(
+  uri: string,
+): Promise<{ range: { start: { line: number } }; command?: { title: string; command: string } }[]> {
+  const found = await running().connection.sendRequest<CodeLens[] | null>('textDocument/codeLens', {
+    textDocument: { uri },
+  });
+  return (found ?? []).map((lens) => ({
+    range: { start: { line: lens.range.start.line } },
+    ...(lens.command !== undefined && {
+      command: { title: lens.command.title, command: lens.command.command },
+    }),
+  }));
+}
+
 /** What the engine answers `cel-lens.<name>` with, for the argument of a line above a rule. */
 async function runCommand(command: string, argument: unknown): Promise<unknown> {
   return running().connection.sendRequest('workspace/executeCommand', {
@@ -522,6 +540,31 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
     ]);
   });
 
+  it('sends each part of the line as a title and a command and nothing that colors it, so no state is told by color alone (#3)', async () => {
+    const { uri } = await open('valid_crd.yaml');
+    await diagnosticsFor(uri, () => true);
+
+    const found = await running().connection.sendRequest<Record<string, unknown>[] | null>(
+      'textDocument/codeLens',
+      { textDocument: { uri } },
+    );
+
+    expect(found?.length).toBeGreaterThan(0);
+    for (const lens of found ?? []) {
+      // A code lens has a range, a command (a title and what it runs) and the engine's own data; none of them has a color.
+      expect(
+        Object.keys(lens).filter((key) => !['range', 'command', 'data'].includes(key)),
+      ).toEqual([]);
+      const command = lens['command'] as Record<string, unknown> | undefined;
+      expect(
+        Object.keys(command ?? {}).filter(
+          (key) => !['title', 'command', 'arguments', 'tooltip'].includes(key),
+        ),
+      ).toEqual([]);
+      expect(typeof command?.['title']).toBe('string');
+    }
+  });
+
   it('draws, above a rule that reads a value of a custom paramKind, a Give it a type for the dyn value', async () => {
     const { uri } = await open('replica_policy.yaml');
     await diagnosticsFor(uri, () => true);
@@ -667,6 +710,65 @@ describe('the bundled cel-lens-core, started with the extension’s command', ()
     });
 
     expect(await diagnosticsFor(uri, (list) => list.length === 0)).toEqual([]);
+  });
+
+  it('shows the walkthrough’s sample CRD, a file in no workspace folder, one error on replica, and its preferred quick fix Change to replicas clears it', async () => {
+    // The shared session has no workspace folder: the sample lives in the extension's storage.
+    const folder = await mkdtemp(join(tmpdir(), 'cel-lens-sample-'));
+    try {
+      const path = join(folder, ...SAMPLE_PATH);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, SAMPLE_CRD);
+      const uri = pathToFileURL(path).href;
+      await running().connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text: SAMPLE_CRD },
+      });
+
+      const found = await diagnosticsFor(uri, (list) => list.length > 0);
+      const errors = found.filter((d) => d.severity === ERROR);
+      expect(errors).toHaveLength(1);
+      const [error] = errors;
+      if (error === undefined) {
+        throw new Error('no error on the sample');
+      }
+      expect(error.range.start.line).toBe(lineOf(SAMPLE_CRD, 'self.replica > 0'));
+      const line = SAMPLE_CRD.split('\n')[error.range.start.line] ?? '';
+      expect(line.slice(error.range.start.character, error.range.end.character)).toContain(
+        'replica',
+      );
+
+      const actions = await running().connection.sendRequest<CodeAction[] | null>(
+        'textDocument/codeAction',
+        {
+          textDocument: { uri },
+          range: error.range,
+          context: { diagnostics: [error], triggerKind: 1 },
+        },
+      );
+      const fix = (actions ?? []).find((action) => action.title === 'Change to `replicas`');
+      expect(fix).toMatchObject({ isPreferred: true });
+      const edits = fix?.edit?.changes?.[uri] ?? [];
+      expect(edits.length).toBeGreaterThan(0);
+      let fixed = SAMPLE_CRD;
+      for (const { range, newText } of [...edits].sort(
+        (a, b) => offsetOf(fixed, b.range.start) - offsetOf(fixed, a.range.start),
+      )) {
+        fixed =
+          fixed.slice(0, offsetOf(fixed, range.start)) +
+          newText +
+          fixed.slice(offsetOf(fixed, range.end));
+      }
+      expect(fixed).toContain('- rule: self.replicas > 0\n');
+
+      await running().connection.sendNotification(DidChangeTextDocumentNotification.type, {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: fixed }],
+      });
+      const after = await diagnosticsFor(uri, (list) => !list.some((d) => d.severity === ERROR));
+      expect(after.filter((d) => d.severity === ERROR)).toEqual([]);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 });
 
@@ -870,6 +972,117 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
         (found) => !found.some((lens) => lens.command === 'cel-lens.editType'),
       );
       expect(off.map((lens) => lens.title)).toEqual(['object: apps/v1 Deployment · compiles']);
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('has the middleware keep the state and the example part of each line and drop the values while valueTypes is off, and keep them all while it is on', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    for (const [fixture, path] of [
+      ['replica_policy.yaml', 'policy.yaml'],
+      ['limit_crd.yaml', 'crd.yaml'],
+      ['limit_small.yaml', 'config/samples/small.yaml'],
+      ['limit_big.yaml', 'config/samples/big.yaml'],
+    ]) {
+      await mkdir(dirname(join(root, path ?? '')), { recursive: true });
+      await copyFile(join(FIXTURES, fixture ?? ''), join(root, path ?? ''));
+    }
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      experimental: ['cellens-types'],
+    });
+    const shared = engine;
+    engine = session;
+    try {
+      const open = async (name: string): Promise<string> => {
+        const uri = pathToFileURL(join(root, name)).href;
+        const text = await readFile(join(root, name), 'utf8');
+        await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+          textDocument: { uri, languageId: 'yaml', version: 1, text },
+        });
+        return uri;
+      };
+      const policy = await open('policy.yaml');
+      const crd = await open('crd.yaml');
+      await lensesWhen(policy, (lenses) =>
+        lenses.some((lens) => lens.title === 'params: dyn · Give it a type'),
+      );
+      await lensesWhen(crd, (lenses) =>
+        lenses.some((lens) => lens.command === 'cel-lens.showExampleResults'),
+      );
+      const titles = (lenses: { command?: { title: string } }[] | null | undefined): string[] =>
+        (lenses ?? []).map((lens) => lens.command?.title ?? '');
+
+      // On: the engine's whole line, which the middleware leaves as it is.
+      const policyOn = await linedLensesOf(policy);
+      const crdOn = await linedLensesOf(crd);
+      expect(titles(policyOn)).toEqual([
+        'object: apps/v1 Deployment · compiles',
+        'params: dyn · Give it a type',
+      ]);
+      expect(crdOn.map((lens) => lens.command?.command)).toEqual([
+        'cel-lens.showRule',
+        'cel-lens.showExampleResults',
+      ]);
+
+      // Off: of each line, the state part and the example part, and no value part.
+      expect(titles(withoutValueParts(policyOn))).toEqual([
+        'object: apps/v1 Deployment · compiles',
+      ]);
+      expect(withoutValueParts(crdOn)).toEqual(crdOn);
+    } finally {
+      await stopEngine(session);
+      engine = shared;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the state and the example part of a line that also has a value part, and drops the value, while valueTypes is off', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    for (const [fixture, path] of [
+      ['port_crd.yaml', 'crd.yaml'],
+      ['port_ok.yaml', 'config/samples/ok.yaml'],
+      ['port_wrong.yaml', 'config/samples/wrong.yaml'],
+    ]) {
+      await mkdir(dirname(join(root, path ?? '')), { recursive: true });
+      await copyFile(join(FIXTURES, fixture ?? ''), join(root, path ?? ''));
+    }
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      experimental: ['cellens-types'],
+    });
+    const shared = engine;
+    engine = session;
+    try {
+      const uri = pathToFileURL(join(root, 'crd.yaml')).href;
+      const text = await readFile(join(root, 'crd.yaml'), 'utf8');
+      await session.connection.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: { uri, languageId: 'yaml', version: 1, text },
+      });
+      await lensesWhen(uri, (lenses) =>
+        lenses.some((lens) => lens.command === 'cel-lens.showExampleResults'),
+      );
+      const line = await linedLensesOf(uri);
+      const parts = (
+        lenses: { command?: { title: string; command: string } }[] | null | undefined,
+      ): string[] => (lenses ?? []).map((lens) => lens.command?.command ?? '');
+
+      // On: the state, the value of the int-or-string field as dyn, and the example part.
+      expect(parts(line)).toEqual([
+        'cel-lens.showRule',
+        'cel-lens.giveType',
+        'cel-lens.showExampleResults',
+      ]);
+      expect(line[1]?.command?.title).toBe('self.port: dyn · Give it a type');
+      expect(line[2]?.command?.title).toBe('1 wrong');
+
+      // Off: the first part and the example part stay, the value goes.
+      const kept = withoutValueParts(line);
+      expect(parts(kept)).toEqual(['cel-lens.showRule', 'cel-lens.showExampleResults']);
+      expect(kept?.[1]?.command?.title).toBe('1 wrong');
     } finally {
       await stopEngine(session);
       engine = shared;
@@ -1236,6 +1449,41 @@ describe('the bundled cel-lens-core, with a workspace folder on disk', () => {
 });
 
 describe('the cel-lens.ruleList command, which the cel-lens view lists the rules of the workspace with', () => {
+  it('lists no file of YAML with no CEL, a GitHub workflow or a Compose file, so the editor’s submenu, which follows the list, does not show there (#37)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
+    await mkdir(join(root, '.github/workflows'), { recursive: true });
+    await copyFile(join(FIXTURES, 'valid_crd.yaml'), join(root, 'crd.yaml'));
+    await copyFile(join(FIXTURES, 'github_workflow.yaml'), join(root, '.github/workflows/ci.yaml'));
+    await copyFile(join(FIXTURES, 'compose.yaml'), join(root, 'compose.yaml'));
+    const session = await startEngine(await checkedExtensionPath(), {
+      folder: root,
+      ruleList: true,
+    });
+    try {
+      const answer = parseRuleListAnswer(
+        await session.connection.sendRequest('workspace/executeCommand', {
+          command: ENGINE_RULE_LIST,
+          arguments: [],
+        }),
+      );
+      if (answer === undefined) {
+        throw new Error('the engine answered something the extension does not read');
+      }
+      const list = new RuleList();
+      list.apply(answer, 'all');
+
+      // The key cel-lens.editorHasRules is whether the active file is in this list.
+      const listed = (file: string): boolean =>
+        list.documentsOf(pathToFileURL(join(root, file)).href).length > 0;
+      expect(listed('crd.yaml')).toBe(true);
+      expect(listed('.github/workflows/ci.yaml')).toBe(false);
+      expect(listed('compose.yaml')).toBe(false);
+    } finally {
+      await stopEngine(session);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('answers the documents with rules of a workspace folder, and the view draws them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cel-lens-e2e-'));
     await mkdir(join(root, 'config'), { recursive: true });

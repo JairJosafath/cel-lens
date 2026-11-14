@@ -6,6 +6,30 @@ Every user-visible change, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-11-14
+
+### Added
+
+- A _Get started with cel-lens_ walkthrough on VS Code's Welcome page, in four steps of one button each: _Open a sample CRD_ writes a CustomResourceDefinition with four CEL rules to the extension's own storage (never your workspace) and opens it; _See a problem and fix it_ puts the cursor on the sample's one problem, `self.replica`, and opens the quick fix list, where _Change to `replicas`_ comes first, and the step is done once the problem is gone; _Pick the Kubernetes version_; and _Choose the colors_. **cel-lens: Get Started** opens it from the Command Palette on any file. Opening the sample again writes a fresh copy unless it is open. cel-lens opens nothing by itself on install or update: whether the Welcome page shows a new extension's walkthrough is VS Code's setting `workbench.welcomePage.walkthroughs.openOnInstall`.
+- **cel-lens: Toggle Colors** turns every color cel-lens draws off with one command, and back: it writes `off` to `cel-lens.colorStyle` when the file has a color style, and, when the style is `off`, the style it last turned off (`cel` when it turned none off). The colors repaint at once. A value set only by the old `celLens.colorStyle` is read, and `cel-lens.colorStyle` is written.
+- **cel-lens: Toggle Value Types** and the setting `cel-lens.valueTypes` (on by default) hide the values a rule reads, with their _Give it a type_, _Edit_ and _Remove_ parts and **+N more**, from the line above it: the line keeps its state and its example result, and the types you gave still apply. The command is there while `cellens-types` is on in `cel-lens.experimental`; the engine is told nothing. With **Toggle Inline Info** and **Toggle Example Results**, each thing cel-lens draws now has a toggle, and every toggle writes the scope that sets the value in force for the open file (its workspace folder, the workspace or your user settings), or your user settings when none does; open editors follow at once.
+- A _cel-lens_ submenu in the editor's context menu, and in the `...` menu of the editor's title, in a YAML file the engine lists rules for; a GitHub workflow or a Compose file has none, and a file you just opened gets it once the engine's list has it, within a second. It holds _Show Problems_, _Reveal in Rule View_ and _Show Example Results_ (for a rule with example words) while the cursor is in a rule, and _Give a Value a Type…_ while `cellens-types` is on; then the toggles _Toggle Colors_, _Toggle Inline Info_, _Toggle Example Results_ and, while `cellens-types` is on, _Toggle Value Types_; then _Pick Kubernetes Version_ and _Choose Color Style_.
+- A shortcut for **cel-lens: Toggle Inline Info**: `Ctrl+K L` on Windows and Linux, `Cmd+K L` on macOS, while you type in a YAML file. It was checked against the default keybindings of VS Code 1.146.0 for Linux, Windows and macOS and the keybindings of GitLens, Red Hat YAML, Kubernetes Tools, Prettier, ESLint, GitHub Copilot Chat, Vim, Docker, Python, Jupyter, Go, Error Lens, Git Graph, Todo Tree and Helm Intellisense: none uses it, and none uses `Ctrl+K` or `Cmd+K` alone in an editor, except Vim on Windows and Linux, which takes `Ctrl+K` while its `vim.useCtrlKeys` is on, as it does for every `Ctrl+K` chord of VS Code's own; add `"<C-k>": false` to `vim.handleKeys` to give the key back. Rebind it in _Keyboard Shortcuts_ (`cel-lens.toggleInlineInfo`).
+- The Command Palette has every command that needs no rule or row. New there: **cel-lens: Reveal in Rule View**, for YAML files the engine lists rules for, which selects the rule at the cursor in the cel-lens view, else its document (also when the filter hides the rule), with the focus, and opens the view; and the view's **Show Problems Only** and **Show All Rules**, **Follow Editor** and **Stop Following**, one of each pair by its state, where the two filter commands open the view.
+- Light, dark and high contrast: every color of both color styles reads at 4.5:1 or more on the editor background of Default Light Modern, Default Dark Modern and Dark+, and at 7:1 or more on Default High Contrast and Default High Contrast Light, and nothing tells a state by color alone. A rule's state in the view is its own icon and its words, the status bar menu's values are words, and the walkthrough's pictures are drawn in the theme's own colors. The status bar item has an accessible name, so a screen reader says what it shows and what a click does: `cel-lens, Kubernetes 1.36, click for actions` while the engine runs, and `cel-lens engine down, click to restart it or show the logs` when it failed or crashed.
+
+### Changed
+
+- The status bar menu (**cel-lens: Show Actions**) is the hub for everything cel-lens has: the _Kubernetes version_ and the _Color style_, then, under _In the editor_, the toggles _Colors_, _Inline info_, _Example results_ and, while `cellens-types` is on, _Value types_, then, under _Engine_, _Show Logs_ and _Restart Engine_. Each entry shows its current value for the open file as its description (`on` or `off`, `CEL`, `1.37`), no label holds a value any more (it was _Inline info: on_), and only the two engine entries have an icon. With the engine failed or crashed the _Engine_ group comes first. The headings run nothing; picking an entry runs its command and closes the menu. The quick pick asks _Pick a setting, a toggle or an action_.
+- _Show Rule_, the part of the line above a rule that opens its problems, is titled _Show Problems_, as in the view. Run from the editor's submenu or the palette, it and _Show Example Results_ act on the rule at the cursor, looked up when they run (in a split editor, the cursor of the editor group whose menu was opened); with the cursor in no rule they say so in the status bar for three seconds.
+- The settings are in the order you meet them, the status bar menu's, in the Settings editor and the README: _Kubernetes Version_, _Color Style_, _Inline Info_, _Example Results_, _Value Types_, _Rule View: Follow Editor_, then _Experimental_, _Trace: Server_ and _Server Path_.
+- The README follows the order you meet cel-lens in: a _Get started_ section on the walkthrough, and a _Where to find it_ section with pictures of the status bar menu and the editor's _cel-lens_ submenu, the Command Palette, the shortcut and a table of how to turn off each thing cel-lens draws. The _Commands_ table lists every command in that order with a _Shortcut_ column.
+
+### Fixed
+
+- **Pick Kubernetes Version** in a window with no folder or workspace file open saves the version in the user settings, since such a window has no workspace settings; before, it failed with VS Code's own error and saved nothing. With a folder or a workspace file open it still saves the workspace setting. A write that fails is shown once, with **Open Settings**.
+- `npm run engine` and `make dist` no longer fail on a download whose connection fails or is cut off once: they retry it once, after half a second, and say so on stderr. A failed download now always names its URL and the reason, also when the body breaks off mid-transfer (Node's bare `terminated` before). A checksum mismatch or an HTTP error such as a 404 is not retried.
+
 ## [0.41.0] - 2026-11-14
 
 ### Added
@@ -760,7 +784,8 @@ The first release: the bundled `cel-lens-core` v0.1.1 engine behind a language c
 
 - A Kubernetes version picked while the engine is starting reaches the engine.
 
-[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.41.0...HEAD
+[Unreleased]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.42.0...HEAD
+[0.42.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.41.0...vscode-v0.42.0
 [0.41.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.40.0...vscode-v0.41.0
 [0.40.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.39.0...vscode-v0.40.0
 [0.39.0]: https://github.com/JairJosafath/cel-lens/compare/vscode-v0.38.0...vscode-v0.39.0

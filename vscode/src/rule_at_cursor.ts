@@ -60,3 +60,24 @@ export function ruleAtCursor(
   }
   return found === undefined ? undefined : { document: found };
 }
+
+/**
+ * What the context key `cel-lens.ruleAtCursor` says of a cursor: `ruleWithExamples` in a rule whose
+ * row shows example words, `rule` in another rule, and `undefined` outside a rule (a document's
+ * own lines, or no document). `showExamples` is whether example results are on for the file, as
+ * the row's words show only then.
+ */
+export type CursorKey = 'rule' | 'ruleWithExamples';
+
+export function cursorKey(
+  documents: readonly ListedDocument[],
+  line: number,
+  character: number,
+  showExamples: boolean,
+): CursorKey | undefined {
+  const rule = ruleAtCursor(documents, line, character)?.rule;
+  if (rule === undefined) {
+    return undefined;
+  }
+  return showExamples && rule.examples !== undefined ? 'ruleWithExamples' : 'rule';
+}

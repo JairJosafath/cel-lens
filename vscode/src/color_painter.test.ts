@@ -19,8 +19,10 @@ import {
   reset,
   scrollEditor,
   settingUpdates,
+  memento,
   settings,
   visibleEditors,
+  window,
 } from '../test/vscode';
 import { celColors } from './cel_styles';
 import {
@@ -29,6 +31,7 @@ import {
   REPAINT_DELAY_MS,
   chooseColorStyle,
 } from './color_painter';
+import { toggleColors } from './toggle_colors';
 
 const CRD = [
   'x-kubernetes-validations:',
@@ -313,6 +316,24 @@ describe('ColorPainter', () => {
 
     expect(old.every((type) => type.disposed)).toBe(true);
     expect(decorationTypes).toEqual(old);
+  });
+
+  it('clears the decorations at once when Toggle Colors turns the colors off, and paints them again when it turns them on', async () => {
+    const editor = yamlEditor();
+    new ColorPainter();
+    const state = memento();
+    expect(colorsOf(editor).length).toBeGreaterThan(0);
+
+    // VS Code applies the write and tells the listeners; the stand-in only records it.
+    await toggleColors(state, window.createOutputChannel('cel-lens'));
+    settings.set('cel-lens.colorStyle', settingUpdates.at(-1)?.value);
+    changeConfiguration('cel-lens.colorStyle');
+    expect(colorsOf(editor)).toEqual([]);
+
+    await toggleColors(state, window.createOutputChannel('cel-lens'));
+    settings.set('cel-lens.colorStyle', settingUpdates.at(-1)?.value);
+    changeConfiguration('cel-lens.colorStyle');
+    expect(colorsOf(editor)).toContain(celColors('cel', 'dark').variable);
   });
 
   it('colors a Kyverno policy only while kyverno is in cel-lens.experimental', () => {

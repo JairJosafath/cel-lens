@@ -16,10 +16,11 @@ import {
   settings,
   shownDocuments,
   shownErrors,
+  statusBarMessages,
   visibleEditors,
   window,
 } from '../test/vscode';
-import { listValues, showRule } from './rule_commands';
+import { listValues, ruleArgument, showRule } from './rule_commands';
 
 const URI = 'file:///workspace/crd.yaml';
 const CELLENS = 'file:///workspace/.cellens';
@@ -253,4 +254,54 @@ describe('listValues', () => {
     ]);
     expect(channel.shown).toBe(true);
   });
+});
+
+describe('ruleArgument', () => {
+  afterEach(reset);
+
+  const LOCATION = { uri: URI, range: RULE };
+
+  it('leaves a location as it is, from the line or the view, and looks nothing up', () => {
+    const atCursor = vi.fn(() => undefined);
+
+    expect(ruleArgument(LOCATION, atCursor)).toBe(LOCATION);
+    expect(atCursor).not.toHaveBeenCalled();
+    expect(statusBarMessages).toEqual([]);
+  });
+
+  it('looks up the cursor of the editor of the URI it is given, not the active one (review of #48)', () => {
+    const asked: (string | undefined)[] = [];
+
+    ruleArgument(Uri.parse(URI), (uri) => {
+      asked.push(uri);
+      return LOCATION;
+    });
+    ruleArgument(undefined, (uri) => {
+      asked.push(uri);
+      return LOCATION;
+    });
+
+    expect(asked).toEqual([URI, undefined]);
+  });
+
+  it.each([
+    ['an editor URI, from a menu', Uri.parse(URI)],
+    ['nothing, from the palette', undefined],
+  ])('looks up the rule at the cursor when it is given %s', (_name, argument) => {
+    expect(ruleArgument(argument, () => LOCATION)).toBe(LOCATION);
+    expect(statusBarMessages).toEqual([]);
+  });
+
+  it.each([
+    ['an editor URI', Uri.parse(URI)],
+    ['nothing', undefined],
+  ])(
+    'says in the status bar for 3 seconds that the cursor is in no rule, given %s',
+    (_name, argument) => {
+      expect(ruleArgument(argument, () => undefined)).toBeUndefined();
+      expect(statusBarMessages).toEqual([
+        { text: 'cel-lens: the cursor is in no rule', hideAfterMs: 3000 },
+      ]);
+    },
+  );
 });

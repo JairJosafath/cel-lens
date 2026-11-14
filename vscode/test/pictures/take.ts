@@ -2,10 +2,12 @@
 //
 // Builds the extension, installs it in openvscode-server (a VS Code served to a
 // browser), opens the fixtures of this folder in headless Chromium driven by
-// Playwright, and writes six PNGs and four GIFs into images/. Not part of
+// Playwright, and writes the PNGs and GIFs of the README into images/. Not part of
 // `make check`: it fetches the server and Chromium, so it needs a network, and it
 // is run on purpose. The engine is the pinned one: `npm run engine` puts it in bin/.
-// `npm run pictures -- cellens-types` takes only that GIF. `CEL_LENS_CHROME` names a Chrome or
+// `npm run pictures -- cellens-types` takes only that GIF, `npm run pictures -- menus` only
+// actions-menu.png and editor-menu.png. `npm run pictures -- themes` takes six scenes
+// in each of the four default themes into out/pictures/themes/, never images/. `CEL_LENS_CHROME` names a Chrome or
 // Chromium to run in place of the one Playwright downloads.
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -70,7 +72,7 @@ const GAVE_UP_PICTURE = 'out/pictures/gave-up.png';
 /** The pictures asked for on the command line, such as `cellens-types`; none means all of them. */
 const ONLY = process.argv.slice(2);
 /** The names `npm run pictures --` takes: the pictures that can be taken alone. */
-const TAKEN_ALONE = ['cellens-types', 'rule-view'];
+const TAKEN_ALONE = ['cellens-types', 'rule-view', 'menus', 'themes'];
 
 const CRD = 'widget_crd.yaml';
 const POLICY = 'pod_policy.yaml';
@@ -89,6 +91,8 @@ const LIMIT_EXAMPLES: readonly (readonly [string, string])[] = [
   ['big', 'big.yaml'],
 ];
 const EXAMPLES_FOLDER = 'config/samples';
+/** A Pod the policy of POLICY allows, in the workspace only for the theme pictures' rule view: its rules then show the passing state. */
+const POD_SAMPLE: readonly [string, string] = ['pod_sample.yaml', 'pod.yaml'];
 /** A ValidatingAdmissionPolicy, which is in the workspace from the start (quick open does not find a file made later), and its bindings, its param and the Deployments it is run on, which are there only for its picture. */
 const DEPLOY_POLICY = 'deploy_policy.yaml';
 const DEPLOY_FILES: readonly (readonly [string, string])[] = [
@@ -109,6 +113,17 @@ const RULE_VIEW_WIDER_PX = 260;
 const RULE_VIEW_SELECTED = 'a widget runs at least one copy';
 /** The documents of the view that are opened for `rule-view.png`, besides the CRD the cursor is in. */
 const RULE_VIEW_OPEN = ['limits.example.com', 'no-latest-tag'];
+
+/** The four default themes of `npm run pictures -- themes`: the name in a file, the theme's id, and the class its workbench has. */
+const THEMES = [
+  { name: 'light', id: 'Default Light Modern', workbench: 'vs' },
+  { name: 'dark', id: 'Default Dark Modern', workbench: 'vs-dark' },
+  { name: 'hc-dark', id: 'Default High Contrast', workbench: 'hc-black' },
+  { name: 'hc-light', id: 'Default High Contrast Light', workbench: 'hc-light' },
+] as const;
+type ThemeRun = (typeof THEMES)[number];
+/** Where the theme pictures are written: outside images/, and ignored by git. */
+const THEMES_OUT = 'out/pictures/themes';
 const EXAMPLE_WARNINGS = 2;
 
 const QUICK_SUGGESTIONS_OFF = { other: 'off', comments: 'off', strings: 'off' };
@@ -684,6 +699,14 @@ async function save(name: string, bytes: Uint8Array): Promise<void> {
   log(`wrote images/${name} (${String(bytes.length)} bytes)`);
 }
 
+/** Writes a theme picture, `<scene>-<theme>.png`, to out/pictures/themes/. */
+async function saveTheme(scene: string, theme: ThemeRun, bytes: Uint8Array): Promise<void> {
+  const file = `${scene}-${theme.name}.png`;
+  await mkdir(join(ROOT, THEMES_OUT), { recursive: true });
+  await writeFile(join(ROOT, THEMES_OUT, file), bytes);
+  log(`wrote ${THEMES_OUT}/${file} (${String(bytes.length)} bytes)`);
+}
+
 /**
  * Keeps a picture of the page when the script stops, and says where. Never writes through
  * `save()` and never throws: the error that stopped the script stays the one reported.
@@ -717,7 +740,7 @@ async function prepare(page: Page): Promise<void> {
   await waitForState(page.locator('.monaco-dialog-box'), 'the trust dialog to close', 'hidden');
   await page.keyboard.press('Control+k');
   await page.keyboard.press('Control+w');
-  await hideSideBar(page, '.part.sidebar', 'View: Close Primary Side Bar', 'primary side bar');
+  await hidePrimarySideBar(page);
   await hideSideBar(
     page,
     '.part.auxiliarybar',
@@ -726,6 +749,11 @@ async function prepare(page: Page): Promise<void> {
   );
   await expectSideBarHidden(page, '.part.sidebar', 'primary side bar');
   await expectSideBarHidden(page, '.part.auxiliarybar', 'secondary side bar');
+}
+
+/** Hides the primary side bar, as prepare() does: the theme pictures hide it again after the rule view. */
+async function hidePrimarySideBar(page: Page): Promise<void> {
+  await hideSideBar(page, '.part.sidebar', 'View: Close Primary Side Bar', 'primary side bar');
 }
 
 /** The page expression that is true when the side bar in `part` is off screen. */
@@ -1055,18 +1083,27 @@ async function takeCellensTypes(page: Page, workspace: string): Promise<void> {
  * bar: the documents of the workspace with their rules, one rule that does not compile, one whose
  * example is wrong, rules that pass, and the rule the cursor is in selected by following the
  * editor. The activity bar is the one picture that shows it; the examples come and go with it, as
- * with the example results pictures.
+ * with the example results pictures. With a theme, for the theme pictures, a Pod the policy allows
+ * comes too, so a rule shows each of the four states: error, warning, pass and check.
  */
-async function takeRuleView(page: Page, workspace: string): Promise<void> {
+async function takeRuleView(page: Page, workspace: string, theme?: ThemeRun): Promise<void> {
   await mkdir(join(workspace, EXAMPLES_FOLDER), { recursive: true });
   for (const [fixture, file] of LIMIT_EXAMPLES) {
     await mkdir(dirname(join(workspace, EXAMPLES_FOLDER, file)), { recursive: true });
     await cp(join(FIXTURES, `limit_${fixture}.yaml`), join(workspace, EXAMPLES_FOLDER, file));
   }
+  if (theme !== undefined) {
+    await cp(join(FIXTURES, POD_SAMPLE[0]), join(workspace, EXAMPLES_FOLDER, POD_SAMPLE[1]));
+  }
   const settings = join(workspace, '.vscode/settings.json');
+  const themed = theme === undefined ? {} : { 'workbench.colorTheme': theme.id };
   await writeFile(
     settings,
-    JSON.stringify({ ...SETTINGS, 'workbench.activityBar.location': 'default' }, null, 2),
+    JSON.stringify(
+      { ...SETTINGS, ...themed, 'workbench.activityBar.location': 'default' },
+      null,
+      2,
+    ),
   );
   await startPicture(page, CRD);
   await page.keyboard.press('Control+g');
@@ -1097,16 +1134,26 @@ async function takeRuleView(page: Page, workspace: string): Promise<void> {
     'the badge on the icon of the cel-lens view',
   );
   // The documents that show the other states open; the rows between are left closed.
+  // A row the view kept open from an earlier picture (the theme pictures take the view four times)
+  // stays open: its twistie would close it.
   for (const name of RULE_VIEW_OPEN) {
-    await clickWhenReady(
-      rows.filter({ hasText: name }).first().locator('.monaco-tl-twistie'),
-      `the row of ${name} to open`,
-    );
+    const row = rows.filter({ hasText: name }).first();
+    await waitForState(row, `the view to list ${name}`);
+    const closed = row.locator(':scope[aria-expanded="false"]');
+    if ((await closed.count()) > 0) {
+      await clickWhenReady(closed.locator('.monaco-tl-twistie'), `the row of ${name} to open`);
+    }
   }
   await waitForState(
     rows.filter({ hasText: 'refuses 1 example it should allow' }).first(),
     'the view to list a rule with a wrong example',
   );
+  if (theme !== undefined) {
+    await waitForState(
+      rows.filter({ hasText: /\d+ examples? pass/ }).first(),
+      'the view to list a rule whose examples pass',
+    );
+  }
   // The cursor moves into the rule that does not compile, and the view follows it.
   const wrong = await pointAt(page, 'self.replica > 0', 'replica ');
   await page.mouse.click(wrong.x, wrong.y);
@@ -1115,11 +1162,17 @@ async function takeRuleView(page: Page, workspace: string): Promise<void> {
     `the view to select ${RULE_VIEW_SELECTED} by following the editor`,
   );
   await parkMouse(page);
-  await save('rule-view.png', await screenshotPage(page, 'rule-view.png'));
-  await writeFile(settings, JSON.stringify(SETTINGS, null, 2));
+  const picture = await screenshotPage(page, 'rule-view.png');
+  if (theme === undefined) {
+    await save('rule-view.png', picture);
+  } else {
+    await saveTheme('rule-view', theme, picture);
+  }
+  await writeFile(settings, JSON.stringify({ ...SETTINGS, ...themed }, null, 2));
   for (const [, file] of LIMIT_EXAMPLES) {
     await rm(join(workspace, EXAMPLES_FOLDER, file));
   }
+  await rm(join(workspace, EXAMPLES_FOLDER, POD_SAMPLE[1]), { force: true });
 }
 
 /**
@@ -1230,6 +1283,210 @@ async function takePolicyResults(page: Page, workspace: string): Promise<void> {
   }
 }
 
+/** Waits until the workbench has the theme's class: the theme setting was applied. */
+async function waitForTheme(page: Page, theme: ThemeRun): Promise<void> {
+  await waitForExpression(
+    page,
+    `document.querySelector('.monaco-workbench')?.classList.contains(${JSON.stringify(theme.workbench)}) === true`,
+    `the workbench to switch to ${theme.id}`,
+  );
+}
+
+/** Runs a command from the palette by its title, such as `cel-lens: Get Started`. */
+async function runFromPalette(page: Page, title: string): Promise<void> {
+  await page.keyboard.press('F1');
+  await page.keyboard.type(title);
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row.focused', { hasText: title }).first(),
+    `the palette to list ${title}`,
+  );
+  await page.keyboard.press('Enter');
+  await waitForQuickInputClosed(page);
+}
+
+/** The line of the CRD that the theme pictures show at the top of the editor. */
+const THEME_CRD_TOP_LINE = 17;
+
+/**
+ * Opens the CRD with its colors and the line above each rule, the cursor in the rule that has a
+ * problem, as `picture` shows it. Going to a line centers it, and where the top line then falls depends on whether the lines above
+ * the rules were drawn before the scroll or after: the theme after the first finds them drawn, and
+ * its top line cut. A line the cursor moves up to from below the top of the editor is put whole
+ * at its top instead; so the cursor goes to the last rule (which shows the lines above the rules),
+ * up to THEME_CRD_TOP_LINE line by line, and down to the rule with the problem, and the same lines
+ * show in every theme.
+ */
+async function showCrdRules(page: Page, picture: string): Promise<void> {
+  const lines = (await readFile(join(FIXTURES, CRD), 'utf8')).split('\n');
+  await startPicture(page, CRD);
+  await page.keyboard.press('Control+g');
+  await page.keyboard.type(String(lines.length - 1));
+  await page.keyboard.press('Enter');
+  await waitForQuickInputClosed(page);
+  await waitForCursorLineIs(page, await readLastRuleLine());
+  await waitForEngine(page);
+  await waitForLensLine(page, '1 problem');
+  for (let line = lines.length - 1; line > THEME_CRD_TOP_LINE; line -= 1) {
+    await page.keyboard.press('ArrowUp');
+  }
+  await waitForCursorLineIs(page, lines[THEME_CRD_TOP_LINE - 1] ?? '');
+  // Down, not with go-to-line, which centers the line even when it shows.
+  for (let line = THEME_CRD_TOP_LINE; line < RULE_VIEW_LINE; line += 1) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await waitForCursorLine(page, '- rule: self.replica');
+  await showWholeLines(page, picture);
+  await parkMouse(page);
+}
+
+/** The CRD with its colors and the line above each rule, in a theme. */
+async function takeThemeCrd(page: Page, theme: ThemeRun): Promise<void> {
+  await showCrdRules(page, `crd-${theme.name}.png`);
+  await saveTheme('crd', theme, await screenshotPage(page, `crd-${theme.name}.png`));
+}
+
+/** The reason of the wrong field, shown in its hover, with the squiggle under the field. */
+async function takeThemeProblem(page: Page, theme: ThemeRun): Promise<void> {
+  await waitForState(
+    page.locator('.monaco-editor .squiggly-error').first(),
+    'the editor to underline the wrong field',
+    'visible',
+    60_000,
+  );
+  const wrong = await pointAt(page, 'self.replica > 0', 'replica ');
+  await page.mouse.move(wrong.x - 20, wrong.y - 60);
+  await page.mouse.move(wrong.x, wrong.y, { steps: 6 });
+  await waitForHover(page);
+  await saveTheme(
+    'problem-hover',
+    theme,
+    await screenshotPage(page, `problem-hover-${theme.name}.png`),
+  );
+  await parkMouse(page);
+}
+
+/** The status bar menu, opened by a click on the status bar item; gives the picture, the menu closed again. */
+async function takeStatusMenu(page: Page, picture: string): Promise<Uint8Array> {
+  await clickWhenReady(
+    page.locator('.statusbar-item', { hasText: /K8s \d/ }).first(),
+    'the status bar item with the Kubernetes version to be clickable',
+  );
+  await waitForState(
+    page.locator('.quick-input-list .monaco-list-row', { hasText: 'Kubernetes version' }).first(),
+    'the status bar menu to list Kubernetes version',
+  );
+  await waitForWidgetShown(page, '.quick-input-widget', 'the status bar menu');
+  const bytes = await screenshotPage(page, picture);
+  await page.keyboard.press('Escape');
+  await waitForQuickInputClosed(page);
+  return bytes;
+}
+
+/**
+ * The editor's cel-lens submenu, opened by a right click on a rule. The engine's list of the file
+ * sets the keys the submenu's entries wait for, so a menu that opens before it has them is closed
+ * and opened again, a few times. Gives the picture, the menus closed again.
+ */
+async function takeEditorMenu(page: Page, picture: string): Promise<Uint8Array> {
+  const rule = await pointAt(page, 'self.replicas >= self.minReplicas', 'replicas ');
+  await page.mouse.click(rule.x, rule.y);
+  for (let attempt = 0; ; attempt += 1) {
+    await page.mouse.click(rule.x, rule.y, { button: 'right' });
+    const entry = page.locator('.monaco-menu .action-label', { hasText: /^cel-lens$/ }).first();
+    await waitForState(entry, 'the editor menu to have the cel-lens submenu');
+    await clickWhenReady(entry, 'the cel-lens entry of the editor menu to open its submenu');
+    const shown = page
+      .locator('.monaco-submenu .action-label', { hasText: 'Show Problems' })
+      .first();
+    try {
+      await waitForState(shown, 'the cel-lens submenu to list Show Problems', 'visible', 5_000);
+      break;
+    } catch (error: unknown) {
+      if (attempt >= 5) {
+        throw error;
+      }
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+    }
+  }
+  const bytes = await screenshotPage(page, picture);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await waitForState(page.locator('.monaco-menu').first(), 'the menus to close', 'hidden');
+  return bytes;
+}
+
+/**
+ * actions-menu.png and editor-menu.png, the README's pictures of where to find everything: the
+ * status bar menu open over the CRD, and the editor's cel-lens submenu open at a rule.
+ */
+async function takeMenus(page: Page): Promise<void> {
+  await showCrdRules(page, 'actions-menu.png');
+  await expectCleanStart(page, 'actions-menu.png', { problems: 1, ready: '1 problem' });
+  await save('actions-menu.png', await takeStatusMenu(page, 'actions-menu.png'));
+  await save('editor-menu.png', await takeEditorMenu(page, 'editor-menu.png'));
+}
+
+/** The first step of the walkthrough, opened by Get Started in the palette. */
+async function takeThemeWalkthrough(page: Page, theme: ThemeRun): Promise<void> {
+  await closeAllEditors(page);
+  await runFromPalette(page, 'cel-lens: Get Started');
+  await waitForState(
+    page.locator('.gettingStartedContainer', { hasText: 'Open a sample CRD' }).first(),
+    'the walkthrough to show its first step',
+    'visible',
+    60_000,
+  );
+  // The step's picture is an SVG drawn in a webview, which loads after the step shows.
+  await waitForState(
+    page
+      .frameLocator('.getting-started-media iframe.webview')
+      .frameLocator('#active-frame')
+      .locator('svg')
+      .first(),
+    'the walkthrough to show the picture of its first step',
+    'visible',
+    60_000,
+  );
+  await parkMouse(page);
+  await saveTheme(
+    'walkthrough',
+    theme,
+    await screenshotPage(page, `walkthrough-${theme.name}.png`),
+  );
+  await closeAllEditors(page);
+}
+
+/**
+ * `npm run pictures -- themes`: six scenes in each of the four default themes, written to
+ * out/pictures/themes/<scene>-<theme>.png: a CRD with its colors and lines, a problem with its
+ * hover, the rule view with a rule in each state, the status bar menu, the editor's submenu and the
+ * walkthrough's first step. The theme is changed through the workspace's settings, as a person
+ * changes it. Nothing goes to images/.
+ */
+async function takeThemes(page: Page, workspace: string): Promise<void> {
+  const settings = join(workspace, '.vscode/settings.json');
+  for (const theme of THEMES) {
+    await writeFile(
+      settings,
+      JSON.stringify({ ...SETTINGS, 'workbench.colorTheme': theme.id }, null, 2),
+    );
+    await waitForTheme(page, theme);
+    await takeThemeCrd(page, theme);
+    await takeThemeProblem(page, theme);
+    await saveTheme(
+      'status-menu',
+      theme,
+      await takeStatusMenu(page, `status-menu-${theme.name}.png`),
+    );
+    await saveTheme('submenu', theme, await takeEditorMenu(page, `submenu-${theme.name}.png`));
+    await takeRuleView(page, workspace, theme);
+    await hidePrimarySideBar(page);
+    await takeThemeWalkthrough(page, theme);
+  }
+  await writeFile(settings, JSON.stringify(SETTINGS, null, 2));
+}
+
 async function takePictures(page: Page, workspace: string): Promise<void> {
   await prepare(page);
   if (ONLY.length > 0) {
@@ -1240,6 +1497,12 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
     }
     if (ONLY.includes('rule-view')) {
       await takeRuleView(page, workspace);
+    }
+    if (ONLY.includes('menus')) {
+      await takeMenus(page);
+    }
+    if (ONLY.includes('themes')) {
+      await takeThemes(page, workspace);
     }
     return;
   }
@@ -1372,6 +1635,7 @@ async function takePictures(page: Page, workspace: string): Promise<void> {
   // The engine's edit created an empty .cellens on disk, which the next picture must not find.
   await rm(join(workspace, '.cellens'), { force: true });
   await takeGiveType(page);
+  await takeMenus(page);
   await takeRuleView(page, workspace);
 }
 

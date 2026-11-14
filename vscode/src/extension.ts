@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import { SHOW_ACTIONS_COMMAND, SHOW_LOGS_COMMAND } from './actions_menu';
 import { ColorPainter, chooseColorStyle } from './color_painter';
-import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
+import { CHOOSE_COLOR_STYLE_COMMAND, TOGGLE_COLORS_COMMAND } from './color_style';
 import { ExampleEditors, ExampleNotes } from './example_editor';
 import {
   EXAMPLE_RESULTS_SETTING_NAME,
@@ -12,13 +12,26 @@ import {
 import { resultsUi } from './example_results_commands';
 import { ExampleResultsFlow } from './example_results_flow';
 import { toggleExampleResults } from './example_results_setting';
+import {
+  FIX_SAMPLE_PROBLEM_COMMAND,
+  GET_STARTED_COMMAND,
+  GetStarted,
+  OPEN_SAMPLE_COMMAND,
+  openWalkthrough,
+} from './get_started';
 import { INLINE_INFO_SETTING_NAME, TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
 import { toggleInlineInfo } from './inline_info_setting';
+import { EXPERIMENTAL_SETTING_NAME } from './experimental';
+import { syncCellensTypesKey } from './experimental_feature';
 import { offerLegacyColorStyleMove } from './legacy_color_style';
-import { PICK_VERSION_COMMAND, RESTART_SERVER_COMMAND } from './kubernetes_version';
+import {
+  PICK_VERSION_COMMAND,
+  RESTART_SERVER_COMMAND,
+  type ServerState,
+} from './kubernetes_version';
 import { FOLLOW_EDITOR_SETTING } from './rule_follow';
 import { RULE_LIST_CHANGED_NOTIFICATION } from './rule_list';
-import { listValues, showRule } from './rule_commands';
+import { listValues, ruleArgument, showRule } from './rule_commands';
 import { LIST_VALUES_COMMAND, SHOW_RULE_COMMAND } from './rule_parts';
 import {
   FOLLOW_EDITOR_COMMAND,
@@ -29,6 +42,7 @@ import {
   SHOW_RULE_PROBLEMS_COMMAND,
   STOP_FOLLOWING_COMMAND,
 } from './rule_view';
+import { REVEAL_RULE_COMMAND } from './rule_view_state';
 import { ServerController } from './server_controller';
 import { giveValueType, typeUi } from './type_commands';
 import { TypeFlow } from './type_flow';
@@ -38,6 +52,9 @@ import {
   GIVE_VALUE_TYPE_COMMAND,
   REMOVE_TYPE_COMMAND,
 } from './value_types';
+import { toggleColors } from './toggle_colors';
+import { TOGGLE_VALUE_TYPES_COMMAND, VALUE_TYPES_SETTING_NAME } from './value_visibility';
+import { toggleValueTypes } from './value_visibility_setting';
 import { VersionStatus } from './version_status';
 
 let controller: ServerController | undefined;
@@ -49,19 +66,21 @@ let controller: ServerController | undefined;
  * background, so activation returns at once.
  */
 export function activate(
-  context: Pick<vscode.ExtensionContext, 'subscriptions' | 'extensionPath'> & {
+  context: Pick<vscode.ExtensionContext, 'subscriptions' | 'extensionPath' | 'globalStorageUri'> & {
     readonly globalState: Pick<vscode.Memento, 'get' | 'update'>;
     readonly workspaceState: Pick<vscode.Memento, 'get' | 'update'>;
   },
 ): void {
   const log = vscode.window.createOutputChannel('cel-lens', { log: true });
   const status = new VersionStatus(log);
+  let engineState: ServerState = { kind: 'stopped' };
   // The server and the view need each other: the server says when the engine starts and stops,
   // the view asks it for the list. Both are made before the engine starts, so neither is early.
   const server = new ServerController(
     log,
     context.extensionPath,
     (state) => {
+      engineState = state;
       status.setState(state);
       view.engineState(state);
     },
@@ -94,9 +113,12 @@ export function activate(
     resultsUi(log),
     log,
   );
+  // The walkthrough's sample; it writes and opens nothing until a step's button runs.
+  const getStarted = new GetStarted(context.globalStorageUri, () => engineState, log);
   context.subscriptions.push(
     log,
     server,
+    getStarted,
     status,
     view,
     examples,
@@ -106,9 +128,14 @@ export function activate(
       if (event.affectsConfiguration(`cel-lens.${FOLLOW_EDITOR_SETTING}`)) {
         view.followEditorChanged();
       }
+      if (event.affectsConfiguration(EXPERIMENTAL_SETTING_NAME)) {
+        // The palette shows Toggle Value Types only while cellens-types is on.
+        void syncCellensTypesKey();
+      }
       if (
         event.affectsConfiguration(INLINE_INFO_SETTING_NAME) ||
-        event.affectsConfiguration(EXAMPLE_RESULTS_SETTING_NAME)
+        event.affectsConfiguration(EXAMPLE_RESULTS_SETTING_NAME) ||
+        event.affectsConfiguration(VALUE_TYPES_SETTING_NAME)
       ) {
         // The rows show or hide their example words by folder, and the engine's states follow its switch.
         void server.sendLineSettings().then(() => {
@@ -117,7 +144,7 @@ export function activate(
         });
       } else if (
         event.affectsConfiguration('cel-lens.kubernetesVersion') ||
-        event.affectsConfiguration('cel-lens.experimental')
+        event.affectsConfiguration(EXPERIMENTAL_SETTING_NAME)
       ) {
         void server.sendSettings().then(() => {
           view.redraw();
@@ -137,6 +164,9 @@ export function activate(
     vscode.commands.registerCommand(CHOOSE_COLOR_STYLE_COMMAND, async () => {
       await chooseColorStyle();
     }),
+    vscode.commands.registerCommand(TOGGLE_COLORS_COMMAND, async () => {
+      await toggleColors(context.globalState, log);
+    }),
     vscode.commands.registerCommand(RESTART_SERVER_COMMAND, async () => {
       await server.restart();
     }),
@@ -146,12 +176,23 @@ export function activate(
     vscode.commands.registerCommand(TOGGLE_EXAMPLE_RESULTS_COMMAND, async () => {
       await toggleExampleResults(log);
     }),
-    // The parts of the line above each rule; the engine names them, so they have no palette entry.
-    vscode.commands.registerCommand(SHOW_RULE_COMMAND, async (location: unknown) => {
-      await showRule(location, log);
+    vscode.commands.registerCommand(TOGGLE_VALUE_TYPES_COMMAND, async () => {
+      await toggleValueTypes(log);
     }),
-    vscode.commands.registerCommand(SHOW_EXAMPLE_RESULTS_COMMAND, async (location: unknown) => {
-      await results.show(location);
+    // The parts of the line above each rule; the engine names them, so they have no palette entry.
+    // The line and the view give a location; the editor's menu gives its URI, and the palette
+    // nothing, so the rule at the cursor is looked up again now.
+    vscode.commands.registerCommand(SHOW_RULE_COMMAND, async (argument: unknown) => {
+      const location = ruleArgument(argument, (uri) => view.locationAtCursor(uri));
+      if (location !== undefined) {
+        await showRule(location, log);
+      }
+    }),
+    vscode.commands.registerCommand(SHOW_EXAMPLE_RESULTS_COMMAND, async (argument: unknown) => {
+      const location = ruleArgument(argument, (uri) => view.locationAtCursor(uri));
+      if (location !== undefined) {
+        await results.show(location);
+      }
     }),
     vscode.commands.registerCommand(LIST_VALUES_COMMAND, async (more: unknown) => {
       await listValues(more, log);
@@ -165,6 +206,10 @@ export function activate(
     vscode.commands.registerCommand(REMOVE_TYPE_COMMAND, async (value: unknown) => {
       await types.removeType(value);
     }),
+    // The editor's submenu: the rule at the cursor, in the view.
+    vscode.commands.registerCommand(REVEAL_RULE_COMMAND, async () => {
+      await view.revealAtCursor();
+    }),
     // The context menu of a rule in the view: the line's own commands, run for the rule it was opened on.
     vscode.commands.registerCommand(SHOW_RULE_PROBLEMS_COMMAND, async (node: unknown) => {
       await view.showProblems(node);
@@ -173,11 +218,14 @@ export function activate(
       await view.showExampleResults(node);
     }),
     // The view's title menu: the filter, and following the editor.
+    // They are in the palette too: run from there, they open the view, so the change is seen.
     vscode.commands.registerCommand(SHOW_PROBLEMS_ONLY_COMMAND, () => {
       view.setProblemsOnly(true);
+      view.showView();
     }),
     vscode.commands.registerCommand(SHOW_ALL_RULES_COMMAND, () => {
       view.setProblemsOnly(false);
+      view.showView();
     }),
     vscode.commands.registerCommand(FOLLOW_EDITOR_COMMAND, async () => {
       await view.setFollowEditor(true);
@@ -189,7 +237,18 @@ export function activate(
     vscode.commands.registerCommand(GIVE_VALUE_TYPE_COMMAND, async () => {
       await giveValueType(types, ui, log);
     }),
+    // The walkthrough, and its first two steps' buttons.
+    vscode.commands.registerCommand(GET_STARTED_COMMAND, async () => {
+      await openWalkthrough();
+    }),
+    vscode.commands.registerCommand(OPEN_SAMPLE_COMMAND, async () => {
+      await getStarted.openSample();
+    }),
+    vscode.commands.registerCommand(FIX_SAMPLE_PROBLEM_COMMAND, async () => {
+      await getStarted.fixProblem();
+    }),
   );
+  void syncCellensTypesKey();
   void server.start();
   void offerLegacyColorStyleMove(context.globalState, log);
 }

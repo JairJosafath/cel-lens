@@ -37,11 +37,6 @@ export function exampleResultsInForce(values: ScopedValues | undefined): boolean
   return settingInForce(values, DEFAULT_EXAMPLE_RESULTS);
 }
 
-/** The status bar menu entry, such as `Example results: on`. */
-export function exampleResultsLabel(on: boolean): string {
-  return `Example results: ${on ? 'on' : 'off'}`;
-}
-
 /** The picker's title, naming the rule by its line from 1, such as `Example results of the rule on line 16`. */
 export function resultsTitle(line: number): string {
   return `Example results of the rule on line ${String(line)}`;

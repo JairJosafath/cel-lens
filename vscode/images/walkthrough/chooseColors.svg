@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" width="560" height="300" role="img" aria-labelledby="title">
+  <title id="title">The color style picker: CEL, the current style, then Classic and Off, above a rule colored in the CEL style</title>
+  <clipPath id="inside"><rect x="1" y="1" width="558" height="298" rx="6"/></clipPath>
+  <rect fill="var(--vscode-editor-background)" stroke="var(--vscode-contrastBorder, transparent)" x="0.5" y="0.5" width="559" height="299" rx="6"/>
+  <g clip-path="url(#inside)">
+    <rect fill="var(--vscode-quickInput-background)" stroke="var(--vscode-contrastBorder, transparent)" x="60.5" y="12.5" width="440" height="196" rx="6"/>
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="12px" text-anchor="middle" x="280" y="33">Color style for CEL</text>
+    <rect fill="var(--vscode-input-background)" stroke="var(--vscode-focusBorder)" x="72.5" y="44.5" width="416" height="26" rx="2"/>
+    <text fill="var(--vscode-input-placeholderForeground)" font-family="var(--vscode-font-family)" font-size="13px" x="80" y="62">Pick how cel-lens colors the parts of a CEL expression</text>
+
+    <rect fill="var(--vscode-quickInputList-focusBackground, transparent)" stroke="var(--vscode-contrastActiveBorder, transparent)" x="68.5" y="78.5" width="424" height="40" rx="3"/>
+    <text fill="var(--vscode-quickInputList-focusForeground, var(--vscode-quickInput-foreground))" font-family="var(--vscode-font-family)" font-size="13px" x="84" y="95">CEL</text>
+    <path fill="none" stroke="var(--vscode-quickInputList-focusForeground, var(--vscode-quickInput-foreground))" stroke-width="1.5" d="M118 90.5l3 3l6 -6.5"/>
+    <text fill="var(--vscode-quickInputList-focusForeground, var(--vscode-quickInput-foreground))" font-family="var(--vscode-font-family)" font-size="12px" opacity="0.8" x="132" y="95">current</text>
+    <text fill="var(--vscode-quickInputList-focusForeground, var(--vscode-quickInput-foreground))" font-family="var(--vscode-font-family)" font-size="12px" opacity="0.8" x="84" y="112">Plum and lavender, the hues of the cel-lens logo (the default)</text>
+
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="13px" x="84" y="137">Classic</text>
+    <text fill="var(--vscode-descriptionForeground)" font-family="var(--vscode-font-family)" font-size="12px" x="84" y="154">Warm browns and ambers, close to a plain YAML string</text>
+
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="13px" x="84" y="179">Off</text>
+    <text fill="var(--vscode-descriptionForeground)" font-family="var(--vscode-font-family)" font-size="12px" x="84" y="196">No cel-lens colors; the theme alone colors the YAML</text>
+
+    <text fill="var(--vscode-editorCodeLens-foreground)" font-family="var(--vscode-font-family)" font-size="11px" x="40" y="250">self: Widget.spec · compiles</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="14px" x="40" y="274">- rule: <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">replicas</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&gt;=</tspan> <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">minReplicas</tspan></text>
+  </g>
+</svg>

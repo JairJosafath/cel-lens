@@ -32,6 +32,10 @@ describe('src/dist.ts fetch', { timeout: 60_000 }, () => {
   let directory: string;
   /** What the stand-in release serves, by asset name. */
   let served: Map<string, string>;
+  /** How many more responses for an asset name are cut short before one is served whole. */
+  let cutOff: Map<string, number>;
+  /** The asset names asked for, in order. */
+  let requests: string[];
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'fetch-core-'));
@@ -42,8 +46,23 @@ describe('src/dist.ts fetch', { timeout: 60_000 }, () => {
         .map((name) => `${sha256(`fake ${name}`)}  ${name}\n`)
         .join(''),
     );
+    cutOff = new Map();
+    requests = [];
     server = createServer((request, response) => {
-      const body = served.get((request.url ?? '').slice(1));
+      const name = (request.url ?? '').slice(1);
+      requests.push(name);
+      const body = served.get(name);
+      const cuts = cutOff.get(name) ?? 0;
+      if (body !== undefined && cuts > 0) {
+        // Promise the whole body, send part of it, then drop the connection.
+        cutOff.set(name, cuts - 1);
+        response.writeHead(200, { 'Content-Length': Buffer.byteLength(body) + 10 });
+        response.write(body.slice(0, 3));
+        setTimeout(() => {
+          response.destroy();
+        }, 20);
+        return;
+      }
       response.statusCode = body === undefined ? 404 : 200;
       response.end(body);
     });
@@ -230,6 +249,55 @@ describe('src/dist.ts fetch', { timeout: 60_000 }, () => {
     expect(failure?.code).toBe(1);
     expect(failure?.stderr).toContain('core_windows_arm64.exe: core-version.json pins');
     await expect(access(join(directory, 'out'))).rejects.toThrow();
+  });
+
+  it('retries once a download cut off mid-transfer, and writes the verified binaries (#28)', async () => {
+    cutOff.set('core_linux_amd64', 1);
+
+    const fetched = await fetchCore();
+
+    expect(requests.filter((name) => name === 'core_linux_amd64')).toHaveLength(2);
+    expect(fetched.stderr).toContain(`Download of ${baseUrl}/core_linux_amd64 failed:`);
+    expect(fetched.stderr).toContain('trying again');
+    expect(await readFile(join(directory, 'out', 'linux-x64', 'cel-lens-core'), 'utf8')).toBe(
+      'fake core_linux_amd64',
+    );
+  });
+
+  it('names the URL when a download is cut off twice, after one retry only (#28)', async () => {
+    cutOff.set('checksums.txt', 2);
+
+    const failure = await fetchCore().then(
+      () => undefined,
+      (error: unknown) => error as { stderr: string },
+    );
+
+    expect(failure?.stderr).toContain(`Download of ${baseUrl}/checksums.txt failed:`);
+    expect(failure?.stderr).toContain('cut off');
+    expect(requests.filter((name) => name === 'checksums.txt')).toHaveLength(2);
+  });
+
+  it('does not retry a 404 (#28)', async () => {
+    served.delete('core_linux_amd64');
+
+    await fetchCore().then(
+      () => undefined,
+      () => undefined,
+    );
+
+    expect(requests.filter((name) => name === 'core_linux_amd64')).toHaveLength(1);
+  });
+
+  it('does not retry a checksum mismatch (#28)', async () => {
+    served.set('core_linux_amd64', 'tampered');
+
+    const failure = await fetchCore().then(
+      () => undefined,
+      (error: unknown) => error as { stderr: string },
+    );
+
+    expect(failure?.stderr).toContain('Checksum mismatch for core_linux_amd64');
+    expect(requests.filter((name) => name === 'core_linux_amd64')).toHaveLength(1);
   });
 
   it('fails when an asset cannot be downloaded, and writes nothing', async () => {

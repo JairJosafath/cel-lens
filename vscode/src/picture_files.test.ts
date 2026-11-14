@@ -107,6 +107,8 @@ const PNGS = [
   'completion.png',
   'quick-fix.png',
   'colors.png',
+  'actions-menu.png',
+  'editor-menu.png',
 ];
 const GIFS = ['colors.gif', 'completion.gif', 'give-type.gif', 'cellens-types.gif'];
 const TWO_MEGABYTES = 2 * 1024 * 1024;
@@ -208,11 +210,15 @@ describe('the pictures in images/', () => {
     });
   });
 
-  it("the .vsix takes only images/icon.png and the view's icon of them", () => {
+  it("the .vsix takes only images/icon.png, the view's icon and the walkthrough's pictures of them", () => {
     const ignore = readFileSync('.vscodeignore', 'utf8')
       .split('\n')
       .filter((line) => line.startsWith('!images'));
-    expect(ignore).toEqual(['!images/icon.png', '!images/cel-lens.svg']);
+    expect(ignore).toEqual([
+      '!images/icon.png',
+      '!images/cel-lens.svg',
+      '!images/walkthrough/*.svg',
+    ]);
   });
 });
 
