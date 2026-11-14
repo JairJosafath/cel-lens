@@ -993,6 +993,88 @@ describe('ServerController', () => {
     expect(shown).toEqual([summary, results]);
   });
 
+  it('hides the values a rule reads, and keeps the state and the example part, in a file whose setting turns valueTypes off', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    addWorkspaceFolder('a', { 'cel-lens.valueTypes': false });
+    addWorkspaceFolder('b');
+    await newController().start();
+    const part = (command: string, title: string): Record<string, unknown> => ({
+      range: { start: { line: 15 } },
+      command: { title, command },
+    });
+    const state = part('cel-lens.showRule', 'self: Widget.spec · compiles');
+    const value = part('cel-lens.giveType', 'params: dyn · Give it a type');
+    const more = part('cel-lens.listValues', '+1 more');
+    const example = part('cel-lens.showExampleResults', '3 examples pass');
+    const next = vi.fn(() => [state, value, more, example]);
+
+    const hidden = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/a/policy.yaml') },
+      {},
+      next,
+    );
+    const shown = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/b/policy.yaml') },
+      {},
+      next,
+    );
+
+    expect(hidden).toEqual([state, example]);
+    expect(shown).toEqual([state, value, more, example]);
+  });
+
+  it('drops the example part too when both the values and the example results are off', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    settings.set('cel-lens.valueTypes', false);
+    settings.set('cel-lens.exampleResults', false);
+    await newController().start();
+    const state = {
+      range: { start: { line: 3 } },
+      command: { title: 'self: Widget.spec · compiles', command: 'cel-lens.showRule' },
+    };
+    const value = {
+      range: { start: { line: 3 } },
+      command: { title: 'params: dyn', command: 'cel-lens.giveType' },
+    };
+    const example = {
+      range: { start: { line: 3 } },
+      command: { title: '3 examples pass', command: 'cel-lens.showExampleResults' },
+    };
+
+    const lenses = await provideCodeLenses()(
+      { uri: Uri.parse('file:///workspace/policy.yaml') },
+      {},
+      () => [state, value, example],
+    );
+
+    expect(lenses).toEqual([state]);
+  });
+
+  it('sends a valueTypes change as it sends the inline info one: the same settings to the engine, then the lines again', async () => {
+    settings.set('cel-lens.serverPath', execPath);
+    const controller = newController();
+    await controller.start();
+    visibleEditors.push(new FakeEditor({ languageId: 'yaml', getText: () => '' }));
+    settings.set('cel-lens.valueTypes', false);
+
+    await controller.sendLineSettings();
+
+    expect(client.notifications).toEqual([
+      {
+        method: 'workspace/didChangeConfiguration',
+        params: {
+          settings: {
+            kubernetesVersion: '',
+            experimental: [],
+            inlineInfo: true,
+            exampleResults: true,
+          },
+        },
+      },
+    ]);
+    expect(client.lensRefreshes).toBe(1);
+  });
+
   it('gives no lenses when the engine gives none', async () => {
     settings.set('cel-lens.serverPath', execPath);
     await newController().start();

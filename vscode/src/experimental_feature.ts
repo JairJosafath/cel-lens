@@ -20,6 +20,18 @@ export function featureOn(name: string): boolean {
   return readExperimental().includes(name);
 }
 
+/** The context key that is on while `cellens-types` is listed in `cel-lens.experimental`; a command's `when` clause reads it. */
+export const CELLENS_TYPES_CONTEXT_KEY = 'cel-lens.cellensTypes';
+
+/** Sets the context key `cel-lens.cellensTypes` to whether `cellens-types` is listed now. */
+export async function syncCellensTypesKey(): Promise<void> {
+  await vscode.commands.executeCommand(
+    'setContext',
+    CELLENS_TYPES_CONTEXT_KEY,
+    featureOn(CELLENS_TYPES_FEATURE),
+  );
+}
+
 /** The log a failed write goes to. */
 type SettingLog = Pick<vscode.LogOutputChannel, 'error'>;
 

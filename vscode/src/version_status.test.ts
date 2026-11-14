@@ -2,11 +2,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { RELEASES_PAGE_URL } from './core_releases';
 import {
+  ConfigurationTarget,
+  Uri,
   activeEditor,
   addWorkspaceFolder,
+  emptyWindow,
+  updateFailure,
+  workspaceFileUri,
   changeActiveEditor,
   errorChoice,
   executedCommands,
+  QuickPickItemKind,
   openedUrls,
   quickPicks,
   reset,
@@ -19,9 +25,10 @@ import {
 } from '../test/vscode';
 import { PICK_VERSION_COMMAND, RESTART_SERVER_COMMAND } from './kubernetes_version';
 import { SHOW_ACTIONS_COMMAND, SHOW_LOGS_COMMAND } from './actions_menu';
-import { CHOOSE_COLOR_STYLE_COMMAND } from './color_style';
+import { CHOOSE_COLOR_STYLE_COMMAND, TOGGLE_COLORS_COMMAND } from './color_style';
 import { TOGGLE_EXAMPLE_RESULTS_COMMAND } from './example_results';
 import { TOGGLE_INLINE_INFO_COMMAND } from './inline_info';
+import { TOGGLE_VALUE_TYPES_COMMAND } from './value_visibility';
 import { VersionStatus } from './version_status';
 
 const INFO = { inUse: '1.37', defaultVersion: '1.37', supported: ['1.37', '1.36'] };
@@ -116,7 +123,8 @@ describe('VersionStatus', () => {
     expect(item().visible).toBe(false);
   });
 
-  it('writes the picked version to the workspace setting', async () => {
+  it('writes the picked version to the workspace setting with a folder open', async () => {
+    addWorkspaceFolder('workspace');
     const status = new VersionStatus();
     status.setState(RUNNING);
     quickPicks.next = '1.36';
@@ -125,11 +133,64 @@ describe('VersionStatus', () => {
 
     expect(quickPicks.shown).toHaveLength(1);
     expect(settingUpdates).toEqual([
-      { name: 'cel-lens.kubernetesVersion', value: '1.36', target: 2 },
+      { name: 'cel-lens.kubernetesVersion', value: '1.36', target: ConfigurationTarget.Workspace },
     ]);
   });
 
+  it('writes the picked version to the workspace setting with a workspace file open, even one with no folder (#47)', async () => {
+    workspaceFileUri.value = Uri.parse('file:///home/me/project.code-workspace');
+    const status = new VersionStatus();
+    status.setState(RUNNING);
+    quickPicks.next = '1.36';
+
+    await status.pick();
+
+    expect(settingUpdates).toEqual([
+      { name: 'cel-lens.kubernetesVersion', value: '1.36', target: ConfigurationTarget.Workspace },
+    ]);
+  });
+
+  it('writes the picked version to the user setting in a window with no folder open, where the workspace setting cannot be written (#47)', async () => {
+    emptyWindow.value = true;
+    const status = new VersionStatus();
+    status.setState(RUNNING);
+    quickPicks.next = '1.36';
+
+    await status.pick();
+
+    expect(settingUpdates).toEqual([
+      { name: 'cel-lens.kubernetesVersion', value: '1.36', target: ConfigurationTarget.Global },
+    ]);
+    expect(shownErrors).toEqual([]);
+  });
+
+  it('says once that the version could not be written, with Open Settings, and logs why (#47)', async () => {
+    addWorkspaceFolder('workspace');
+    updateFailure.error = new Error('settings.json has errors');
+    errorChoice.next = 'Open Settings';
+    const log = window.createOutputChannel('cel-lens');
+    const status = new VersionStatus(log);
+    status.setState(RUNNING);
+    quickPicks.next = '1.36';
+
+    await status.pick();
+
+    expect(shownErrors).toEqual([
+      {
+        message:
+          'Could not change cel-lens.kubernetesVersion. Fix any errors in settings.json, then pick the version again.',
+        buttons: ['Open Settings'],
+      },
+    ]);
+    expect(executedCommands).toEqual([
+      { command: 'workbench.action.openSettings', args: ['cel-lens.kubernetesVersion'] },
+    ]);
+    expect(log.lines.join('\n')).toContain('settings.json has errors');
+    expect(settingUpdates).toEqual([]);
+  });
+
   it('clears the workspace setting when the default is picked', async () => {
+    addWorkspaceFolder('workspace');
     const status = new VersionStatus();
     status.setState(RUNNING);
     quickPicks.next = 'Default (1.37)';
@@ -260,8 +321,70 @@ describe('VersionStatus', () => {
     expect(log.lines.filter((line) => line.includes('"1.99"'))).toHaveLength(1);
   });
 
+  describe('its accessible name', () => {
+    it('says the name, the Kubernetes version and what a click does while the engine runs', () => {
+      const status = new VersionStatus();
+      changeActiveEditor('yaml');
+      settings.set('cel-lens.kubernetesVersion', '1.36');
+
+      status.setState(RUNNING);
+
+      expect(item().accessibilityInformation).toEqual({
+        label: 'cel-lens, Kubernetes 1.36, click for actions',
+        role: 'button',
+      });
+    });
+
+    it('follows the version when the setting changes', () => {
+      const status = new VersionStatus();
+      changeActiveEditor('yaml');
+      status.setState(RUNNING);
+      expect(item().accessibilityInformation?.label).toBe(
+        'cel-lens, Kubernetes 1.37, click for actions',
+      );
+
+      settings.set('cel-lens.kubernetesVersion', '1.36');
+      status.refresh();
+
+      expect(item().accessibilityInformation?.label).toBe(
+        'cel-lens, Kubernetes 1.36, click for actions',
+      );
+    });
+
+    it.each([
+      ['failed', { kind: 'failed' }],
+      ['crashed', { kind: 'crashed' }],
+    ] as const)(
+      'says the engine is down in words, and what a click does, when it %s',
+      (_name, state) => {
+        const status = new VersionStatus();
+
+        status.setState(state);
+
+        expect(item().accessibilityInformation).toEqual({
+          label: 'cel-lens engine down, click to restart it or show the logs',
+          role: 'button',
+        });
+      },
+    );
+  });
+
   describe('showActions', () => {
-    it('lists the six actions in order, with the current style, version, inline info and example results', async () => {
+    /** The lines of the menu last shown, as the quick pick got them. */
+    function lines(): { label: string; description?: string; kind?: number; command?: string }[] {
+      return quickPicks.shown[0] as { label: string; description?: string; kind?: number }[];
+    }
+
+    /** One line as a short word: a heading in brackets, an entry as its label and description. */
+    function words(): string[] {
+      return lines().map((line) =>
+        line.kind === QuickPickItemKind.Separator
+          ? `[${line.label}]`
+          : `${line.label}: ${line.description ?? ''}`,
+      );
+    }
+
+    it('lists the settings, the toggles and the engine actions in order, each with its value, with the headings as separators', async () => {
       const status = new VersionStatus();
       status.setState(RUNNING);
       settings.set('cel-lens.colorStyle', 'classic');
@@ -270,73 +393,106 @@ describe('VersionStatus', () => {
       await status.showActions();
 
       expect(quickPicks.shown).toHaveLength(1);
-      expect(quickPicks.shown[0]).toMatchObject([
-        { label: 'Color style', description: 'Classic' },
-        { label: 'Kubernetes version', description: '1.36' },
-        { label: 'Inline info: on' },
-        { label: 'Example results: on' },
-        { label: 'Restart Engine' },
-        { label: 'Show Logs' },
+      expect(words()).toEqual([
+        'Kubernetes version: 1.36',
+        'Color style: Classic',
+        '[In the editor]',
+        'Colors: on',
+        'Inline info: on',
+        'Example results: on',
+        '[Engine]',
+        '$(output) Show Logs: ',
+        '$(debug-restart) Restart Engine: ',
       ]);
     });
 
+    it('asks under the title cel-lens with the placeholder that names a setting, a toggle and an action', async () => {
+      const status = new VersionStatus();
+      status.setState(RUNNING);
+
+      await status.showActions();
+
+      expect(quickPicks.options).toEqual([
+        { title: 'cel-lens', placeHolder: 'Pick a setting, a toggle or an action' },
+      ]);
+    });
+
+    it('has Value types only while cellens-types is in cel-lens.experimental, with its value', async () => {
+      const status = new VersionStatus();
+      status.setState(RUNNING);
+      settings.set('cel-lens.experimental', ['cellens-types']);
+      settings.set('cel-lens.valueTypes', false);
+
+      await status.showActions();
+
+      expect(words()).toContain('Value types: off');
+      expect(words().indexOf('Value types: off')).toBe(words().indexOf('Example results: on') + 1);
+    });
+
+    it('says Colors off, and Color style Off, when the style is off', async () => {
+      const status = new VersionStatus();
+      status.setState(RUNNING);
+      settings.set('cel-lens.colorStyle', 'off');
+
+      await status.showActions();
+
+      expect(words()).toContain('Colors: off');
+      expect(words()).toContain('Color style: Off');
+    });
+
+    it('shows the values of the window when no editor is active', async () => {
+      const status = new VersionStatus();
+      status.setState(RUNNING);
+      settings.set('cel-lens.inlineInfo', false);
+
+      await status.showActions();
+
+      expect(words()).toContain('Inline info: off');
+    });
+
     it.each([
-      ['a', 'Example results: off'],
-      ['b', 'Example results: on'],
+      ['inlineInfo', 'a', 'Inline info: off'],
+      ['inlineInfo', 'b', 'Inline info: on'],
+      ['exampleResults', 'a', 'Example results: off'],
+      ['exampleResults', 'b', 'Example results: on'],
+      ['valueTypes', 'a', 'Value types: off'],
+      ['valueTypes', 'b', 'Value types: on'],
     ])(
-      'shows whether example results show in the active editor folder %s of a two-folder workspace: %s',
-      async (folder, label) => {
+      'shows %s for the active editor folder %s of a two-folder workspace, which turns it off in folder a: %s',
+      async (key, folder, line) => {
         const status = new VersionStatus();
         status.setState(RUNNING);
-        addWorkspaceFolder('a', { 'cel-lens.exampleResults': false });
+        settings.set('cel-lens.experimental', ['cellens-types']);
+        addWorkspaceFolder('a', { [`cel-lens.${key}`]: false });
         addWorkspaceFolder('b');
         activeEditor.uri = `file:///workspace/${folder}/crd.yaml`;
         changeActiveEditor('yaml');
 
         await status.showActions();
 
-        expect(quickPicks.shown[0]?.[3]).toMatchObject({ label });
+        expect(words()).toContain(line);
       },
     );
 
     it.each([
-      ['a', 'Inline info: off'],
-      ['b', 'Inline info: on'],
+      ['a', 'Classic', 'on'],
+      ['b', 'CEL', 'on'],
+      ['c', 'Off', 'off'],
     ])(
-      'shows whether the lines show in the active editor folder %s of a two-folder workspace: %s',
-      async (folder, label) => {
-        const status = new VersionStatus();
-        status.setState(RUNNING);
-        addWorkspaceFolder('a', { 'cel-lens.inlineInfo': false });
-        addWorkspaceFolder('b');
-        activeEditor.uri = `file:///workspace/${folder}/crd.yaml`;
-        changeActiveEditor('yaml');
-
-        await status.showActions();
-
-        expect(quickPicks.shown[0]?.[2]).toMatchObject({ label });
-      },
-    );
-
-    it.each([
-      ['a', 'Classic'],
-      ['b', 'CEL'],
-    ])(
-      'shows the style of the active editor folder %s in a two-folder workspace: %s',
-      async (folder, label) => {
+      'shows the style of the active editor folder %s in a workspace of three folders: %s, and Colors %s',
+      async (folder, label, colors) => {
         const status = new VersionStatus();
         status.setState(RUNNING);
         addWorkspaceFolder('a', { 'cel-lens.colorStyle': 'classic' });
         addWorkspaceFolder('b');
+        addWorkspaceFolder('c', { 'cel-lens.colorStyle': 'off' });
         activeEditor.uri = `file:///workspace/${folder}/crd.yaml`;
         changeActiveEditor('yaml');
 
         await status.showActions();
 
-        expect(quickPicks.shown[0]?.[0]).toMatchObject({
-          label: 'Color style',
-          description: label,
-        });
+        expect(words()).toContain(`Color style: ${label}`);
+        expect(words()).toContain(`Colors: ${colors}`);
       },
     );
 
@@ -358,35 +514,63 @@ describe('VersionStatus', () => {
 
         await status.showActions();
 
-        expect(quickPicks.shown[0]).toContainEqual(
-          expect.objectContaining({ label: 'Kubernetes version', description }),
-        );
+        expect(words()).toContain(`Kubernetes version: ${description}`);
       },
     );
 
     it.each([
       ['failed', { kind: 'failed' }],
       ['crashed', { kind: 'crashed' }],
-    ] as const)('puts Restart Engine and Show Logs first when the engine %s', async (_n, state) => {
-      const status = new VersionStatus();
-      status.setState(state);
+    ] as const)(
+      'puts the Engine group and its heading first when the engine %s',
+      async (_n, state) => {
+        const status = new VersionStatus();
+        status.setState(state);
 
-      await status.showActions();
+        await status.showActions();
 
-      expect(quickPicks.shown[0]).toMatchObject([
-        { label: 'Restart Engine' },
-        { label: 'Show Logs' },
-        { label: 'Color style' },
-        { label: 'Kubernetes version' },
-        { label: 'Inline info: on' },
-        { label: 'Example results: on' },
-      ]);
-    });
+        expect(words().map((word) => word.split(':')[0])).toEqual([
+          '[Engine]',
+          '$(output) Show Logs',
+          '$(debug-restart) Restart Engine',
+          '[]',
+          'Kubernetes version',
+          'Color style',
+          '[In the editor]',
+          'Colors',
+          'Inline info',
+          'Example results',
+        ]);
+      },
+    );
+
+    it.each([
+      ['failed', { kind: 'failed' }],
+      ['crashed', { kind: 'crashed' }],
+    ] as const)(
+      'has no line under the Engine heading but the two engine entries when the engine %s (#45)',
+      async (_n, state) => {
+        const status = new VersionStatus();
+        status.setState(state);
+
+        await status.showActions();
+
+        const all = lines();
+        const heading = all.findIndex((line) => line.label === 'Engine');
+        const rest = all.slice(heading + 1);
+        const next = rest.findIndex((line) => line.kind === QuickPickItemKind.Separator);
+        expect(rest.slice(0, next).map((line) => line.label)).toEqual([
+          '$(output) Show Logs',
+          '$(debug-restart) Restart Engine',
+        ]);
+        expect(rest[next]?.label).toBe('');
+      },
+    );
 
     it('runs Restart Engine from the menu of a crashed engine', async () => {
       const status = new VersionStatus();
       status.setState({ kind: 'crashed' });
-      quickPicks.next = 'Restart Engine';
+      quickPicks.next = '$(debug-restart) Restart Engine';
 
       await status.showActions();
 
@@ -404,20 +588,34 @@ describe('VersionStatus', () => {
     });
 
     it.each([
-      ['Color style', CHOOSE_COLOR_STYLE_COMMAND],
       ['Kubernetes version', PICK_VERSION_COMMAND],
-      ['Inline info: on', TOGGLE_INLINE_INFO_COMMAND],
-      ['Example results: on', TOGGLE_EXAMPLE_RESULTS_COMMAND],
-      ['Restart Engine', RESTART_SERVER_COMMAND],
-      ['Show Logs', SHOW_LOGS_COMMAND],
-    ])('runs the command of the %s entry', async (label, command) => {
+      ['Color style', CHOOSE_COLOR_STYLE_COMMAND],
+      ['Colors', TOGGLE_COLORS_COMMAND],
+      ['Inline info', TOGGLE_INLINE_INFO_COMMAND],
+      ['Example results', TOGGLE_EXAMPLE_RESULTS_COMMAND],
+      ['Value types', TOGGLE_VALUE_TYPES_COMMAND],
+      ['$(output) Show Logs', SHOW_LOGS_COMMAND],
+      ['$(debug-restart) Restart Engine', RESTART_SERVER_COMMAND],
+    ])('runs the command of the %s entry, and only it', async (label, command) => {
       const status = new VersionStatus();
       status.setState(RUNNING);
+      settings.set('cel-lens.experimental', ['cellens-types']);
       quickPicks.next = label;
 
       await status.showActions();
 
       expect(executedCommands).toEqual([{ command, args: [] }]);
+      expect(quickPicks.shown).toHaveLength(1);
+    });
+
+    it.each(['In the editor', 'Engine'])('runs nothing for the heading %s', async (heading) => {
+      const status = new VersionStatus();
+      status.setState(RUNNING);
+      quickPicks.next = heading;
+
+      await status.showActions();
+
+      expect(executedCommands).toEqual([]);
     });
 
     it('runs nothing when the menu is closed with Escape', async () => {
@@ -429,6 +627,17 @@ describe('VersionStatus', () => {
 
       expect(quickPicks.shown).toHaveLength(1);
       expect(executedCommands).toEqual([]);
+    });
+
+    it('marks the headings as separators and no other line, and gives them no command', async () => {
+      const status = new VersionStatus();
+      status.setState(RUNNING);
+
+      await status.showActions();
+
+      const separators = lines().filter((line) => line.kind === QuickPickItemKind.Separator);
+      expect(separators.map((line) => line.label)).toEqual(['In the editor', 'Engine']);
+      expect(separators.every((line) => line.command === undefined)).toBe(true);
     });
   });
 });

@@ -8,5 +8,6 @@
 !LICENSE*
 !images/icon.png
 !images/cel-lens.svg
+!images/walkthrough/*.svg
 !bin/cel-lens-core
 !bin/cel-lens-core.exe

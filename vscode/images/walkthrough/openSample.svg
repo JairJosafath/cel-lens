@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" width="560" height="300" role="img" aria-labelledby="title">
+  <title id="title">The sample CRD in the editor: each rule colored, and above it the line that says what self is and whether the rule compiles</title>
+  <clipPath id="inside"><rect x="1" y="1" width="558" height="298" rx="6"/></clipPath>
+  <rect fill="var(--vscode-editor-background)" stroke="var(--vscode-contrastBorder, transparent)" x="0.5" y="0.5" width="559" height="299" rx="6"/>
+  <g clip-path="url(#inside)">
+    <rect fill="var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background))" x="0" y="0" width="560" height="34"/>
+    <rect fill="var(--vscode-tab-activeBackground)" stroke="var(--vscode-contrastBorder, transparent)" x="0.5" y="0.5" width="150" height="34"/>
+    <text fill="var(--vscode-tab-activeForeground)" font-family="var(--vscode-font-family)" font-size="12px" x="16" y="22">widgets.yaml</text>
+    <text fill="var(--vscode-tab-activeForeground)" font-family="var(--vscode-font-family)" font-size="12px" x="132" y="22">×</text>
+
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="62">26</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="56" y="62">x-kubernetes-validations:</text>
+
+    <text fill="var(--vscode-editorCodeLens-foreground)" font-family="var(--vscode-font-family)" font-size="11px" x="72" y="82">self: Widget.spec · compiles</text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="102">27</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="72" y="102">- rule: <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">replicas</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&gt;=</tspan> <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">minReplicas</tspan></text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="124">28</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="88" y="124">message: replicas must not be below minReplicas</text>
+
+    <text fill="var(--vscode-editorCodeLens-foreground)" font-family="var(--vscode-font-family)" font-size="11px" x="72" y="144">self: Widget.spec · compiles</text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="164">29</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="72" y="164">- rule: <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">name</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-functionForeground)">startsWith</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">(</tspan><tspan fill="var(--vscode-debugTokenExpression-string)">'w-'</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">)</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&amp;&amp;</tspan> <tspan fill="var(--vscode-symbolIcon-functionForeground)">size</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">(</tspan><tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">name</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">)</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&lt;</tspan> <tspan fill="var(--vscode-debugTokenExpression-number)">20</tspan></text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="186">30</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="88" y="186">message: the name starts with w- and is shorter than 20 characters</text>
+
+    <text fill="var(--vscode-editorCodeLens-foreground)" font-family="var(--vscode-font-family)" font-size="11px" x="72" y="206">self: Widget.spec · 1 problem</text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="226">31</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="72" y="226" textLength="187.2" lengthAdjust="spacing">- rule: <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">replica</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&gt;</tspan> <tspan fill="var(--vscode-debugTokenExpression-number)">0</tspan></text>
+    <path fill="none" stroke="var(--vscode-editorError-foreground)" stroke-width="1.2" d="M173 230 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5 l3 2.5 l3 -2.5"/>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="248">32</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="88" y="248">message: a widget runs at least one copy</text>
+
+    <text fill="var(--vscode-editorCodeLens-foreground)" font-family="var(--vscode-font-family)" font-size="11px" x="72" y="268">self: Widget.spec · compiles</text>
+    <text fill="var(--vscode-editorLineNumber-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" text-anchor="end" x="44" y="288">33</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" x="72" y="288">- rule: <tspan fill="var(--vscode-debugTokenExpression-name)">self</tspan><tspan fill="var(--vscode-symbolIcon-operatorForeground)">.</tspan><tspan fill="var(--vscode-symbolIcon-fieldForeground)">replicas</tspan> <tspan fill="var(--vscode-symbolIcon-operatorForeground)">&lt;=</tspan> <tspan fill="var(--vscode-debugTokenExpression-number)">100</tspan></text>
+  </g>
+</svg>

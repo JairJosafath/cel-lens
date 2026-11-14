@@ -236,25 +236,61 @@ export function describeFailure(error: unknown): string {
     : error.name;
 }
 
-/** Fetches `url`; throws "Download of <url> failed: <reason>" on an HTTP error or no connection. */
-async function download(url: string): Promise<Response> {
+/** The pause before the one retry of a download that was cut off or could not connect. */
+export const RETRY_PAUSE_MS = 500;
+
+/** A failed download that is worth one more try: no connection, or a response cut off. */
+class TransferError extends Error {}
+
+/** Fetches `url` once and reads all of its body; throws a TransferError when the transfer breaks. */
+async function transfer(url: string): Promise<Buffer> {
   let response: Response;
   try {
     response = await fetch(url);
   } catch (error) {
     const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
-    throw new Error(`Download of ${url} failed: ${describeFailure(cause)}`, { cause: error });
+    throw new TransferError(`Download of ${url} failed: ${describeFailure(cause)}`, {
+      cause: error,
+    });
   }
   if (!response.ok) {
     throw new Error(`Download of ${url} failed: HTTP ${String(response.status)}`);
   }
-  return response;
+  try {
+    return Buffer.from(await response.arrayBuffer());
+  } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+    throw new TransferError(
+      `Download of ${url} failed: the response was cut off (${describeFailure(cause)})`,
+      { cause: error },
+    );
+  }
+}
+
+/**
+ * Downloads `url` and returns its bytes. A connection error or a response cut
+ * off mid-transfer is tried once more after a short pause; an HTTP error is
+ * not. Throws "Download of <url> failed: <reason>".
+ */
+async function download(url: string): Promise<Buffer> {
+  try {
+    return await transfer(url);
+  } catch (error) {
+    if (!(error instanceof TransferError)) {
+      throw error;
+    }
+    stderr.write(`${error.message}; trying again in ${String(RETRY_PAUSE_MS)} ms\n`);
+    await new Promise<void>((done) => {
+      setTimeout(done, RETRY_PAUSE_MS);
+    });
+    return transfer(url);
+  }
 }
 
 /** Downloads the release's checksums.txt and checks every pinned asset against it. */
 export async function verifyPin(pin: CorePin, baseUrl: string = pin.baseUrl): Promise<void> {
   const url = `${baseUrl}/checksums.txt`;
-  checkPinChecksums(pin, await (await download(url)).text());
+  checkPinChecksums(pin, (await download(url)).toString('utf8'));
 }
 
 /**
@@ -268,7 +304,7 @@ export async function fetchCore(
   const binaries = new Map<string, Buffer>();
   for (const [target, asset] of Object.entries(pin.assets)) {
     const url = `${baseUrl}/${asset.name}`;
-    const bytes = Buffer.from(await (await download(url)).arrayBuffer());
+    const bytes = await download(url);
     const actual = createHash('sha256').update(bytes).digest('hex');
     if (actual !== asset.sha256) {
       throw new Error(

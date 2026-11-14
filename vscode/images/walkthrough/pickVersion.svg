@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" width="560" height="300" role="img" aria-labelledby="title">
+  <title id="title">The Kubernetes version picker, 1.36 the current version among the versions the engine supports, and the status bar item CEL · K8s 1.36 that opens the menu of every setting and toggle</title>
+  <clipPath id="inside"><rect x="1" y="1" width="558" height="298" rx="6"/></clipPath>
+  <rect fill="var(--vscode-editor-background)" stroke="var(--vscode-contrastBorder, transparent)" x="0.5" y="0.5" width="559" height="299" rx="6"/>
+  <g clip-path="url(#inside)">
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" opacity="0.55" x="24" y="232">- rule: self.replicas &gt;= self.minReplicas</text>
+    <text fill="var(--vscode-editor-foreground)" font-family="var(--vscode-editor-font-family)" font-size="13px" opacity="0.55" x="40" y="254">message: replicas must not be below minReplicas</text>
+
+    <rect fill="var(--vscode-quickInput-background)" stroke="var(--vscode-contrastBorder, transparent)" x="80.5" y="12.5" width="400" height="200" rx="6"/>
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="12px" text-anchor="middle" x="280" y="33">Kubernetes version for cel-lens</text>
+    <rect fill="var(--vscode-input-background)" stroke="var(--vscode-focusBorder)" x="92.5" y="44.5" width="376" height="26" rx="2"/>
+    <text fill="var(--vscode-input-placeholderForeground)" font-family="var(--vscode-font-family)" font-size="13px" x="100" y="62">Pick the version your cluster runs</text>
+
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="13px" x="104" y="96">Default (1.37)</text>
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="13px" x="104" y="122">1.37</text>
+    <rect fill="var(--vscode-quickInputList-focusBackground, transparent)" stroke="var(--vscode-contrastActiveBorder, transparent)" x="88.5" y="130.5" width="384" height="24" rx="3"/>
+    <text fill="var(--vscode-quickInputList-focusForeground, var(--vscode-quickInput-foreground))" font-family="var(--vscode-font-family)" font-size="13px" x="104" y="147">1.36</text>
+    <text fill="var(--vscode-quickInputList-focusForeground, var(--vscode-quickInput-foreground))" font-family="var(--vscode-font-family)" font-size="12px" opacity="0.8" x="140" y="147">current</text>
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="13px" x="104" y="174">1.35</text>
+    <text fill="var(--vscode-quickInput-foreground)" font-family="var(--vscode-font-family)" font-size="13px" x="104" y="200">1.34</text>
+
+    <rect fill="var(--vscode-statusBar-background, var(--vscode-editor-background))" stroke="var(--vscode-contrastBorder, transparent)" x="0" y="274.5" width="560" height="26"/>
+    <rect fill="var(--vscode-statusBarItem-hoverBackground)" stroke="var(--vscode-contrastActiveBorder, transparent)" x="438.5" y="275.5" width="108" height="24"/>
+    <text fill="var(--vscode-statusBar-foreground)" font-family="var(--vscode-font-family)" font-size="12px" x="450" y="292">CEL · K8s 1.36</text>
+  </g>
+</svg>

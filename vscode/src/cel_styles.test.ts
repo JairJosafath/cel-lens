@@ -3,11 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { celColors, type CelStyle, type ThemeKind } from './cel_styles';
 
 const THEMES: ThemeKind[] = ['light', 'dark', 'hcDark', 'hcLight'];
-const BACKGROUNDS: Record<ThemeKind, { color: string; contrast: number }> = {
-  light: { color: '#FFFFFF', contrast: 4.5 },
-  dark: { color: '#1E1E1E', contrast: 4.5 },
-  hcDark: { color: '#000000', contrast: 7 },
-  hcLight: { color: '#FFFFFF', contrast: 7 },
+/** The editor background of each theme kind's default themes, with the contrast every color must have against it. */
+const BACKGROUNDS: Record<ThemeKind, { theme: string; color: string; contrast: number }[]> = {
+  light: [{ theme: 'Default Light Modern', color: '#FFFFFF', contrast: 4.5 }],
+  dark: [
+    { theme: 'Dark+', color: '#1E1E1E', contrast: 4.5 },
+    // VS Code's default dark theme.
+    { theme: 'Default Dark Modern', color: '#1F1F1F', contrast: 4.5 },
+  ],
+  hcDark: [{ theme: 'Default High Contrast', color: '#000000', contrast: 7 }],
+  hcLight: [{ theme: 'Default High Contrast Light', color: '#FFFFFF', contrast: 7 }],
 };
 const DISTINCT = ['variable', 'field', 'function', 'number', 'string', 'operator'] as const;
 const PARTS = [
@@ -92,10 +97,16 @@ describe('celColors', () => {
     },
   );
 
-  it.each(COMBINATIONS)('reads $style $part in $theme on its background', ({ theme, color }) => {
-    const background = BACKGROUNDS[theme];
-    expect(contrast(color, background.color)).toBeGreaterThanOrEqual(background.contrast);
-  });
+  it.each(
+    COMBINATIONS.flatMap((each) =>
+      BACKGROUNDS[each.theme].map((background) => ({ ...each, background })),
+    ),
+  )(
+    'reads $style $part in $theme on the background of $background.theme, $background.color',
+    ({ color, background }) => {
+      expect(contrast(color, background.color)).toBeGreaterThanOrEqual(background.contrast);
+    },
+  );
 
   it.each([
     ...(['cel', 'classic'] as const).flatMap((style) => THEMES.map((theme) => ({ style, theme }))),

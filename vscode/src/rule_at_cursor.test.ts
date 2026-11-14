@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { contains, ruleAtCursor } from './rule_at_cursor';
+import { contains, cursorKey, ruleAtCursor } from './rule_at_cursor';
 import { parseRuleListAnswer, type ListedDocument } from './rule_list';
 import { rawAnswer, rawDocument, rawRule } from './rule_list_samples';
 
@@ -141,5 +141,57 @@ describe('the rule at the cursor', () => {
       const { line, character } = each.location.range.start;
       expect(ruleAtCursor(many, line, character)?.rule?.id).toBe(each.id);
     }
+  });
+});
+
+describe('the key of the cursor', () => {
+  /** A rule of lines `from` to `to` that has example words. */
+  function withExamples(index: number, from: number, to: number): Record<string, unknown> {
+    return {
+      ...rawRule(URI, 'd', index, { examples: { state: 'pass', words: '3 pass' } }),
+      span: span(from, to),
+    };
+  }
+
+  /** A CRD whose first rule (lines 10-12, a block scalar) has examples, and whose second (14-15) has none; and a second document with its own rule. */
+  const MIXED = documents([
+    {
+      ...rawDocument(URI, [withExamples(0, 10, 12), rule(1, 14, 15)], { name: 'first' }),
+      range: { start: { line: 0, character: 0 }, end: { line: 20, character: 0 } },
+    },
+    {
+      ...rawDocument(URI, [rule(0, 33, 34)], { name: 'second' }),
+      range: { start: { line: 30, character: 0 }, end: { line: 40, character: 0 } },
+    },
+  ]);
+
+  it('is ruleWithExamples on the key of a rule whose row shows example words', () => {
+    expect(cursorKey(MIXED, 10, 4, true)).toBe('ruleWithExamples');
+  });
+
+  it('is ruleWithExamples anywhere in the item, inside its block scalar', () => {
+    expect(cursorKey(MIXED, 11, 12, true)).toBe('ruleWithExamples');
+  });
+
+  it('is rule on a rule with no example words', () => {
+    expect(cursorKey(MIXED, 14, 2, true)).toBe('rule');
+  });
+
+  it('is rule on a rule with example words when the folder turns example results off', () => {
+    expect(cursorKey(MIXED, 10, 4, false)).toBe('rule');
+  });
+
+  it('is unset between two rules, in a document of its own lines', () => {
+    expect(cursorKey(MIXED, 13, 0, true)).toBeUndefined();
+    expect(cursorKey(MIXED, 20, 0, true)).toBeUndefined();
+  });
+
+  it('is unset outside every document, and in a file the list does not have', () => {
+    expect(cursorKey(MIXED, 25, 0, true)).toBeUndefined();
+    expect(cursorKey([], 10, 4, true)).toBeUndefined();
+  });
+
+  it('finds the rule in the document of several that holds the cursor', () => {
+    expect(cursorKey(MIXED, 33, 3, true)).toBe('rule');
   });
 });

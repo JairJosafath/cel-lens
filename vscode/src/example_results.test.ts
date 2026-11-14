@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   COMPUTING_LINE,
   exampleResultsInForce,
-  exampleResultsLabel,
   failedLine,
   parseRuleResults,
   resultLine,
@@ -72,15 +71,6 @@ describe('exampleResultsInForce', () => {
     ],
   ])('is on unless a scope turns it off: %s', (_name, values, expected) => {
     expect(exampleResultsInForce(values)).toBe(expected);
-  });
-});
-
-describe('exampleResultsLabel', () => {
-  it.each([
-    [true, 'Example results: on'],
-    [false, 'Example results: off'],
-  ])('names the state %s as %j', (on, label) => {
-    expect(exampleResultsLabel(on)).toBe(label);
   });
 });
 

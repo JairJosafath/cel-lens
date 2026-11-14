@@ -74,9 +74,11 @@ This opens a VS Code window with the extension loaded from `out/`; rebuild and r
 npm run pictures
 ```
 
-The pictures in the README (`images/*.png` and the three GIFs) are taken by a script, so a release can retake them. `npm run pictures` builds the extension, puts the pinned engine in `bin/` (`npm run engine`), packages the extension and installs it in [openvscode-server](https://github.com/gitpod-io/openvscode-server), a VS Code served to a browser, opens the fixtures of `test/pictures/` (a CRD with `x-kubernetes-validations`, a ValidatingAdmissionPolicy, and a ValidatingAdmissionPolicy whose `params` is a custom kind, with a sample of that kind that goes in the workspace as `config/samples/limit.yaml`) in headless Chromium driven by Playwright, and writes `inline-info.png`, `problems.png`, `hover.png`, `completion.png`, `quick-fix.png`, `colors.png`, `colors.gif`, `completion.gif` and `give-type.gif` into `images/`. It needs no display. Each picture starts from a clean editor: the script closes every editor (discarding what is unsaved), opens the picture's file and checks one tab, nothing unsaved, the problems the picture should show in the status bar and no notification, and stops naming the picture otherwise. The browser's screencast gives PNG frames, so a GIF is encoded from exact pixels, with the flat colors of the page (`src/gif_frames.ts`) as palette entries of their own.
+The pictures in the README (`images/*.png` and the three GIFs) are taken by a script, so a release can retake them. `npm run pictures` builds the extension, puts the pinned engine in `bin/` (`npm run engine`), packages the extension and installs it in [openvscode-server](https://github.com/gitpod-io/openvscode-server), a VS Code served to a browser, opens the fixtures of `test/pictures/` (a CRD with `x-kubernetes-validations`, a ValidatingAdmissionPolicy, and a ValidatingAdmissionPolicy whose `params` is a custom kind, with a sample of that kind that goes in the workspace as `config/samples/limit.yaml`) in headless Chromium driven by Playwright, and writes `inline-info.png`, `problems.png`, `hover.png`, `completion.png`, `quick-fix.png`, `colors.png`, `colors.gif`, `completion.gif`, `give-type.gif`, `actions-menu.png` (the status bar menu open over a CRD) and `editor-menu.png` (the editor's _cel-lens_ submenu open at a rule) into `images/`. `npm run pictures -- menus` takes only the last two. It needs no display. Each picture starts from a clean editor: the script closes every editor (discarding what is unsaved), opens the picture's file and checks one tab, nothing unsaved, the problems the picture should show in the status bar and no notification, and stops naming the picture otherwise. The browser's screencast gives PNG frames, so a GIF is encoded from exact pixels, with the flat colors of the page (`src/gif_frames.ts`) as palette entries of their own.
 
 It is not part of `make check`, and it needs a network: it downloads openvscode-server (version in `package.json`, under `pictures`) into `node_modules/.cache/` the first time, and Chromium needs `npx playwright install chromium` once (on Linux, `npx playwright install-deps chromium` adds the libraries it needs). Commit the files it wrote; `src/picture_files.test.ts` checks that each is a real PNG or GIF and that each GIF has more than one frame and is under 2 MB. A GIF's clock is the script's pacing, not the wall clock: it plays the sum of the script's holds (`holdFrame`), so it lasts the same on a slow machine as on a fast one. `colors.gif` is planned to play 4.5 seconds, `completion.gif` 3 seconds and `give-type.gif` 6 seconds; the script stops with an error naming the GIF when one is planned to play 8 seconds or more. To change what a picture shows, edit the fixtures or `test/pictures/take.ts`. The `.vsix` carries only `images/icon.png` (`.vscodeignore`).
+
+`npm run pictures -- themes` takes six scenes (a CRD with its colors and lines, a problem with its hover, the rule view with a rule in each state, the status bar menu, the editor's _cel-lens_ submenu and the walkthrough's first step) in Default Light Modern, Default Dark Modern, Default High Contrast and Default High Contrast Light, and writes them to `out/pictures/themes/<scene>-<theme>.png`, never to `images/`. They are for a person to look at, to check that everything reads in each theme and that nothing is told by color alone; they are not committed.
 
 ## Send a change
 
@@ -178,12 +180,14 @@ It covers YAML files on disk; untitled YAML buffers are not analysed until saved
 
 On YAML files a status bar item such as `CEL · K8s 1.37` shows the Kubernetes
 version the results match. Click it (or run **cel-lens: Show Actions**) to open a
-menu of the main actions: **Color style** (shows the current style), **Kubernetes
-version** (shows the current version), **Inline info: on** or **off** (turns the
-line above each CEL rule off or on), **Restart Engine** and **Show Logs**.
+menu of every setting and toggle and the engine's actions, each with its value for
+the open file: **Kubernetes version** and **Color style**; under _In the editor_,
+**Colors**, **Inline info**, **Example results** and, while `cellens-types` is on,
+**Value types**, each `on` or `off`; under _Engine_, **Show Logs** and **Restart Engine**,
+which come first while the engine has failed or crashed.
 Most people leave the version alone. If your cluster runs
 another version, choose **Kubernetes version** in the menu (or run **cel-lens: Pick Kubernetes Version**); the choice is saved in the workspace setting
-`cel-lens.kubernetesVersion` and takes effect at once (the extension restarts the engine for you).
+`cel-lens.kubernetesVersion` (in your user settings in a window with no folder or workspace file open) and takes effect at once (the extension restarts the engine for you).
 
 ### Color styles
 
@@ -254,6 +258,9 @@ The colors follow the theme kind, so they read in light, dark and high contrast 
   style of CEL: CEL, Classic or Off.
 - **cel-lens: Restart Engine** (`cel-lens.restartServer`) restarts the engine.
   Use it after changing `cel-lens.serverPath`.
+- **cel-lens: Toggle Colors** (`cel-lens.toggleColors`) turns the colors of CEL off,
+  by writing `off` to `cel-lens.colorStyle` at the scope that sets it for the open file,
+  or in your user settings, and back to the style it turned off (CEL when it turned none).
 - **cel-lens: Toggle Inline Info** (`cel-lens.toggleInlineInfo`) turns the line
   above each CEL rule off or on, by flipping `cel-lens.inlineInfo` at the scope that
   sets it for the open file, or in your user settings.
@@ -261,10 +268,37 @@ The colors follow the theme kind, so they read in light, dark and high contrast 
   CRD rule does to its examples off or on (the part of the line, the hover, the warnings),
   by flipping `cel-lens.exampleResults` at the scope that sets it for the open file, or in
   your user settings.
+- **cel-lens: Toggle Value Types** (`cel-lens.toggleValueTypes`) hides the values a rule
+  reads from the line above it, and shows them again, by flipping `cel-lens.valueTypes`
+  at the scope that sets it for the open file, or in your user settings; the command is
+  in the palette while `cellens-types` is on.
+- **cel-lens: Reveal in Rule View** (`cel-lens.rules.reveal`) selects the rule at the
+  cursor in the view, else its document, and opens the view. The editor's **cel-lens**
+  submenu (`cel-lens.editor`, in the context menu and the title's overflow) shows in
+  YAML the engine lists rules for: the extension sets `cel-lens.editorHasRules` and
+  `cel-lens.ruleAtCursor` from the list the view holds, with no message from the engine.
 - **cel-lens: Give a Value a Type…** (`cel-lens.giveValueType`) lists the values the
   line above each rule of the open YAML file names, from its code lenses
   (`vscode.executeCodeLensProvider`), and gives the one picked a type, or edits it.
   With the line off for the file, it says so.
+
+### Keyboard shortcut
+
+The extension contributes one keybinding: `Ctrl+K L` (`Cmd+K L` on macOS) runs **cel-lens: Toggle Inline Info** while
+you type in a YAML file. A chord after `Ctrl+K`, VS Code's own chord prefix, types no character on any layout, unlike
+`Alt+...` on macOS (Option) or `Ctrl+Alt+...` on Windows (AltGr), so do not move it to one of those.
+
+A shortcut must not take a key that VS Code or a common extension uses. `npm run keys` (`src/taken_keys.ts`; it needs the
+network, so `make check` does not run it) fetches VS Code's default keybindings for Linux, Windows and macOS from
+[codebling/vs-code-default-keybindings](https://github.com/codebling/vs-code-default-keybindings) and the `package.json` of
+each extension in `EXTENSIONS` in `src/taken_keys.ts` (the common ones that bind keys in an editor, from GitLens to Helm
+Intellisense), and writes their keys, normalised, with each source's version, to
+`src/taken_keys.json`. Commit the file when you rerun it.
+`src/keybindings.test.ts` fails, naming the source, the key and its command, on a contributed key that equals a taken one,
+whose first chord part is a taken single key, or that is a single key starting a taken chord. Bindings that apply only with
+`terminalFocus` or in a `focusedView`, or whose `when` is `false`, never compete with an editor's binding and are skipped.
+The one clash the test accepts is Vim's: it takes `Ctrl+K` in the editor while `vim.use<C-k>`, as it does for every
+`Ctrl+K` chord of VS Code's own; a person gives the key back to VS Code with Vim's `vim.handleKeys`.
 
 ## Develop
 
@@ -281,6 +315,7 @@ make dist            # dist/cel-lens-vscode-<platform>-<version>.vsix, six platf
 make help            # every target
 npm run profile -- 5000   # CPU-profile tokenizeCel at one rule count, in its own process
 npm run bench        # time one color repaint (10000-rule CRD, 50 visible lines) and the tokenizer (5000 rules)
+npm run keys         # fetch the keys VS Code and common extensions take into src/taken_keys.json (needs the network)
 ```
 
 ### Bench
@@ -316,6 +351,7 @@ version, names and checksums in `core-version.json` together. A contributor need
 other access: the default engine source is the public releases page. To fetch from
 another releases page (a mirror, say), set `CEL_LENS_CORE_RELEASES_URL` to its
 URL; files are then read from `<URL>/download/<version>/` (`src/core_releases.ts`).
+A download that cannot connect, or whose response is cut off, is tried once more after half a second; a checksum mismatch or an HTTP error is not. A failure names the URL.
 
 To run the stricter layout check locally, see "Check the layout test against a real engine" above for `CEL_LENS_ENGINE_DIR`.
 

@@ -28,7 +28,7 @@ export function engineBooleanSetting(key: string, fallback: boolean): boolean {
   );
 }
 
-function target(scope: SettingScope): vscode.ConfigurationTarget {
+export function configurationTarget(scope: SettingScope): vscode.ConfigurationTarget {
   switch (scope) {
     case 'user':
       return vscode.ConfigurationTarget.Global;
@@ -57,15 +57,33 @@ export async function toggleBooleanSetting(
   const values = configuration.inspect<unknown>(key);
   const name = `${SECTION}.${key}`;
   try {
-    await configuration.update(key, !settingInForce(values, fallback), target(toggleScope(values)));
-  } catch (error) {
-    log.error(`Could not change ${name}: ${String(error)}`);
-    const button = await vscode.window.showErrorMessage(
-      `Could not change ${name}. Fix any errors in settings.json, then toggle it again.`,
-      OPEN_SETTINGS_BUTTON,
+    await configuration.update(
+      key,
+      !settingInForce(values, fallback),
+      configurationTarget(toggleScope(values)),
     );
-    if (button === OPEN_SETTINGS_BUTTON) {
-      await vscode.commands.executeCommand('workbench.action.openSettings', name);
-    }
+  } catch (error) {
+    await reportFailedToggle(name, error, log);
+  }
+}
+
+/**
+ * Logs a write of the setting `name` that failed and shows it once, with a button to the setting.
+ * `again` finishes the sentence that says what to do after fixing settings.json: a toggle says
+ * `toggle it again`, the version picker `pick the version again`.
+ */
+export async function reportFailedToggle(
+  name: string,
+  error: unknown,
+  log: Pick<vscode.LogOutputChannel, 'error'>,
+  again = 'toggle it again',
+): Promise<void> {
+  log.error(`Could not change ${name}: ${String(error)}`);
+  const button = await vscode.window.showErrorMessage(
+    `Could not change ${name}. Fix any errors in settings.json, then ${again}.`,
+    OPEN_SETTINGS_BUTTON,
+  );
+  if (button === OPEN_SETTINGS_BUTTON) {
+    await vscode.commands.executeCommand('workbench.action.openSettings', name);
   }
 }

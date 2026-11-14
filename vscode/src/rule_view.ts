@@ -8,6 +8,7 @@ import { EXPERIMENTAL_SETTING, parseExperimental } from './experimental';
 import { isRecord } from './is_record';
 import type { ServerState } from './kubernetes_version';
 import { ruleTooltip, textInRange } from './rule_items';
+import { cursorKey, ruleAtCursor, type CursorKey } from './rule_at_cursor';
 import { FOLLOW_PAUSE_MS, FollowEditor, readFollowEditor, writeFollowEditor } from './rule_follow';
 import {
   ENGINE_RULE_LIST,
@@ -22,9 +23,11 @@ import {
 import { SHOW_RULE_COMMAND, parseRuleLocation, type RuleLocation } from './rule_parts';
 import { RuleTree, scanMessage, type Refresh, type TreeContext, type TreeNode } from './rule_tree';
 import {
+  EDITOR_HAS_RULES_KEY,
   FOLLOW_EDITOR_KEY,
   KYVERNO_OFF_KEY,
   PROBLEMS_ONLY_KEY,
+  RULE_AT_CURSOR_KEY,
   RULE_VIEW_ID,
   RULE_VIEW_STATE_KEY,
   isLooking,
@@ -50,6 +53,9 @@ export const SHOW_ALL_RULES_COMMAND = 'cel-lens.rules.showAll';
 /** The title menu's *Follow Editor* and *Stop Following*. */
 export const FOLLOW_EDITOR_COMMAND = 'cel-lens.rules.followEditor';
 export const STOP_FOLLOWING_COMMAND = 'cel-lens.rules.stopFollowing';
+
+/** The command VS Code makes for a view: it opens the view and gives it the focus. */
+export const FOCUS_RULE_VIEW_COMMAND = `${RULE_VIEW_ID}.focus`;
 
 /** The key under which the filter is kept in the workspace's state. */
 export const PROBLEMS_ONLY_STATE = 'cel-lens.ruleView.problemsOnly';
@@ -132,6 +138,9 @@ export class RuleView implements vscode.TreeDataProvider<TreeNode>, vscode.Dispo
   /** The engine's spelling of the files the editor spells otherwise, found when asked. */
   private readonly engineUris = new Map<string, string | undefined>();
   private readonly subscriptions: vscode.Disposable[] = [];
+  /** What `cel-lens.editorHasRules` and `cel-lens.ruleAtCursor` were last set to; `undefined` before the first. */
+  private shownHasRules: boolean | undefined;
+  private shownAtCursor: CursorKey | undefined;
 
   private engine: EngineStatus = 'starting';
   private limits: ScanLimits = {};
@@ -197,9 +206,22 @@ export class RuleView implements vscode.TreeDataProvider<TreeNode>, vscode.Dispo
         this.redraw();
         this.refreshSoon();
       }),
+      // The editor's submenu follows the file and the cursor with no pause: a context key is cheap.
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        this.syncEditorKeys();
+      }),
+      vscode.window.onDidChangeTextEditorSelection((event) => {
+        if (
+          event.textEditor.document.uri.toString() ===
+          vscode.window.activeTextEditor?.document.uri.toString()
+        ) {
+          this.syncEditorKeys();
+        }
+      }),
     );
     this.syncKyverno();
     this.syncKeys();
+    this.syncEditorKeys();
     this.syncState();
   }
 
@@ -313,6 +335,7 @@ export class RuleView implements vscode.TreeDataProvider<TreeNode>, vscode.Dispo
     this.fire(this.tree.rebuild(this.context()));
     this.syncKyverno();
     this.syncState();
+    this.syncEditorKeys();
   }
 
   private async fetchUntilDone(epoch: number): Promise<void> {
@@ -371,6 +394,7 @@ export class RuleView implements vscode.TreeDataProvider<TreeNode>, vscode.Dispo
       ...this.tree.setUnreadable(this.list.unattributed),
     ]);
     this.syncState();
+    this.syncEditorKeys();
     this.follower.schedule();
   }
 
@@ -404,6 +428,7 @@ export class RuleView implements vscode.TreeDataProvider<TreeNode>, vscode.Dispo
     this.fire(this.tree.setUnreadable(0));
     this.engineUris.clear();
     this.syncState();
+    this.syncEditorKeys();
   }
 
   // What the tree is drawn with.
@@ -564,6 +589,95 @@ export class RuleView implements vscode.TreeDataProvider<TreeNode>, vscode.Dispo
       );
     }
     return this.engineUris.get(text);
+  }
+
+  // The editor's submenu.
+
+  /**
+   * Sets `cel-lens.editorHasRules` (the active editor's file is one the engine lists rules for, in
+   * the editor's spelling of its URI) and `cel-lens.ruleAtCursor` (`rule`, `ruleWithExamples` or
+   * unset), each only when it changes. It reads the list the view holds: nothing is asked of the
+   * engine, so with no list (the engine down, or unable to list rules) both are off.
+   */
+  private syncEditorKeys(): void {
+    const editor = vscode.window.activeTextEditor;
+    const engine = editor === undefined ? undefined : this.engineUriOf(editor.document.uri);
+    const has = engine !== undefined;
+    if (has !== this.shownHasRules) {
+      this.shownHasRules = has;
+      void vscode.commands.executeCommand('setContext', EDITOR_HAS_RULES_KEY, has);
+    }
+    const key =
+      editor === undefined || engine === undefined
+        ? undefined
+        : cursorKey(
+            this.list.documentsOf(engine),
+            editor.selection.active.line,
+            editor.selection.active.character,
+            readExampleResults(editor.document.uri),
+          );
+    if (key !== this.shownAtCursor) {
+      this.shownAtCursor = key;
+      void vscode.commands.executeCommand('setContext', RULE_AT_CURSOR_KEY, key);
+    }
+  }
+
+  /**
+   * The location of the rule at a cursor, looked up now; `undefined` in no rule. With no `uri` (the
+   * palette) it is the cursor of the active editor. With the URI of a file (an editor's menu gives
+   * its editor's), it is the cursor of the visible editor showing that file, so the menu of one
+   * group of a split editor never acts on the rule of the active editor of another; with no visible
+   * editor showing it there is no rule.
+   */
+  locationAtCursor(uri?: string): RuleLocation | undefined {
+    const editor = uri === undefined ? vscode.window.activeTextEditor : this.editorShowing(uri);
+    const engine = editor === undefined ? undefined : this.engineUriOf(editor.document.uri);
+    if (editor === undefined || engine === undefined) {
+      return undefined;
+    }
+    const { line, character } = editor.selection.active;
+    return ruleAtCursor(this.list.documentsOf(engine), line, character)?.rule?.location;
+  }
+
+  /** The visible editor showing the file at `uri`: the active one when it does, else the first. */
+  private editorShowing(
+    uri: string,
+  ): Pick<vscode.TextEditor, 'document' | 'selection'> | undefined {
+    const active = vscode.window.activeTextEditor;
+    if (active?.document.uri.toString() === uri) {
+      return active;
+    }
+    return vscode.window.visibleTextEditors.find((each) => each.document.uri.toString() === uri);
+  }
+
+  /**
+   * *Reveal in Rule View*: selects the rule at the cursor in the view, else its document (also for
+   * a rule the filter hides), with the focus, expanded, opening the view. With neither it only
+   * opens the view.
+   */
+  async revealAtCursor(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    const engine = editor === undefined ? undefined : this.engineUriOf(editor.document.uri);
+    const node =
+      editor === undefined || engine === undefined
+        ? undefined
+        : this.tree.at(engine, editor.selection.active.line, editor.selection.active.character);
+    try {
+      if (node === undefined) {
+        await vscode.commands.executeCommand(FOCUS_RULE_VIEW_COMMAND);
+        return;
+      }
+      await this.treeView.reveal(node, { select: true, focus: true, expand: true });
+    } catch (error) {
+      this.log.error(`Could not reveal the rule in the view: ${String(error)}`);
+    }
+  }
+
+  /** Opens the view when it is not showing, so what a command changed in it is seen. */
+  showView(): void {
+    if (!this.treeView.visible) {
+      void vscode.commands.executeCommand(FOCUS_RULE_VIEW_COMMAND);
+    }
   }
 
   // The tree's provider.

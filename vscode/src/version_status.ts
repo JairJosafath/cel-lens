@@ -1,23 +1,23 @@
 import * as vscode from 'vscode';
 import { OPEN_ENGINE_SETTING_LABEL, RESTART_ENGINE_LABEL, SHOW_LOGS_LABEL } from './button_labels';
 
-import {
-  SHOW_ACTIONS_COMMAND,
-  actionItems,
-  versionDescription,
-  type ActionItem,
-} from './actions_menu';
+import { SHOW_ACTIONS_COMMAND, actionItems, versionDescription } from './actions_menu';
 import { RELEASES_PAGE_URL } from './core_releases';
-import { currentColorStyle } from './color_painter';
+import { readStyle } from './color_painter';
 import { readExampleResults } from './example_results_setting';
+import { CELLENS_TYPES_FEATURE } from './experimental';
+import { featureOn } from './experimental_feature';
 import { readInlineInfo } from './inline_info_setting';
+import { readValueTypes } from './value_visibility_setting';
 import {
+  ENGINE_DOWN_ACCESSIBLE_LABEL,
   ENGINE_DOWN_TEXT,
   KUBERNETES_VERSION_SETTING,
   engineDownTooltip,
   RESTART_SERVER_COMMAND,
   effectiveVersion,
   pickItems,
+  statusAccessibleLabel,
   statusText,
   statusTooltip,
   unsupportedVersionMessage,
@@ -25,6 +25,10 @@ import {
   type VersionPickItem,
 } from './kubernetes_version';
 import { openServerPathSetting } from './open_server_setting';
+import { reportFailedToggle } from './toggle_setting';
+
+/** A line of the quick pick: an entry with the command it runs, or a heading. */
+type MenuPick = vscode.QuickPickItem & { readonly command?: string };
 
 const OPEN_RELEASES = 'Open Releases Page';
 
@@ -38,6 +42,17 @@ const CRASHED_MESSAGE =
   'Cannot pick a Kubernetes version: the cel-lens engine stopped after crashing. Check the logs for the reason, then restart the engine.';
 const TOO_OLD_MESSAGE =
   'Cannot pick a Kubernetes version: the cel-lens engine reports no Kubernetes versions, so it is too old. Download a current engine from github.com/JairJosafath/cel-lens/releases (engine releases are tagged core-vX.Y.Z), then point cel-lens.serverPath to it, or clear that setting to use the bundled one, then restart the engine.';
+
+/**
+ * Whether the window has workspace settings to write: a folder, or a workspace file (which may
+ * hold no folder yet). An empty window has none, and VS Code refuses a write there.
+ */
+function hasWorkspace(): boolean {
+  return (
+    vscode.workspace.workspaceFile !== undefined ||
+    (vscode.workspace.workspaceFolders?.length ?? 0) > 0
+  );
+}
 
 function readSetting(): string {
   return vscode.workspace.getConfiguration('cel-lens').get<string>(KUBERNETES_VERSION_SETTING, '');
@@ -71,6 +86,7 @@ export class VersionStatus implements vscode.Disposable {
     if (this.state.kind === 'failed' || this.state.kind === 'crashed') {
       this.item.text = ENGINE_DOWN_TEXT;
       this.item.tooltip = engineDownTooltip(this.state.kind);
+      this.item.accessibilityInformation = { label: ENGINE_DOWN_ACCESSIBLE_LABEL, role: 'button' };
       this.item.show();
       return;
     }
@@ -88,27 +104,49 @@ export class VersionStatus implements vscode.Disposable {
     const version = effectiveVersion(setting, info);
     this.item.text = statusText(version);
     this.item.tooltip = statusTooltip(version);
+    this.item.accessibilityInformation = { label: statusAccessibleLabel(version), role: 'button' };
     this.item.show();
   }
 
-  /** Opens the menu of the main actions, and runs the command of the entry picked. */
+  /**
+   * Opens the menu of the settings, the toggles and the engine's actions, each with its value for
+   * the active editor's file, and runs the command of the entry picked. A heading runs nothing.
+   */
   async showActions(): Promise<void> {
-    const choice = await vscode.window.showQuickPick<ActionItem>(
-      actionItems(
-        currentColorStyle(),
-        versionDescription(this.state, readSetting()),
-        this.state.kind === 'failed' || this.state.kind === 'crashed',
-        readInlineInfo(vscode.window.activeTextEditor?.document.uri),
-        readExampleResults(vscode.window.activeTextEditor?.document.uri),
-      ),
-      { title: 'cel-lens', placeHolder: 'Pick an action' },
-    );
-    if (choice !== undefined) {
+    const resource = vscode.window.activeTextEditor?.document.uri;
+    const style = readStyle(resource);
+    const lines = actionItems({
+      style,
+      version: versionDescription(this.state, readSetting()),
+      engineDown: this.state.kind === 'failed' || this.state.kind === 'crashed',
+      inlineInfo: readInlineInfo(resource),
+      exampleResults: readExampleResults(resource),
+      valueTypes: readValueTypes(resource),
+      cellensTypes: featureOn(CELLENS_TYPES_FEATURE),
+    });
+    const items = lines.map((line): MenuPick => {
+      if ('separator' in line) {
+        return { label: line.separator, kind: vscode.QuickPickItemKind.Separator };
+      }
+      return {
+        label: line.icon === undefined ? line.label : `${line.icon} ${line.label}`,
+        description: line.description,
+        command: line.command,
+      };
+    });
+    const choice = await vscode.window.showQuickPick<MenuPick>(items, {
+      title: 'cel-lens',
+      placeHolder: 'Pick a setting, a toggle or an action',
+    });
+    if (choice?.command !== undefined) {
       await vscode.commands.executeCommand(choice.command);
     }
   }
 
-  /** Asks which version to use, and writes the choice to the workspace setting. */
+  /**
+   * Asks which version to use, and writes the choice to the workspace setting, or to the user
+   * setting in a window with no folder or workspace file open.
+   */
   async pick(): Promise<void> {
     const info = this.state.kind === 'running' ? this.state.info : undefined;
     if (info === undefined) {
@@ -125,13 +163,24 @@ export class VersionStatus implements vscode.Disposable {
     if (choice === undefined) {
       return;
     }
-    await vscode.workspace
-      .getConfiguration('cel-lens')
-      .update(
-        KUBERNETES_VERSION_SETTING,
-        choice.version === '' ? undefined : choice.version,
-        vscode.ConfigurationTarget.Workspace,
+    const name = `cel-lens.${KUBERNETES_VERSION_SETTING}`;
+    try {
+      await vscode.workspace
+        .getConfiguration('cel-lens')
+        .update(
+          KUBERNETES_VERSION_SETTING,
+          choice.version === '' ? undefined : choice.version,
+          hasWorkspace() ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global,
+        );
+    } catch (error) {
+      // As the toggles report a failed write: logged, and shown once with a button to the setting.
+      await reportFailedToggle(
+        name,
+        error,
+        this.log ?? { error: () => undefined },
+        'pick the version again',
       );
+    }
   }
 
   /** Says why no version can be picked; one message at a time, while it is open. */

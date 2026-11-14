@@ -320,3 +320,56 @@ describe('the text between two positions', () => {
     );
   });
 });
+
+describe('no state of a rule is told by color alone (#3)', () => {
+  /** A rule in each of the four states of the icon, with the words its row and its screen reader's label must hold. */
+  const STATES = [
+    {
+      state: 'error',
+      rule: rule({ label: 'r', compile: 'error', problems: 2 }),
+      description: '2 problems',
+      read: /^r, error, 2 problems: /,
+    },
+    {
+      state: 'warning',
+      rule: rule({ label: 'r', examples: WRONG }),
+      description: 'compiles · refuses 1 example it should allow · 2 pass',
+      read: /^r, warning, compiles · refuses 1 example it should allow · 2 pass/,
+    },
+    {
+      state: 'pass',
+      rule: rule({ label: 'r', examples: PASS }),
+      description: 'compiles · 3 examples pass',
+      read: /^r, compiles · 3 examples pass$/,
+    },
+    {
+      state: 'check',
+      rule: rule({ label: 'r' }),
+      description: 'compiles',
+      read: /^r, compiles$/,
+    },
+  ] as const;
+
+  it('gives the four states four different product icon ids: error, warning, pass and check', () => {
+    const ids = STATES.map((each) => ruleIcon(each.rule, true).id);
+
+    expect(ids).toEqual(['error', 'warning', 'pass', 'check']);
+    expect(new Set(ids).size).toBe(4);
+  });
+
+  it.each(STATES)(
+    'says the $state state in words in the row’s description and the accessible label, not by the icon alone',
+    ({ rule: each, description, read }) => {
+      expect(ruleDescription(each, true)).toBe(description);
+      expect(ruleAccessibleLabel(each, true)).toMatch(read);
+    },
+  );
+
+  it('names the two states whose icon is the only other sign, error and warning, in the accessible label', () => {
+    for (const { state, rule: each } of STATES) {
+      const names = /^r, (error|warning), /.test(ruleAccessibleLabel(each, true));
+
+      expect(names).toBe(state === 'error' || state === 'warning');
+    }
+  });
+});

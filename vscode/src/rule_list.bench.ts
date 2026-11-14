@@ -2,6 +2,7 @@ import { Bench } from 'tinybench';
 
 import { budgetLine, growthLine, pairedGrowthRatio } from './bench_budget';
 import { runAndReport } from './bench_report';
+import { cursorKey } from './rule_at_cursor';
 import { RuleList, parseRuleListAnswer } from './rule_list';
 import { rawAnswer, rawDocument, rawFiles, rawRule } from './rule_list_samples';
 import { RuleTree } from './rule_tree';
@@ -126,6 +127,24 @@ function cursorRunner(rules: number): () => void {
 }
 
 /**
+ * The key `cel-lens.ruleAtCursor` after a selection change, in a file of 500 rules within a list of
+ * `rules`: the list's documents of the file and the lookup of the rule at the cursor, which the
+ * extension does at each selection change, with no pause.
+ */
+function keyRunner(rules: number): () => void {
+  const { list } = workspace(rules - BIG_FILE_RULES, false, [bigFile()]);
+  let round = 0;
+  return () => {
+    const rule = round % BIG_FILE_RULES;
+    round += 1;
+    const key = cursorKey(list.documentsOf(BIG_URI), 10 + rule * 4 + 1, 5, true);
+    if (key !== 'rule') {
+      throw new Error(`no rule key at the cursor of rule ${String(rule)}`);
+    }
+  };
+}
+
+/**
  * A one-file answer with the filter for problems on: read, applied, the filtered tree built for the
  * file, and the badge's count, as the view does for each answer.
  */
@@ -147,6 +166,7 @@ function filteredRunner(rules: number): () => void {
 }
 
 const cursorTask = `find the rule at the cursor, a file of ${String(BIG_FILE_RULES)} rules in ${String(BUDGET_RULES)}`;
+const keyTask = `key update after a selection change, a file of ${String(BIG_FILE_RULES)} rules in ${String(BUDGET_RULES)}`;
 const filterTask = `badge and filtered tree after a one-file answer, ${String(BUDGET_RULES)} rules`;
 
 const taskName = (rules: number): string => `apply a change of one file, ${String(rules)} rules`;
@@ -164,6 +184,7 @@ for (const rules of [2500, BUDGET_RULES, BUDGET_RULES * 2]) {
   bench.add(taskName(rules), runner(rules), { beforeEach: collectGarbage });
 }
 bench.add(cursorTask, cursorRunner(BUDGET_RULES), { beforeEach: collectGarbage });
+bench.add(keyTask, keyRunner(BUDGET_RULES), { beforeEach: collectGarbage });
 bench.add(filterTask, filteredRunner(BUDGET_RULES), { beforeEach: collectGarbage });
 await runAndReport(bench);
 
@@ -176,6 +197,7 @@ if (budgeted?.result.state === 'completed') {
 
 for (const [name, budget] of [
   [cursorTask, CURSOR_BUDGET_MS],
+  [keyTask, CURSOR_BUDGET_MS],
   [filterTask, FILTER_BUDGET_MS],
 ] as const) {
   const task = bench.getTask(name);

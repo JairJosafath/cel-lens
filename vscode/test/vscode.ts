@@ -29,6 +29,9 @@ export const executedCommands: { command: string; args: unknown[] }[] = [];
 /** The context keys set with the `setContext` command, which lives in the window, by name. */
 export const contextKeys = new Map<string, unknown>();
 
+/** Every `setContext` call, oldest first, so a test can see a key set only when its value changes. */
+export const contextWrites: { key: string; value: unknown }[] = [];
+
 /** The error the next calls to commands.executeCommand reject with, after recording the call, if any. */
 export const commandFailure: { error: Error | undefined } = { error: undefined };
 
@@ -50,6 +53,7 @@ export const commands = {
   executeCommand<T>(command: string, ...args: unknown[]): Thenable<T> {
     if (command === 'setContext') {
       contextKeys.set(String(args[0]), args[1]);
+      contextWrites.push({ key: String(args[0]), value: args[1] });
       return Promise.resolve(undefined as T);
     }
     executedCommands.push({ command, args });
@@ -180,6 +184,7 @@ class FakeStatusBarItem {
   tooltip: string | undefined;
   command: string | undefined;
   name: string | undefined;
+  accessibilityInformation: { label: string; role?: string } | undefined;
   visible = false;
   disposed = false;
 
@@ -230,6 +235,9 @@ export function changeActiveEditor(languageId: string | undefined): void {
     listener();
   }
 }
+
+/** The messages `window.setStatusBarMessage` showed, oldest first, with how long each was asked to stay. */
+export const statusBarMessages: { text: string; hideAfterMs: number | undefined }[] = [];
 
 /** The lines shown in quick picks, and the one the user "picks" next, by label. */
 export const quickPicks: {
@@ -507,6 +515,11 @@ export class FakeEditor {
   visibleRanges: { start: { line: number }; end: { line: number } }[] = [
     { start: { line: 0 }, end: { line: Number.MAX_SAFE_INTEGER - 1000 } },
   ];
+
+  /** Where its cursor is. */
+  selection: { active: { line: number; character: number } } = {
+    active: { line: 0, character: 0 },
+  };
 
   constructor(readonly document: { languageId: string; getText(): string; uri?: vscode.Uri }) {}
 
@@ -849,6 +862,13 @@ export const window = {
     themeListeners.add(listener);
     return new Disposable(() => themeListeners.delete(listener));
   },
+  setStatusBarMessage(text: string, hideAfterTimeout?: number | Thenable<unknown>): Disposable {
+    statusBarMessages.push({
+      text,
+      hideAfterMs: typeof hideAfterTimeout === 'number' ? hideAfterTimeout : undefined,
+    });
+    return new Disposable(() => undefined);
+  },
   createStatusBarItem(): FakeStatusBarItem {
     const item = new FakeStatusBarItem();
     statusBarItems.push(item);
@@ -974,6 +994,15 @@ export const settings = new Map<string, unknown>();
 /** The settings set at workspace scope, by full name; `settings` holds the user scope. */
 export const workspaceSettings = new Map<string, unknown>();
 
+/**
+ * Whether the window has no folder and no workspace file, so a write to the workspace settings
+ * fails. Most tests write there without adding a folder, so it is off unless a test sets it.
+ */
+export const emptyWindow = { value: false };
+
+/** The `.code-workspace` file `workspace.workspaceFile` returns, if one is open. */
+export const workspaceFileUri: { value: vscode.Uri | undefined } = { value: undefined };
+
 /** The workspace folders `workspace.workspaceFolders` returns, by name. */
 export const workspaceFolderNames: string[] = [];
 
@@ -1049,6 +1078,14 @@ class Configuration implements vscode.WorkspaceConfiguration {
     if (updateFailure.error !== undefined) {
       return Promise.reject(updateFailure.error);
     }
+    // Like VS Code, an empty window (no folder, no workspace file) has no workspace settings.
+    if (target === ConfigurationTarget.Workspace && emptyWindow.value) {
+      return Promise.reject(
+        new Error(
+          'Unable to write to Workspace Settings because no workspace is opened. Please open a workspace first and try again.',
+        ),
+      );
+    }
     if (target === ConfigurationTarget.WorkspaceFolder && !this.scoped) {
       return Promise.reject(
         new Error('Unable to write to Workspace Folder Settings without a resource'),
@@ -1084,6 +1121,15 @@ export function changeConfiguration(...names: string[]): void {
 export const settingUpdates: { name: string; value: unknown; target: number; folder?: string }[] =
   [];
 
+/** The URIs `workspace.fs.writeFile` wrote, oldest first. */
+export const writtenFiles: string[] = [];
+
+/** The URIs `workspace.fs.createDirectory` made, oldest first. */
+export const createdDirectories: string[] = [];
+
+/** The error the next calls to `workspace.fs.writeFile` reject with, if any. */
+export const writeFailure: { error: Error | undefined } = { error: undefined };
+
 export const workspace = {
   /** A file's text from `fileTexts`, or a new untitled document with the content given. */
   /** The open document, else a file's text from its file system provider, or `fileTexts`. */
@@ -1116,6 +1162,19 @@ export const workspace = {
         ? Promise.reject(FileSystemError.FileNotFound(target))
         : Promise.resolve(new TextEncoder().encode(text));
     },
+    /** Keeps the text in `fileTexts` and the URI in `writtenFiles`, or fails with `writeFailure`. */
+    writeFile(target: vscode.Uri, content: Uint8Array): Promise<void> {
+      if (writeFailure.error !== undefined) {
+        return Promise.reject(writeFailure.error);
+      }
+      fileTexts.set(target.toString(), new TextDecoder().decode(content));
+      writtenFiles.push(target.toString());
+      return Promise.resolve();
+    },
+    createDirectory(target: vscode.Uri): Promise<void> {
+      createdDirectories.push(target.toString());
+      return Promise.resolve();
+    },
   },
   get textDocuments(): readonly FakeTextDocument[] {
     return openDocuments;
@@ -1146,6 +1205,9 @@ export const workspace = {
   },
   getConfiguration(section?: string, scope?: vscode.ConfigurationScope | null): Configuration {
     return new Configuration(section ?? '', scope);
+  },
+  get workspaceFile(): vscode.Uri | undefined {
+    return workspaceFileUri.value;
   },
   get workspaceFolders(): vscode.WorkspaceFolder[] | undefined {
     return workspaceFolderNames.length === 0
@@ -1283,9 +1345,23 @@ export const codeLensProviders: {
   provider: vscode.CodeLensProvider;
 }[] = [];
 
+const diagnosticListeners = new Set<(event: vscode.DiagnosticChangeEvent) => void>();
+
+/** Sets the diagnostics of a document, by URI, and tells the listeners of onDidChangeDiagnostics, as the language client does. */
+export function changeDiagnostics(uri: string, list: FakeDiagnostic[]): void {
+  diagnostics.set(uri, list);
+  for (const listener of diagnosticListeners) {
+    listener({ uris: [Uri.parse(uri)] });
+  }
+}
+
 export const languages = {
   getDiagnostics(resource: vscode.Uri): FakeDiagnostic[] {
     return diagnostics.get(resource.toString()) ?? [];
+  },
+  onDidChangeDiagnostics(listener: (event: vscode.DiagnosticChangeEvent) => void): Disposable {
+    diagnosticListeners.add(listener);
+    return new Disposable(() => diagnosticListeners.delete(listener));
   },
   createDiagnosticCollection(name?: string): FakeDiagnosticCollection {
     const collection = new FakeDiagnosticCollection(name);
@@ -1339,6 +1415,14 @@ export const Uri = {
   parse(value: string): vscode.Uri {
     return new FakeUri(value);
   },
+  /** A `file:` URI of a path, its separators as slashes. */
+  file(path: string): vscode.Uri {
+    const slashed = path.replaceAll('\\', '/');
+    return new FakeUri(`file://${slashed.startsWith('/') ? '' : '/'}${slashed}`);
+  },
+  joinPath(base: vscode.Uri, ...segments: string[]): vscode.Uri {
+    return new FakeUri([base.toString().replace(/\/$/, ''), ...segments].join('/'));
+  },
 } satisfies Partial<typeof vscode.Uri>;
 
 export const env = {
@@ -1354,6 +1438,7 @@ export function reset(): void {
   registry.clear();
   shownErrors.length = 0;
   shownInfos.length = 0;
+  statusBarMessages.length = 0;
   shownInfoButtons.length = 0;
   shownWarnings.length = 0;
   warningChoice.next = undefined;
@@ -1362,8 +1447,11 @@ export function reset(): void {
   workspaceSettings.clear();
   workspaceFolderSettings.clear();
   workspaceFolderNames.length = 0;
+  workspaceFileUri.value = undefined;
+  emptyWindow.value = false;
   executedCommands.length = 0;
   contextKeys.clear();
+  contextWrites.length = 0;
   commandFailure.error = undefined;
   commandResults.clear();
   fileTexts.clear();
@@ -1379,6 +1467,10 @@ export function reset(): void {
   shownDocuments.length = 0;
   showFailure.error = undefined;
   diagnostics.clear();
+  diagnosticListeners.clear();
+  writtenFiles.length = 0;
+  createdDirectories.length = 0;
+  writeFailure.error = undefined;
   openedUrls.length = 0;
   env.remoteName = undefined;
   channels.clear();

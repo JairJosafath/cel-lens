@@ -1,5 +1,6 @@
 /** The `cel-lens.experimental` setting, as contributed in package.json. */
 export const EXPERIMENTAL_SETTING = 'experimental';
+export const EXPERIMENTAL_SETTING_NAME = `cel-lens.${EXPERIMENTAL_SETTING}`;
 
 /** The experimental feature that colors Kyverno `ValidatingPolicy` documents. */
 export const KYVERNO_FEATURE = 'kyverno';

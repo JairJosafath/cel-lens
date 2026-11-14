@@ -14,8 +14,3 @@ export const DEFAULT_INLINE_INFO = true;
 export function inlineInfoInForce(values: ScopedValues | undefined): boolean {
   return settingInForce(values, DEFAULT_INLINE_INFO);
 }
-
-/** The status bar menu entry, such as `Inline info: on`. */
-export function inlineInfoLabel(on: boolean): string {
-  return `Inline info: ${on ? 'on' : 'off'}`;
-}

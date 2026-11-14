@@ -1,6 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  COMMAND_ORDER,
+  EXAMPLE_RESULTS_LABEL,
+  INLINE_INFO_LABEL,
+  MENU_ENTRIES,
+  SETTING_ORDER,
+} from './actions_menu';
+import {
   readmeDefaultKubernetesVersion,
   readmeHeadings,
   readmeImages,
@@ -24,6 +31,8 @@ const PICTURES = [
   'quick-fix.png',
   'colors.png',
 ];
+/** The pictures of the section Where to find it, which follow those above in the README. */
+const WHERE_PICTURES = ['actions-menu.png', 'editor-menu.png'];
 /** The GIF at the top of the section Give a value a type, which follows those above in the README. */
 const CELLENS_TYPES_GIF = 'cellens-types.gif';
 /** The pictures of the section Example results, which follow those above in the README. */
@@ -97,6 +106,8 @@ describe('README.md as the store page', () => {
     expect(readmeHeadings(README)).toEqual([
       'What it looks like',
       'Install',
+      'Get started',
+      'Where to find it',
       'Give a value a type',
       'Example results',
       'Rule view',
@@ -150,17 +161,22 @@ describe('README.md as the store page', () => {
   it('links the picture of the line above the rules and the GIF of Give it a type first, then the two GIFs and the five pictures, each with alt text and one line, as https URLs in the public repository', () => {
     const images = readmeImages(README);
     expect(images.map((image) => image.url)).toEqual(
-      [...PICTURES, CELLENS_TYPES_GIF, ...EXAMPLE_RESULTS_PICTURES, RULE_VIEW_PICTURE].map(
-        (name) => IMAGE_BASE + name,
-      ),
+      [
+        ...PICTURES,
+        ...WHERE_PICTURES,
+        CELLENS_TYPES_GIF,
+        ...EXAMPLE_RESULTS_PICTURES,
+        RULE_VIEW_PICTURE,
+      ].map((name) => IMAGE_BASE + name),
     );
     expect(images.every((image) => image.alt.length > 0)).toBe(true);
     const section = readmeSection(README, 'What it looks like') ?? '';
     const lines = section
       .split('\n')
       .filter((line) => line.trim() !== '' && !line.startsWith('![') && !line.startsWith('<!--'));
-    // The nine pictures, each with its line, and the line that links to the Rule view.
-    expect(lines).toHaveLength(PICTURES.length + readmePicturePlaceholders(section).length + 1);
+    // The nine pictures, each with its line, the line that links to the Rule view and the one that
+    // links to Get started and Where to find it.
+    expect(lines).toHaveLength(PICTURES.length + readmePicturePlaceholders(section).length + 2);
   });
 
   it('shows the line above the rules of a policy with a dyn value first, with its line', () => {
@@ -407,7 +423,7 @@ describe('README.md as the store page', () => {
     expect(versions).toContain('status bar');
     expect(versions).toContain('Pick Kubernetes Version');
     const colorRow =
-      README.split('\n').find((line) => line.includes('`cel-lens.colorStyle`')) ?? '';
+      README.split('\n').find((line) => line.startsWith('| `cel-lens.colorStyle`')) ?? '';
     expect(colorRow).toContain('Choose Color Style');
     expect(versions).not.toContain('CONTRIBUTING.md');
     expect(colorRow).not.toContain('CONTRIBUTING.md');
@@ -446,7 +462,7 @@ describe('README.md as the store page', () => {
     'opens at its line beside the rule',
     'A wrong verdict is also a warning',
     '**cel-lens: Toggle Example Results**',
-    '**Example results: on** or **off**',
+    "The status bar menu's entry _Example results_, described `on` or `off`, flips it too.",
     'without a reload',
     'offers a button to turn it on',
   ])('describes example results: %s', (text) => {
@@ -534,7 +550,7 @@ describe('README.md as the store page', () => {
 
     expect(readmeSection(README, 'Commands')).toContain('| **cel-lens: Toggle Example Results**');
     expect(row).toContain('**cel-lens: Toggle Example Results**');
-    expect(row).toContain('**Example results: on** or **off**');
+    expect(row).toContain("the menu's entry _Example results_, described `on` or `off`");
     expect(row).toContain('Resource scope');
   });
 
@@ -670,4 +686,176 @@ describe('the Rule view section of the README', () => {
       expect(readmeSection(README, 'Settings')).toContain('`cel-lens.ruleView.followEditor`');
     },
   );
+});
+
+/** A key of package.json's keybindings as the README writes it: `ctrl+k l` is `Ctrl+K L`. */
+function keyName(key: string): string {
+  return key
+    .split(' ')
+    .map((chord) =>
+      chord
+        .split('+')
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('+'),
+    )
+    .join(' ');
+}
+
+/** The cells of the rows of the first table of a section, without the header and its rule. */
+function tableRows(section: string): string[][] {
+  return section
+    .split('\n')
+    .filter((line) => line.startsWith('| ') && !line.startsWith('| ---'))
+    .slice(1)
+    .map((line) =>
+      line
+        .slice(1, -1)
+        .split(' | ')
+        .map((cell) => cell.trim()),
+    );
+}
+
+describe('the README in the order a person meets cel-lens (#41)', () => {
+  const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as {
+    contributes: {
+      commands: { command: string; title: string; category: string }[];
+      keybindings: { command: string; key: string; mac?: string }[];
+    };
+  };
+
+  it('links to Get started and Where to find it from What it looks like', () => {
+    const section = readmeSection(README, 'What it looks like') ?? '';
+    expect(section).toContain('[Get started](#get-started)');
+    expect(section).toContain('[Where to find it](#where-to-find-it)');
+  });
+
+  it.each([
+    '_Get started with cel-lens_',
+    '_Open a sample CRD_, _See a problem and fix it_, _Pick the Kubernetes version_ and _Choose the colors_',
+    '**cel-lens: Get Started** opens the walkthrough',
+    'cel-lens opens nothing by itself',
+    '`workbench.welcomePage.walkthroughs.openOnInstall`',
+  ])('says in Get started: %s', (text) => {
+    expect(readmeSection(README, 'Get started')).toContain(text);
+  });
+
+  it('names the four steps of the walkthrough as package.json titles them', () => {
+    const walkthrough = (
+      JSON.parse(readFileSync('package.json', 'utf8')) as {
+        contributes: { walkthroughs: { title: string; steps: { title: string }[] }[] };
+      }
+    ).contributes.walkthroughs[0];
+    const section = readmeSection(README, 'Get started') ?? '';
+    expect(section).toContain(`_${walkthrough?.title ?? ''}_`);
+    for (const step of walkthrough?.steps ?? []) {
+      expect(section).toContain(`_${step.title}_`);
+    }
+  });
+
+  it('shows the status bar menu and the editor menu in Where to find it, each with its alt text', () => {
+    const images = readmeImages(readmeSection(README, 'Where to find it') ?? '');
+    expect(images.map((image) => image.url)).toEqual(WHERE_PICTURES.map((n) => IMAGE_BASE + n));
+    expect(images[0]?.alt).toMatch(
+      /^Where to find it: the status bar menu of cel-lens open over a CRD/,
+    );
+    expect(images[1]?.alt).toMatch(/^Where to find it: the editor's context menu open at a rule/);
+  });
+
+  it('lists the status bar menu’s entries in the menu’s order', () => {
+    const section = readmeSection(README, 'Where to find it') ?? '';
+    const at = MENU_ENTRIES.map((entry) => section.indexOf(`_${entry.label}_`));
+    expect(at.every((index) => index >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(section).toContain('under _In the editor_');
+    expect(section).toContain('under _Engine_');
+  });
+
+  it.each([
+    'Right-click in a YAML file the engine lists rules for',
+    'the `...` menu of the editor',
+    'It holds three groups',
+    '_Toggle Colors_, _Toggle Inline Info_, _Toggle Example Results_',
+    '_Pick Kubernetes Version_ and _Choose Color Style_',
+    '`Ctrl+K L` (`Cmd+K L` on macOS)',
+    '`vim.handleKeys`',
+  ])('says in Where to find it: %s', (text) => {
+    expect(readmeSection(README, 'Where to find it')).toContain(text);
+  });
+
+  it('has a Turn it off table with a row for each thing drawn: its toggle, its setting and its menu entry', () => {
+    const section =
+      (readmeSection(README, 'Where to find it') ?? '').split('### Turn it off')[1] ?? '';
+    const rows = tableRows(section);
+    expect(rows.map((row) => row.slice(1, 3).join(' '))).toEqual([
+      '**cel-lens: Toggle Colors** `cel-lens.colorStyle`, set to `off`',
+      '**cel-lens: Toggle Inline Info** `cel-lens.inlineInfo`',
+      '**cel-lens: Toggle Example Results** `cel-lens.exampleResults`',
+      '**cel-lens: Toggle Value Types** `cel-lens.valueTypes`',
+    ]);
+    expect(rows.map((row) => row[3]?.split(',')[0])).toEqual([
+      '_Colors_',
+      `_${INLINE_INFO_LABEL}_`,
+      `_${EXAMPLE_RESULTS_LABEL}_`,
+      '_Value types_',
+    ]);
+    expect(section).toContain('open editors follow at once');
+  });
+
+  it('lists the commands in COMMAND_ORDER, the status bar menu’s order, with the shortcut of package.json or none', () => {
+    const rows = tableRows(readmeSection(README, 'Commands') ?? '');
+    const expected = COMMAND_ORDER.map((id) => {
+      const command = manifest.contributes.commands.find((each) => each.command === id);
+      const binding = manifest.contributes.keybindings.find((each) => each.command === id);
+      const shortcut =
+        binding === undefined
+          ? 'none'
+          : `\`${keyName(binding.key)}\` / \`${keyName(binding.mac ?? binding.key)}\``;
+      return [`**${command?.category ?? ''}: ${command?.title ?? ''}**`, shortcut];
+    });
+
+    expect(rows.map((row) => row.slice(0, 2))).toEqual(expected);
+    expect(readmeSection(README, 'Commands')).toContain('**Preferences: Open Keyboard Shortcuts**');
+  });
+
+  it('describes in the Show Actions row what the menu holds, by its entries and groups', () => {
+    const row =
+      tableRows(readmeSection(README, 'Commands') ?? '').find((each) =>
+        each[0]?.includes('Show Actions'),
+      ) ?? [];
+    for (const text of [
+      ...MENU_ENTRIES.map((entry) => `_${entry.label}_`),
+      '_In the editor_',
+      '_Engine_',
+    ]) {
+      expect(row[2]).toContain(text);
+    }
+  });
+
+  it('lists the settings in SETTING_ORDER, the order package.json gives them too', () => {
+    const rows = tableRows(readmeSection(README, 'Settings') ?? '');
+    expect(rows.map((row) => row[0])).toEqual(SETTING_ORDER.map((key) => `\`${key}\``));
+  });
+
+  it.each([
+    ['cel-lens.colorStyle', ['**cel-lens: Toggle Colors**', "the menu's entry _Colors_"]],
+    ['cel-lens.inlineInfo', ["the menu's entry _Inline info_, described `on` or `off`"]],
+    ['cel-lens.exampleResults', ["the menu's entry _Example results_, described `on` or `off`"]],
+    [
+      'cel-lens.valueTypes',
+      ["the menu's entry _Value types_, which the menu shows only while `cellens-types` is on"],
+    ],
+  ])('names in the %s row the menu entry by its label', (key, texts) => {
+    const row = tableRows(readmeSection(README, 'Settings') ?? '').find(
+      (each) => each[0] === `\`${key}\``,
+    );
+    for (const text of texts) {
+      expect(row?.[2]).toContain(text);
+    }
+  });
+
+  it('writes no menu entry with its value in its label, as the menu did before #36', () => {
+    expect(README).not.toMatch(
+      /\*\*(Colors|Inline info|Example results|Value types): (on|off)\*\*/,
+    );
+  });
 });

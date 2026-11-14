@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import { SHOW_LOGS_LABEL } from './button_labels';
 import { openBesideRule } from './cellens_editor';
+import { isRecord } from './is_record';
 import {
   LIST_VALUES_COMMAND,
   SHOW_RULE_COMMAND,
@@ -12,10 +13,49 @@ import {
   ruleTarget,
   valueItems,
   type ProblemOrder,
+  type RuleLocation,
 } from './rule_parts';
 
 /** The log a command writes to when the engine's argument is not what it expects, or a step fails. */
 type CommandLog = Pick<vscode.LogOutputChannel, 'warn' | 'error' | 'show'>;
+
+/** What the status bar says when a menu or the palette ran a rule's command with the cursor in no rule. */
+export const NO_RULE_MESSAGE = 'cel-lens: the cursor is in no rule';
+
+/** How long the status bar says it, in milliseconds. */
+export const NO_RULE_MESSAGE_MS = 3000;
+
+/** Whether the argument is a URI, which VS Code gives a command run from an editor's menu. */
+function isUri(argument: unknown): boolean {
+  return (
+    isRecord(argument) &&
+    typeof argument['scheme'] === 'string' &&
+    typeof argument['path'] === 'string'
+  );
+}
+
+/**
+ * The argument a rule's command (`cel-lens.showRule`, `cel-lens.showExampleResults`) runs with.
+ * From the line above a rule or from the view it is a location, which is left as it is. Run from
+ * the editor's menu (the URI of its editor) or the palette (none) it is the location of the rule at
+ * the cursor of that editor (the active one for none), looked up now, so a key that lags never runs the wrong rule; with no rule there
+ * the status bar says so for three seconds, and the result is `undefined`: do nothing else.
+ */
+export function ruleArgument(
+  argument: unknown,
+  atCursor: (uri?: string) => RuleLocation | undefined,
+): unknown {
+  if (argument !== undefined && !isUri(argument)) {
+    return argument;
+  }
+  // The URI is the editor the menu was opened in, which is not always the active one: in a split
+  // editor the title menu of another group gives its own.
+  const location = atCursor(isUri(argument) ? String(argument) : undefined);
+  if (location === undefined) {
+    vscode.window.setStatusBarMessage(NO_RULE_MESSAGE, NO_RULE_MESSAGE_MS);
+  }
+  return location;
+}
 
 function problemOrder(): ProblemOrder {
   return vscode.workspace.getConfiguration('problems').get<unknown>('sortOrder') === 'position'

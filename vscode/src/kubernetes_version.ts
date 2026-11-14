@@ -161,6 +161,15 @@ export function engineDownTooltip(state: 'failed' | 'crashed'): string {
   return `cel-lens: ${reason} · click to restart it or show the logs`;
 }
 
+/** What a screen reader says of the status bar item while the engine is down: the state in words, and what a click does. */
+export const ENGINE_DOWN_ACCESSIBLE_LABEL =
+  'cel-lens engine down, click to restart it or show the logs';
+
+/** What a screen reader says of the status bar item while the engine runs: its name, the version, and what a click does. */
+export function statusAccessibleLabel(version: string): string {
+  return `cel-lens, Kubernetes ${version}, click for actions`;
+}
+
 /** The status bar tooltip. */
 export function statusTooltip(version: string): string {
   return `cel-lens: Kubernetes ${version} · click for actions`;

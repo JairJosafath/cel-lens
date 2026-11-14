@@ -44,6 +44,8 @@ import {
   type VersionInfo,
 } from './kubernetes_version';
 import { SHOW_EXAMPLE_RESULTS_COMMAND } from './example_results';
+import { withoutValueParts } from './value_visibility';
+import { readValueTypes } from './value_visibility_setting';
 import { engineExampleResults, readExampleResults } from './example_results_setting';
 import { engineInlineInfo, readInlineInfo } from './inline_info_setting';
 import { LIST_VALUES_COMMAND, listValuesArguments } from './rule_parts';
@@ -161,6 +163,18 @@ function withoutExampleResults(
     : lenses;
 }
 
+/**
+ * The lenses without the values a rule reads, when `cel-lens.valueTypes` is off for the file:
+ * what is left of a line is its state and its example part. This runs before the example results
+ * are dropped, so the first lens of a line is still the engine's first.
+ */
+function withoutHiddenValues(
+  lenses: vscode.CodeLens[] | null | undefined,
+  resource: vscode.Uri,
+): vscode.CodeLens[] | null | undefined {
+  return readValueTypes(resource) ? lenses : withoutValueParts(lenses);
+}
+
 export const END_WAIT_MS = 2000;
 
 /** Starts, stops and restarts the `cel-lens-core lsp` language client. */
@@ -211,7 +225,7 @@ export class ServerController implements vscode.Disposable {
   /**
    * Tells the running server the settings, then has VS Code ask for the lines above the rules
    * again: the engine asks for them itself when its switch flips, but a workspace folder's own
-   * `cel-lens.inlineInfo` or `cel-lens.exampleResults` shows or hides its lines, or the part of
+   * `cel-lens.inlineInfo`, `cel-lens.exampleResults` or `cel-lens.valueTypes` shows or hides its lines, or the part of
    * them that says what a rule does to its examples, in the client alone. Never rejects.
    */
   sendLineSettings(): Promise<void> {
@@ -457,7 +471,10 @@ export class ServerController implements vscode.Disposable {
           // their part. The +N more lens learns its line.
           provideCodeLenses: async (document, token, next) =>
             readInlineInfo(document.uri)
-              ? withoutExampleResults(await next(document, token), document.uri)?.map(withRuleLine)
+              ? withoutExampleResults(
+                  withoutHiddenValues(await next(document, token), document.uri),
+                  document.uri,
+                )?.map(withRuleLine)
               : [],
           // A lens the engine fills in later gets its line too.
           resolveCodeLens: async (lens, token, next) => {

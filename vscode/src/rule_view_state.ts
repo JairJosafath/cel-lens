@@ -14,6 +14,15 @@ export const PROBLEMS_ONLY_KEY = 'cel-lens.ruleView.problemsOnly';
 /** The context key that is true while the view follows the editor. */
 export const FOLLOW_EDITOR_KEY = 'cel-lens.ruleView.followEditor';
 
+/** The editor submenu's *Reveal in Rule View*: the rule at the cursor, else its document, selected in the view. */
+export const REVEAL_RULE_COMMAND = 'cel-lens.rules.reveal';
+
+/** The context key that is true while the active editor's file is one the engine lists rules for. */
+export const EDITOR_HAS_RULES_KEY = 'cel-lens.editorHasRules';
+
+/** The context key that says what the cursor is in: `rule`, `ruleWithExamples`, or unset outside a rule. */
+export const RULE_AT_CURSOR_KEY = 'cel-lens.ruleAtCursor';
+
 /** The id of the view: `view` in a `when` clause, and what `createTreeView` takes. */
 export const RULE_VIEW_ID = 'cel-lens.rules';
 
