@@ -9,9 +9,11 @@ complete or explain a `dyn` value. A `.cellens` file says what such a value
 looks like, so cel-lens can assume that type there. Commit it, so everyone
 working on the repository gets the same types.
 
-The language server reads every `.cellens` of the workspace and uses its
-types: an expression that reads a value an entry names is checked, completed
-and explained with that type (see "How the types are used" below).
+With the experimental feature `cellens-types` on, the language server reads
+every `.cellens` of the workspace and uses its types: an expression that reads
+a value an entry names is checked, completed and explained with that type (see
+"How the types are used" below). Off, the default, it reads none, and says so
+once per session when the workspace holds one ([engine.md](engine.md#types-from-cellens)).
 `cel-lens-core check` does not read `.cellens` yet.
 
 ## The format

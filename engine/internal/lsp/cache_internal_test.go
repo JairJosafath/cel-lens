@@ -39,10 +39,11 @@ func newSession(t *testing.T) *session {
 		t.Fatal(err)
 	}
 	return &session{
-		conn:   jsonrpc.NewConn(strings.NewReader(""), io.Discard),
-		assist: a,
-		kube:   kubeversion.Default(),
-		docs:   map[string]*document{},
+		conn:     jsonrpc.NewConn(strings.NewReader(""), io.Discard),
+		assist:   a,
+		kube:     kubeversion.Default(),
+		docs:     map[string]*document{},
+		features: feature.Of(feature.CellensTypes),
 	}
 }
 
@@ -276,7 +277,7 @@ func TestScanDoesNotBlockSession(t *testing.T) {
 
 			c := jsonrpc.NewConn(clientIn, clientOut)
 			if err := c.Request("1", "initialize", map[string]any{
-				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies", "cellens-types"}},
 				"workspaceFolders":      []map[string]any{{"uri": "file:///ws"}},
 			}); err != nil {
 				t.Fatal(err)
@@ -345,7 +346,7 @@ func TestScanSkipsFilesChangedDuringScan(t *testing.T) {
 				t.Fatal(err)
 			}
 			ss := newSession(t)
-			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 			release := make(chan struct{})
 			ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) []message {
 				<-release
@@ -377,7 +378,7 @@ func TestRescanRefreshesEditedCRD(t *testing.T) {
 	t.Parallel()
 	const edited = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: g\n  names: {kind: K2}\n  versions:\n    - name: v1\n      schema:\n        openAPIV3Schema: {type: object}\n"
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	disk := scanCRD
 	ss.scanner = func(ctx context.Context, _ []string, dst *check.CRDs) []message {
 		dst.Set(ctx, "/ws/crd.yaml", []byte(disk))
@@ -461,7 +462,7 @@ func TestRescanForgetsDeletedCRDFile(t *testing.T) {
 		}
 	}
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{dir}
 	ctx := context.Background()
 	ss.crds.Set(ctx, "/elsewhere/other.yaml", []byte(scanCRD))
@@ -506,7 +507,7 @@ func TestRescanFollowsEditUnderSkippedFolder(t *testing.T) {
 				t.Fatal(err)
 			}
 			ss := newSession(t)
-			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 			ss.folders = []string{dir}
 			ctx := context.Background()
 			ss.crds.Set(ctx, crdKey(pathURI(crd)), []byte(scanCRD))
@@ -548,7 +549,7 @@ func TestRescanKeepsOpenDocumentUnderSkippedFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{dir}
 	ctx := context.Background()
 	uri := pathURI(crd)
@@ -586,7 +587,7 @@ func TestRescanKeepsCRDUnderSkippedFolder(t *testing.T) {
 				t.Fatal(err)
 			}
 			ss := newSession(t)
-			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 			ss.folders = []string{dir}
 			ctx := context.Background()
 			ss.crds.Set(ctx, crdKey(pathURI(crd)), []byte(scanCRD))
@@ -626,7 +627,7 @@ func TestRescanKeepsFilesPastCap(t *testing.T) {
 		}
 	}
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{dir}
 	ss.fileCap = 1
 	ctx := context.Background()
@@ -673,7 +674,7 @@ func TestFolderDeletedDuringScanStaysForgotten(t *testing.T) {
 
 	c := jsonrpc.NewConn(clientIn, clientOut)
 	if err := c.Request("1", "initialize", map[string]any{
-		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies", "cellens-types"}},
 		"workspaceFolders":      []map[string]any{{"uri": pathURI(dir)}},
 	}); err != nil {
 		t.Fatal(err)
@@ -725,7 +726,7 @@ func TestRescanWithUnreadableFolder(t *testing.T) {
 		}
 	}
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{good, stale}
 	ctx := context.Background()
 	staleFile := crdKey(pathURI(filepath.Join(stale, "widget.yaml")))
@@ -788,7 +789,7 @@ func TestCreatedSkippedFolderRecordsNoCRDs(t *testing.T) {
 				t.Fatal(err)
 			}
 			ss := newSession(t)
-			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 			params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileCreated}}})
 			if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
 				t.Fatal(err)
@@ -818,7 +819,7 @@ func TestCreatedFolderBelowSkippedAncestorRecordsNoCRDs(t *testing.T) {
 				t.Fatal(err)
 			}
 			ss := newSession(t)
-			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 			ss.folders = []string{root}
 			params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileCreated}}})
 			if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
@@ -862,7 +863,7 @@ func TestCreatedFolderScansInBackground(t *testing.T) {
 
 	c := jsonrpc.NewConn(clientIn, clientOut)
 	if err := c.Request("1", "initialize", map[string]any{
-		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies", "cellens-types"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -899,7 +900,7 @@ func TestCreatedNestedFoldersScanOnce(t *testing.T) {
 		t.Run(fmt.Sprintf("workspace scan running=%t", running), func(t *testing.T) {
 			t.Parallel()
 			ss := newSession(t)
-			ss.features = feature.Of(feature.CRDTypedPolicies)
+			ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 			var scans [][]string
 			ss.scanner = func(_ context.Context, folders []string, _ *check.CRDs) []message {
 				scans = append(scans, folders) // read after the scan ends
@@ -966,7 +967,7 @@ func TestRescanWithUnreadableSubfolder(t *testing.T) {
 		}
 	}
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{root}
 	ss.fsys = func(dir string) fs.FS { return failDirFS{FS: os.DirFS(dir), fail: "locked"} }
 	ctx := context.Background()
@@ -1015,7 +1016,7 @@ func TestCreatedFolderInNestedWorkspaceFolderIsScanned(t *testing.T) {
 		t.Fatal(err)
 	}
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{root, app}
 	params, _ := json.Marshal(map[string]any{"changes": []map[string]any{{"uri": pathURI(sub), "type": fileCreated}}})
 	if err := ss.didChangeWatchedFiles(context.Background(), params); err != nil {
@@ -1079,7 +1080,7 @@ func TestWatchedBatchWithFolderPublishesOnce(t *testing.T) {
 
 			c := jsonrpc.NewConn(clientIn, clientOut)
 			if err := c.Request("1", "initialize", map[string]any{
-				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+				"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies", "cellens-types"}},
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -1141,7 +1142,7 @@ func TestCreatedFoldersDuringScanKeepItsProgress(t *testing.T) {
 		}
 	}
 	ss := newSession(t)
-	ss.features = feature.Of(feature.CRDTypedPolicies)
+	ss.features = feature.Of(feature.CRDTypedPolicies, feature.CellensTypes)
 	ss.folders = []string{filepath.Join(root, "ws")}
 	release := make(chan struct{})
 	var scans [][]string
@@ -1223,7 +1224,7 @@ func TestCreatedFoldersQueuedDuringScansAreScannedInTurn(t *testing.T) {
 	c := jsonrpc.NewConn(clientIn, clientOut)
 	if err := c.Request("1", "initialize", map[string]any{
 		"workspaceFolders":      []map[string]any{{"uri": pathURI(filepath.Join(root, "ws"))}},
-		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies"}},
+		"initializationOptions": map[string]any{"experimental": []string{"crd-typed-policies", "cellens-types"}},
 	}); err != nil {
 		t.Fatal(err)
 	}

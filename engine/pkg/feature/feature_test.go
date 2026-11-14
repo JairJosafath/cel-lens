@@ -19,7 +19,8 @@ func TestParse(t *testing.T) {
 		{"none", nil, 0, nil},
 		{"one", []string{"kyverno"}, feature.Of(feature.Kyverno), nil},
 		{"spaces and empty", []string{" kyverno ", ""}, feature.Of(feature.Kyverno), nil},
-		{"all", []string{"kyverno", "crd-typed-policies", "fitting-completion"}, feature.Of(feature.Known()...), nil},
+		{"all", []string{"kyverno", "crd-typed-policies", "fitting-completion", "cellens-types"}, feature.Of(feature.Known()...), nil},
+		{"cellens-types", []string{"cellens-types"}, feature.Of(feature.CellensTypes), nil},
 		{"unknown once", []string{"nope", "kyverno", "nope", "other"}, feature.Of(feature.Kyverno), []string{"nope", "other"}},
 		{"case matters", []string{"Kyverno"}, 0, []string{"Kyverno"}},
 	}
@@ -48,6 +49,9 @@ func TestSetHas(t *testing.T) {
 	if feature.Of(feature.Kyverno).Has(feature.FittingCompletion) {
 		t.Error("Of(kyverno).Has(fitting-completion) = true, want false")
 	}
+	if feature.Of(feature.Kyverno).Has(feature.CellensTypes) {
+		t.Error("Of(kyverno).Has(cellens-types) = true, want false: cellens-types is off unless listed")
+	}
 	if feature.Of("nope").Has("nope") {
 		t.Error(`Of("nope").Has("nope") = true, want false`)
 	}
@@ -59,7 +63,7 @@ func TestWarning(t *testing.T) {
 		t.Errorf("Warning(nil) = %q, want empty", got)
 	}
 	got := feature.Warning([]string{"nope"})
-	for _, want := range []string{`"nope"`, "crd-typed-policies, fitting-completion, kyverno"} {
+	for _, want := range []string{`"nope"`, "cellens-types, crd-typed-policies, fitting-completion, kyverno"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Warning([nope]) = %q, want it to contain %q", got, want)
 		}

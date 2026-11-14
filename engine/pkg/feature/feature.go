@@ -26,12 +26,16 @@ const (
 	// FittingCompletion is completion that fits the spot, and hover that says
 	// why a value is dyn.
 	FittingCompletion Feature = "fitting-completion"
+	// CellensTypes reads the .cellens files of the workspace, whose types
+	// cel-lens assumes where Kubernetes leaves a value dyn, and gives a value
+	// such a type (Give it a type).
+	CellensTypes Feature = "cellens-types"
 )
 
 // Known returns the names of every experimental feature, sorted. The caller
 // may change the result.
 func Known() []Feature {
-	return []Feature{CRDTypedPolicies, FittingCompletion, Kyverno}
+	return []Feature{CellensTypes, CRDTypedPolicies, FittingCompletion, Kyverno}
 }
 
 // Set is the experimental features switched on. The zero value has every
@@ -47,6 +51,8 @@ func bit(f Feature) Set {
 		return 1 << 1
 	case FittingCompletion:
 		return 1 << 2
+	case CellensTypes:
+		return 1 << 3
 	}
 	return 0
 }

@@ -626,18 +626,21 @@ func (ss *session) completionRefused(why string) error {
 // forgets deleted files and every file below a deleted folder, a cheap step, so
 // the scan never sees a CRD whose file is gone.
 //
-// .cellens files are followed whatever the features: a changed or created one
-// is read, a deleted one, and those below a deleted folder, forgotten, and a
-// created folder is searched for them in the background; the open documents
-// are checked again when one changed. A change of a .cellens that changes
-// nothing, as of an open one or to the text the session has, asks for the
+// .cellens files are followed while cellens-types is on: a changed or
+// created one is read, a deleted one, and those below a deleted folder,
+// forgotten, and a created folder is searched for them in the background; the
+// open documents are checked again when one changed. While it is off none is
+// read: a changed or created one, or one a probe finds in a created folder,
+// is what the notice that the feature is off names (see noticeLenses). A
+// change of a .cellens that changes nothing, as of an open one or to the
+// text the session has, asks for the
 // code lenses again while they are owed (see refreshOwed). The diagnostics
 // of the .cellens files are sent again when they changed, as a YAML file an
 // entry names may have come or gone. A .go file, or a folder created or
 // deleted, makes the listing of the Go types out of date, so the next
 // completion of a go: lists them again.
 func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMessage) error {
-	on := ss.features.Has(feature.CRDTypedPolicies)
+	on, reading := ss.features.Has(feature.CRDTypedPolicies), ss.readsLenses()
 	var p struct {
 		Changes []struct {
 			URI  string `json:"uri"`
@@ -649,6 +652,7 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 	}
 	lensChanged, aboutLens := false, false
 	var lensFolders []string
+	heard := "" // a .cellens created or changed while cellens-types is off
 	for _, c := range p.Changes {
 		// A YAML file, or a folder that may hold some, may be or hold an
 		// example or a CRD.
@@ -658,7 +662,7 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		case c.Type != fileChanged && !isLens(c.URI) && !strings.HasSuffix(key, ".go"):
 			ss.examplesChanged()
 		}
-		aboutLens = aboutLens || isLens(c.URI)
+		aboutLens = aboutLens || reading && isLens(c.URI)
 		// A .go file, or a folder that may hold some, makes the listing of
 		// the Go types out of date (see goFresh).
 		if strings.HasSuffix(crdKey(c.URI), ".go") || c.Type != fileChanged && !isYAML(crdKey(c.URI)) && !isLens(c.URI) {
@@ -666,6 +670,10 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 		}
 		key := crdKey(c.URI)
 		switch l := ss.lenses[key]; {
+		case isLens(c.URI) && !reading:
+			if c.Type != fileDeleted && heard == "" {
+				heard = key
+			}
 		case isLens(c.URI) && l != nil && l.open:
 		case isLens(c.URI) && c.Type == fileDeleted:
 			lensChanged = ss.dropLens(key) || lensChanged
@@ -678,6 +686,13 @@ func (ss *session) didChangeWatchedFiles(ctx context.Context, params json.RawMes
 				lensFolders = append(lensFolders, path)
 			}
 		}
+	}
+	if !reading {
+		if err := ss.noticeLenses(heard); err != nil {
+			return err
+		}
+		ss.probeLenses(ctx, lensFolders)
+		lensFolders = nil
 	}
 	changed := false
 	var created []string

@@ -27,13 +27,13 @@ func TestExperimentalListedInInitializeResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := r.Capabilities.Experimental.CelLens.ExperimentalFeatures
-	for _, want := range []string{"kyverno", "crd-typed-policies", "fitting-completion"} {
+	for _, want := range []string{"kyverno", "crd-typed-policies", "fitting-completion", "cellens-types"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("experimentalFeatures = %v, want it to list %s", got, want)
 		}
 	}
-	if len(got) != 3 {
-		t.Errorf("experimentalFeatures = %v, want three names", got)
+	if len(got) != 4 {
+		t.Errorf("experimentalFeatures = %v, want four names", got)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestExperimentalUnknownName(t *testing.T) {
 				if err := json.Unmarshal(m.Params, &p); err != nil {
 					t.Fatal(err)
 				}
-				if p.Type != 2 || !strings.Contains(p.Message, `"nope"`) || !strings.Contains(p.Message, "crd-typed-policies, fitting-completion, kyverno") {
+				if p.Type != 2 || !strings.Contains(p.Message, `"nope"`) || !strings.Contains(p.Message, "cellens-types, crd-typed-policies, fitting-completion, kyverno") {
 					t.Errorf("logMessage = %+v, want a warning naming nope and the known names", p)
 				}
 				break

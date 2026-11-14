@@ -219,7 +219,7 @@ func TestRunCheckExperimental(t *testing.T) {
 		{"kyverno on", []string{"check", "--experimental", "kyverno", path}, exitFail, "undeclared reference to 'nope'", ""},
 		{"other feature on", []string{"check", "--experimental", "fitting-completion", path}, exitOK, "", ""},
 		{"kyverno among several", []string{"check", "--experimental=fitting-completion,kyverno", path}, exitFail, "undeclared reference to 'nope'", ""},
-		{"unknown name", []string{"check", "--experimental", "nope", path}, exitOK, "", `unknown experimental feature "nope", ignored; the known ones are crd-typed-policies, fitting-completion, kyverno`},
+		{"unknown name", []string{"check", "--experimental", "nope", path}, exitOK, "", `unknown experimental feature "nope", ignored; the known ones are cellens-types, crd-typed-policies, fitting-completion, kyverno`},
 		{"unknown name next to a known one", []string{"check", "--experimental", "kyverno,nope", path}, exitFail, "undeclared reference to 'nope'", `"nope"`},
 	}
 	for _, tt := range tests {

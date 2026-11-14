@@ -123,7 +123,7 @@ func benchClientIn(b *testing.B, folder string) (send func(any), read func() jso
 	if folder != "" {
 		params["workspaceFolders"] = []map[string]any{{"uri": fileURI(folder), "name": "ws"}}
 	}
-	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params})
+	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": withLenses(params)})
 	read()
 	return send, read
 }
@@ -697,7 +697,7 @@ func benchStream(b *testing.B, folder string) (send func(any), messages <-chan j
 		}
 	}
 	params := map[string]any{"capabilities": map[string]any{}, "workspaceFolders": []map[string]any{{"uri": fileURI(folder), "name": "ws"}}}
-	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params})
+	send(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": withLenses(params)})
 	for m := range out {
 		if m.Method == "" && string(m.ID) == "1" {
 			break

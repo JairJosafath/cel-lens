@@ -15,6 +15,7 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
 	"github.com/JairJosafath/cel-lens/engine/internal/goschema"
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
+	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 )
 
 func writeGo(t *testing.T, p, text string) {
@@ -83,7 +84,7 @@ func TestGoReadsPruned(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeGo(t, filepath.Join(dir, "api", "a.go"), "package api\n\ntype A struct {\n\tX int `json:\"x\"`\n}\n")
-	ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), docs: map[string]*document{}, folders: []string{dir}}
+	ss := &session{conn: jsonrpc.NewConn(strings.NewReader(""), io.Discard), docs: map[string]*document{}, folders: []string{dir}, features: feature.Of(feature.CellensTypes)}
 	lens := pathURI(filepath.Join(dir, cellens.FileName))
 	ss.putLens(t.Context(), lens, []byte("types:\n  - file: p.yaml\n    document: ValidatingAdmissionPolicy p\n    variable: params\n    go: ./api#A\n"), true)
 	g := ss.lenses[crdKey(lens)].entries[0].Go
@@ -135,7 +136,7 @@ func TestTypeChoicesInBackground(t *testing.T) {
 	t.Cleanup(func() { _ = clientOut.Close(); _ = serverOut.Close() })
 
 	c := jsonrpc.NewConn(clientIn, clientOut)
-	if err := c.Request("1", "initialize", map[string]any{"workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}}); err != nil {
+	if err := c.Request("1", "initialize", map[string]any{"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}}, "workspaceFolders": []map[string]any{{"uri": pathURI(dir)}}}); err != nil {
 		t.Fatal(err)
 	}
 	readMessage(t, c) // the initialize result
@@ -187,7 +188,9 @@ func listingSession(t *testing.T, list func(ctx context.Context, dirFS func(stri
 		<-served
 	})
 	c := jsonrpc.NewConn(clientIn, clientOut)
-	go func() { _ = c.Request("1", "initialize", map[string]any{}) }()
+	go func() {
+		_ = c.Request("1", "initialize", map[string]any{"initializationOptions": map[string]any{"experimental": []string{"cellens-types"}}})
+	}()
 	readUntil(t, c, func(m jsonrpc.Message) bool { return string(m.ID) == `"1"` })
 	return c
 }
