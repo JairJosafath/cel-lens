@@ -10,6 +10,7 @@ import (
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/hover"
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
@@ -250,6 +251,7 @@ func (p *policyTypes) variables(e extract.Expression) schema {
 			failsWith(s, tv)
 		}
 		s["description"] = fmt.Sprintf("Policy variable %s, defined in spec.variables by %#q.", tv.Name, tv.Expression)
+		s[markdownKey] = markdown("Policy variable " + hover.Escape(tv.Name) + ", defined in spec.variables by " + hover.Code(tv.Expression) + ".")
 		if len(tv.Assumed) > 0 && tv.Dyn == "" {
 			s = inferred(s, tv)
 		}
@@ -273,10 +275,12 @@ func paramsVariable(paramKind any, crds *check.CRDs, typeFromCRDs bool) variable
 			return variable{name: "params", desc: desc, typeName: k.String(), schema: s}
 		}
 	}
+	// The kind is the file's, and the description Markdown.
+	named := hover.Escape(apiVersion + " " + kind)
 	if !typeFromCRDs {
 		return variable{
 			name: "params", schema: unknownType(reasonCRDsOff),
-			desc: desc + " It is dyn, not typed, because spec.paramKind " + apiVersion + " " + kind +
+			desc: desc + " It is dyn, not typed, because spec.paramKind " + named +
 				" is no built-in kind, and typing params from a CustomResourceDefinition is the experimental feature `crd-typed-policies`, which is off.",
 		}
 	}
@@ -285,7 +289,7 @@ func paramsVariable(paramKind any, crds *check.CRDs, typeFromCRDs bool) variable
 	}
 	return variable{
 		name: "params", schema: unknownType(reasonParamKind),
-		desc: desc + " It is dyn, not typed, because spec.paramKind " + apiVersion + " " + kind +
+		desc: desc + " It is dyn, not typed, because spec.paramKind " + named +
 			" was not found: it is no built-in kind and no CustomResourceDefinition among the workspace files defines it.",
 	}
 }

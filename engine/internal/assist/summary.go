@@ -226,13 +226,7 @@ func (a *Assistant) crdSummary(root map[string]any, e extract.Expression) (Summa
 	if !ok {
 		return Summary{}, false
 	}
-	crdSpec, _ := root["spec"].(map[string]any)
-	names, _ := crdSpec["names"].(map[string]any)
-	kind, _ := names["kind"].(string)
-	if kind == "" {
-		kind = cmp.Or(documentName(root), "CustomResourceDefinition")
-	}
-	s := Summary{Subject: "self", SubjectType: assume.Name(kind, place)}
+	s := Summary{Subject: "self", SubjectType: crdSubject(root, place)}
 	vars := crdScope(root, e, false) // self, and oldSelf with the same schema
 	if len(vars) == 0 || !reaches(vars[0].schema, assume.Rules, 0) {
 		return s, true

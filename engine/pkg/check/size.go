@@ -50,6 +50,19 @@ type sizer struct {
 	total bool
 	// estimates are the results of estimate by the limits they were made for.
 	estimates map[string]estimate
+	// budget is the most the expression may cost with the limits: 0 means
+	// the API server's per-expression budget (StaticEstimatedCostLimit), and
+	// a smaller one sizes the limits that bring an expression near its
+	// budget well under it (see Limits).
+	budget uint64
+}
+
+// limit is the most the expression may cost with the limits (see budget).
+func (sz *sizer) limit() uint64 {
+	if sz.budget == 0 {
+		return validation.StaticEstimatedCostLimit
+	}
+	return sz.budget
 }
 
 // roomy is the smallest number worth suggesting for one limit on its own; a
@@ -99,7 +112,7 @@ func (sz *sizer) size(ctx context.Context, rc ruleCost, fixes []Fix) (sized []Fi
 }
 
 // largest is the largest number of the ladder that, given to all fixes, brings
-// rc and the total under budget; 0 if none does. A bigger limit never costs less.
+// rc under sz.limit() and the total under budget; 0 if none does. A bigger limit never costs less.
 func (sz *sizer) largest(ctx context.Context, rc ruleCost, fixes []Fix) (int64, error) {
 	steps := ladder()
 	limitsAt := func(i int) map[string]int64 {
@@ -199,7 +212,7 @@ func (sz *sizer) key(rc ruleCost, limits map[string]int64, total bool) string {
 func (sz *sizer) under(rc ruleCost, est estimate, total bool) bool {
 	for i, r := range est.rules {
 		if total && r.path.String() == rc.path.String() || !total && r.index == rc.index && r.isMessage == rc.isMessage {
-			return est.rules[i].cost <= validation.StaticEstimatedCostLimit && (!total || est.rest <= validation.StaticEstimatedCRDCostLimit)
+			return est.rules[i].cost <= sz.limit() && (!total || est.rest <= validation.StaticEstimatedCRDCostLimit)
 		}
 	}
 	return false

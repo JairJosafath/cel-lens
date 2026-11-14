@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"github.com/JairJosafath/cel-lens/engine/internal/jsonrpc"
@@ -364,6 +365,81 @@ func TestRuleIndexRunsAgain(t *testing.T) {
 	var got RuleList
 	if err := json.Unmarshal(m.Result, &got); err != nil || len(got.Documents) != 1 || got.Documents[0].Kind != "CustomResourceDefinition" {
 		t.Errorf("ruleList = %s, %+v, want the CRD on disk", m.Result, m.Error)
+	}
+}
+
+// TestRuleIndexRunsAgainForVersionAndFeatures is #43: a run that ends after
+// the Kubernetes version or the experimental features changed is not the
+// answer; the index runs again, with the new values, and answers for them: the
+// version it names, and the Kyverno policy only the new features list.
+func TestRuleIndexRunsAgainForVersionAndFeatures(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeRuleFile(t, filepath.Join(dir, "a-crd.yaml"), listCRD)
+	writeRuleFile(t, filepath.Join(dir, "b-kyverno.yaml"), listKyverno)
+	ss := newSession(t)
+	runs := make(chan ruleInputs)
+	release := make(chan struct{})
+	ss.ruleWork = func(ctx context.Context, c *ruleCheck) (map[string]indexedFile, error) {
+		select {
+		case runs <- c.inputs:
+		case <-ctx.Done():
+			return c.memo, ctx.Err()
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return c.memo, ctx.Err()
+		}
+		return c.run(ctx)
+	}
+	rc := serveRules(t, ss, dir)
+	rc.request("list", "workspace/executeCommand", ruleListParams())
+	first := recvWithin(t, runs, "the first run")
+	if first.kube != kubeversion.Default() || first.features.Has(feature.Kyverno) {
+		t.Fatalf("first run inputs = %v, %v, want the default version and no kyverno", first.kube, first.features)
+	}
+	rc.notify("workspace/didChangeConfiguration", map[string]any{"settings": map[string]any{"kubernetesVersion": "1.33", "experimental": []string{"kyverno"}}})
+	// The loop has handled the change once it answers what comes after.
+	rc.request("hover", "textDocument/hover", map[string]any{"textDocument": map[string]any{"uri": pathURI(filepath.Join(dir, "a-crd.yaml"))}, "position": map[string]any{"line": 0, "character": 0}})
+	rc.answer("hover")
+	sendWithin(t, release, "the first run to end")
+	second := recvWithin(t, runs, "the second run")
+	sendWithin(t, release, "the second run to end")
+	if second.kube.String() != "1.33" || !second.features.Has(feature.Kyverno) {
+		t.Errorf("second run inputs = %v, %v, want version 1.33 and kyverno", second.kube, second.features)
+	}
+	m := rc.answer("list")
+	var got RuleList
+	if err := json.Unmarshal(m.Result, &got); err != nil {
+		t.Fatalf("ruleList = %s, %+v, want a list", m.Result, m.Error)
+	}
+	if got.KubernetesVersion != "1.33" || !slices.Equal(documentNames(got.Documents), []string{"CustomResourceDefinition widgets.example.com", "ValidatingPolicy require-team"}) {
+		t.Errorf("ruleList = version %s, documents %v, want 1.33 and the CRD and the Kyverno policy", got.KubernetesVersion, documentNames(got.Documents))
+	}
+}
+
+// recvWithin receives from ch, and fails the test when nothing comes in a few
+// seconds, so a regression fails fast.
+func recvWithin[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no sign of %s in 5 s", what)
+		panic("unreachable")
+	}
+}
+
+// sendWithin sends on ch, and fails the test when nobody receives in a few
+// seconds.
+func sendWithin(t *testing.T, ch chan<- struct{}, what string) {
+	t.Helper()
+	select {
+	case ch <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no sign of %s in 5 s", what)
 	}
 }
 

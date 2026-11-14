@@ -21,6 +21,8 @@ type settings struct {
 	crds    *CRDs
 	on      feature.Set
 	assumed []AssumedType
+	// validations keeps the validations of the CRDs (WithValidations).
+	validations *Validations
 }
 
 // typingCRDs returns the CRDs that type params, none unless the experimental

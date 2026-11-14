@@ -294,6 +294,58 @@ func TestRuleListIDsStay(t *testing.T) {
 	}
 }
 
+// TestRuleListSameNameIDs is #43: the "#2" of a document's id part counts
+// every document of that kind and name in the file, listed or not, so the id
+// of a rule of a second document stays when the document above it, with no
+// rule before, gains its first. Each listed document carries the id part the
+// engine uses, IDPart, for a client to take rather than count.
+func TestRuleListSameNameIDs(t *testing.T) {
+	t.Parallel()
+	const vap = "ValidatingAdmissionPolicy limits"
+	bare := "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nmetadata:\n  name: limits\nspec: {}\n"
+	other := "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nmetadata: {name: other}\nspec:\n  validations:\n    - {expression: object.a > 0, message: other rule}\n"
+	type idPart struct{ doc, part string }
+	parts := func(text string) []idPart {
+		var out []idPart
+		for _, d := range listed(t, text, true) {
+			if len(d.Rules) == 0 || !strings.HasPrefix(d.Rules[0].ID, listURI+"#"+d.IDPart+"#") {
+				t.Errorf("listRules() document %q has IDPart %q, want the part of the id %q", d.Document, d.IDPart, d.Rules[0].ID)
+			}
+			out = append(out, idPart{d.Document, d.IDPart})
+		}
+		return out
+	}
+	idOf := func(text string) string {
+		docs := listed(t, text, true)
+		return docs[len(docs)-1].Rules[0].ID
+	}
+	for _, tc := range []struct {
+		name, text string
+		want       []idPart
+	}{
+		{"one document", listVAP, []idPart{{vap, vap}}},
+		{"a same-name document above with no rule", bare + "---\n" + listVAP, []idPart{{vap, vap + "#2"}}},
+		{"a same-name document above with rules", listVAP + "---\n" + listVAP, []idPart{{vap, vap}, {vap, vap + "#2"}}},
+		{"a same-name document of no listed apiVersion above", strings.Replace(bare, "v1", "v1beta9", 1) + "---\n" + listVAP, []idPart{{vap, vap + "#2"}}},
+		{"another name above", other + "---\n" + listVAP, []idPart{{"ValidatingAdmissionPolicy other", "ValidatingAdmissionPolicy other"}, {vap, vap}}},
+		{"a different kind of the same name above", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: limits\n---\n" + listVAP, []idPart{{vap, vap}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parts(tc.text); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("listRules() id parts = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	t.Run("the id stays when the document above gains its first rule", func(t *testing.T) {
+		t.Parallel()
+		before, after := idOf(bare+"---\n"+listVAP), idOf(listVAP+"---\n"+listVAP)
+		if before != after {
+			t.Errorf("id of the second document's rule = %q, then %q once the first has rules, want it the same", before, after)
+		}
+	})
+}
+
 // TestRuleListPlaces checks where a rule and its document are (#35): the
 // location is the expression's range, the span runs from the line of the
 // rule's list item to the end of the item, and the document's range from

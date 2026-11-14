@@ -32,6 +32,13 @@ type client struct {
 
 	msgs    chan received // the server's messages, read off the pipe; closed when the pump ends
 	timeout time.Duration // how long read waits for one message
+
+	// hover, when not nil, is sent as initializationOptions.hover by the
+	// initialize call. commands are the command ids the initialize sent
+	// listed there: every hover the client gets is checked to link to no
+	// other command (see unlistedLinks).
+	hover    map[string]any
+	commands []string
 }
 
 // received is one result of reading the server's pipe.
@@ -95,11 +102,12 @@ func (c *client) use(t *testing.T) {
 
 // call sends a request and returns the response's result, or its error. An
 // initialize whose initializationOptions list no experimental features turns
-// cellens-types on (see withLenses).
+// cellens-types on (see withLenses), and sends c.hover. A hover's result is
+// checked to link to no command the initialize did not list.
 func (c *client) call(method string, params any) (json.RawMessage, *jsonrpc.Error) {
 	c.t.Helper()
 	if method == "initialize" {
-		params = withLenses(params)
+		params = c.withHover(withLenses(params))
 	}
 	c.nextID++
 	id := strconv.Itoa(c.nextID)
@@ -107,8 +115,58 @@ func (c *client) call(method string, params any) (json.RawMessage, *jsonrpc.Erro
 	for {
 		m := c.read("the response to " + method)
 		if string(m.ID) == id {
+			if method == "textDocument/hover" {
+				c.checkLinks(m.Result)
+			}
 			return m.Result, m.Error
 		}
+	}
+}
+
+// withHover returns the params of an initialize with c.hover as
+// initializationOptions.hover, when it is not nil, and keeps the commands
+// the params list there in c.commands.
+func (c *client) withHover(params any) any {
+	p, ok := params.(map[string]any)
+	if !ok {
+		return params
+	}
+	opts, _ := p["initializationOptions"].(map[string]any)
+	if c.hover != nil {
+		out := maps.Clone(p)
+		opts = maps.Clone(opts)
+		if opts == nil {
+			opts = map[string]any{}
+		}
+		opts["hover"] = c.hover
+		out["initializationOptions"] = opts
+		params = out
+	}
+	c.commands = nil
+	hover, _ := opts["hover"].(map[string]any)
+	switch commands := hover["commands"].(type) {
+	case []string:
+		c.commands = commands
+	case []any:
+		for _, id := range commands {
+			if s, ok := id.(string); ok {
+				c.commands = append(c.commands, s)
+			}
+		}
+	}
+	return params
+}
+
+// checkLinks fails the test when res, the result of a hover, links to a
+// command c.commands does not list.
+func (c *client) checkLinks(res json.RawMessage) {
+	c.t.Helper()
+	var h *struct{ Contents struct{ Value string } }
+	if err := json.Unmarshal(res, &h); err != nil || h == nil {
+		return
+	}
+	if bad := unlistedLinks(h.Contents.Value, c.commands); len(bad) > 0 {
+		c.t.Errorf("hover = %q links to the commands %q, which the client does not list (it lists %q)", h.Contents.Value, bad, c.commands)
 	}
 }
 

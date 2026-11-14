@@ -14,6 +14,7 @@ package check
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -150,18 +151,15 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 	if errors.Is(findErr, context.Canceled) || errors.Is(findErr, context.DeadlineExceeded) {
 		return nil, findErr
 	}
-	byDoc := map[int]map[string]extract.Expression{}
-	for _, e := range exprs {
-		if byDoc[e.Document] == nil {
-			byDoc[e.Document] = map[string]extract.Expression{}
-		}
-		byDoc[e.Document][e.FieldPath] = e
-	}
+	byDoc := expressionsByDocument(exprs)
 	parser, err := cel.NewEnv(cel.OptionalTypes())
 	if err != nil {
 		return nil, fmt.Errorf("build syntax environment for %s: %w", file, err)
 	}
-	r := reporter{version: set.version, crds: set.typingCRDs(), assumed: set.assumed, kyverno: set.on.Has(feature.Kyverno), file: file, lines: extract.SplitLines(text), data: data, eol: "\n", spans: spans{env: parser}}
+	r := reporter{version: set.version, crds: set.typingCRDs(), assumed: set.assumed, kyverno: set.on.Has(feature.Kyverno), file: file, lines: extract.SplitLines(text), data: data, eol: "\n", spans: spans{env: parser}, validations: set.validations}
+	if r.validations != nil {
+		r.textSum = textSum(data)
+	}
 	if bytes.Contains(extract.Text(data), []byte("\r\n")) {
 		r.eol = "\r\n"
 	}
@@ -173,6 +171,7 @@ func Check(ctx context.Context, file string, data []byte, opts ...Option) ([]Dia
 		if err := ctx.Err(); err != nil {
 			return r.sorted(), err
 		}
+		r.doc = d.Index
 		if err := r.document(ctx, d.Node, found); err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return r.sorted(), cerr
@@ -201,6 +200,13 @@ type reporter struct {
 	bare  *plugincel.CompositedCompiler // see compositeCompiler
 
 	spans spans // finds where the nodes of an expression lie
+
+	// validations keeps the validations of the CRDs for Check and Costs of
+	// the same text (WithValidations), nil for none; textSum is the key of
+	// the text in it, and doc the index of the document in hand.
+	validations *Validations
+	textSum     [sha256.Size]byte
+	doc         int
 }
 
 func (r *reporter) sorted() []Diagnostic {

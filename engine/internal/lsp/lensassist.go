@@ -17,6 +17,7 @@ import (
 	"github.com/JairJosafath/cel-lens/engine/internal/assume"
 	"github.com/JairJosafath/cel-lens/engine/internal/cellens"
 	"github.com/JairJosafath/cel-lens/engine/internal/goschema"
+	"github.com/JairJosafath/cel-lens/engine/internal/hover"
 	"github.com/JairJosafath/cel-lens/engine/internal/inline"
 	"github.com/JairJosafath/cel-lens/engine/internal/matchkind"
 	"github.com/JairJosafath/cel-lens/engine/pkg/check"
@@ -782,15 +783,16 @@ func (ss *session) valueHover(ctx context.Context, l *lens, s cellens.Spot) (str
 	if len(problems) > 0 {
 		return "", nil
 	}
-	where := e.Document.Kind + " " + e.Document.Name
+	// What the hover takes from the files is escaped (hover.Escape).
+	where := hover.Escape(e.Document.Kind + " " + e.Document.Name)
 	if e.Version != "" {
-		where += ", version " + e.Version
+		where += ", version " + hover.Escape(e.Version)
 	}
-	where += ", in " + e.File + "."
+	where += ", in " + hover.Escape(e.File) + "."
 	var typ, why string
 	data, err := ss.targetText(l.target(e))
 	if err != nil {
-		why = fmt.Sprintf("The file %s %s.", e.File, unreadable(err))
+		why = hover.Escape(fmt.Sprintf("The file %s %s.", e.File, unreadable(err)))
 	} else {
 		roots, err := check.Roots(ctx, data, check.WithVersion(ss.kube), check.WithFeatures(ss.features), check.WithCRDs(&ss.crds))
 		if err != nil {
@@ -805,15 +807,15 @@ func (ss *session) valueHover(ctx context.Context, l *lens, s cellens.Spot) (str
 			typ, why = kubeType(roots[i], e.Path)
 		}
 	}
-	md := "```cel\n(value) " + valueName(e)
+	decl := "(value) " + valueName(e)
 	if typ != "" {
-		md += ": " + typ
+		decl += ": " + typ
 	}
-	md += "\n```\n" + where + "\n\n" + why
+	md := hover.Block("cel", decl) + "\n" + where + "\n\n" + why
 	if typ == "dyn" {
 		if pe, ok := l.parsed(s); ok {
 			if t, _, msg := ss.assumedType(ctx, l, pe); msg == "" {
-				md += " This entry gives it `" + inline.ShortType(t.Type) + "`."
+				md += " This entry gives it " + hover.Code(inline.ShortType(t.Type)) + "."
 			}
 		}
 	}
@@ -915,27 +917,31 @@ func (ss *session) typeHover(ctx context.Context, l *lens, s cellens.Spot) strin
 	if e.Kind == nil {
 		short = inline.ShortType(t.Type)
 	}
-	md := "```cel\n(" + s.KeyAt + ") " + name
+	decl := "(" + s.KeyAt + ") " + name
 	if msg == "" {
-		md += ": " + short
+		decl += ": " + short
 	}
-	md += "\n```\n"
+	md := hover.Block("cel", decl) + "\n"
+	// The messages, notes and descriptions name what the files hold, so
+	// they are escaped (hover.Escape).
 	var parts []string
 	switch {
 	case msg != "":
-		parts = append(parts, msg)
+		parts = append(parts, hover.Escape(msg))
 	case e.Kind != nil:
-		parts = append(parts, ss.kindDescription(e.Kind))
+		parts = append(parts, hover.Escape(ss.kindDescription(e.Kind)))
 	case e.Go != nil:
 		if typ, _ := ss.goType(ctx, l.key, e.Go); typ != nil {
 			desc, _ := typ.Schema["description"].(string)
-			parts = append(parts, strings.TrimSpace(fmt.Sprintf("The Go type %s in %s:%d. %s", e.Go.Name, typ.File, typ.Line, oneLine(desc, ""))))
+			parts = append(parts, hover.Escape(strings.TrimSpace(fmt.Sprintf("The Go type %s in %s:%d. %s", e.Go.Name, typ.File, typ.Line, oneLine(desc, "")))))
 		}
 	}
 	if msg == "" && e.Kind == nil && short != t.Type {
-		parts = append(parts, "`"+t.Type+"`")
+		parts = append(parts, hover.Code(t.Type))
 	}
-	parts = append(parts, notes...)
+	for _, n := range notes {
+		parts = append(parts, hover.Escape(n))
+	}
 	return md + strings.Join(parts, "\n\n")
 }
 

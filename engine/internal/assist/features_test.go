@@ -89,9 +89,10 @@ func TestCRDTypedPoliciesOff(t *testing.T) {
 	}
 }
 
-// TestFittingCompletionOff checks that completion and hover are those of
-// v0.17.1 without the feature: a dyn receiver offers every member, oldSelf is
-// offered where the API server rejects it, and hover gives no reason for dyn.
+// TestFittingCompletionOff checks that completion is that of v0.17.1
+// without the feature: a dyn receiver offers every member and oldSelf is
+// offered where the API server rejects it, while hover gives the reason for
+// dyn either way, as the feature gates only completion (#52).
 func TestFittingCompletionOff(t *testing.T) {
 	t.Parallel()
 	off, on := with(t), with(t, feature.FittingCompletion)
@@ -129,8 +130,8 @@ func TestFittingCompletionOff(t *testing.T) {
 		doc := vapMatching("  matchConstraints:\n    resourceRules:\n      - apiGroups: ['*']\n        apiVersions: ['*']\n        resources: ['*']\n", "object.spec == null")
 		parsed := assist.Parse(context.Background(), "p.yaml", []byte(doc))
 		hOff, ok := off.Hover(parsed, posIn(t, doc, "object.spec", 1))
-		if !ok || strings.Contains(hOff.Markdown, "dyn: ") {
-			t.Errorf("Hover(object.spec) off = %q, want no reason for dyn", hOff.Markdown)
+		if !ok || !strings.Contains(hOff.Markdown, "dyn: ") {
+			t.Errorf("Hover(object.spec) off = %q, want a reason for dyn", hOff.Markdown)
 		}
 		if hOn, ok := on.Hover(parsed, posIn(t, doc, "object.spec", 1)); !ok || !strings.Contains(hOn.Markdown, "dyn: ") {
 			t.Errorf("Hover(object.spec) on = %q, want a reason for dyn", hOn.Markdown)

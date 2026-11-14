@@ -40,8 +40,9 @@ Server Protocol on stdin and stdout, for any editor:
   API server's messages. A document whose YAML does not parse gets an error on
   the line where it breaks (`YAML is broken here: ...`); the other documents of
   the file are still checked.
-- **Hover** on a variable, field or function inside an expression: its type and
-  a short description.
+- **Hover** anywhere inside an expression the check checks: what the cursor
+  is on, when it is a variable, field or function, then what the expression
+  reads, in one fixed layout (see [The hover](#the-hover)).
 - **Completion** inside an expression: `self`/`oldSelf` or `object`/`request`/...,
   the fields of the type before a dot, and the Kubernetes CEL functions. The
   trigger characters are `.`, `/`, `#`, `(` and `:` for YAML files, and the
@@ -248,7 +249,7 @@ number also brings the total under its budget). No fix is offered when there is 
   changes, so asking again only sends them.
 
 In a YAML file, positions outside CEL expressions get no hover and no
-completion. Documents are
+completion (see [The hover](#the-hover)). Documents are
 synchronised in full; the server exits 0 after `shutdown` and `exit`, and 1 when
 the client leaves without `shutdown`. `go test -bench Diagnostics ./internal/lsp/`
 measures the 300 ms diagnostics budget on a 1,000-line CRD, and
@@ -263,9 +264,315 @@ only transport) and `--clientProcessId=<pid>`, which makes the server exit when
 that process is gone. `--socket`, `--pipe` and `--node-ipc` are refused with
 exit code 2. `lsp --help` lists them.
 
+## The hover
+
+Every position inside a CEL expression the check checks gets one hover: a
+CustomResourceDefinition's `rule` and `messageExpression`; a
+ValidatingAdmissionPolicy's validation `expression` and `messageExpression`,
+match conditions, variables and audit annotation `valueExpression`; a
+MutatingAdmissionPolicy's match conditions, variables and mutations; and,
+while `kyverno` is on, a Kyverno ValidatingPolicy's. Names, operators,
+literals, the inside of strings and spaces get it alike. A position outside
+CEL, the YAML key (`rule:`) included, gets `null`, and so does an expression
+of a document the check does not check, such as a `v1beta1`
+CustomResourceDefinition, off a name; there a name still gets what it is.
+
+The hover's blocks come in this order and no other, separated by `---`, each
+left out, with its separator, when it has nothing:
+
+1. **The part**: what the cursor is on, a variable, field or function, as
+   before: the declaration in a ` ```cel ` block (`(field) port: int`), the
+   description, the kinds that have the field, the overloads with the one
+   the call selects and an example; the link to its docs is in **Docs:**.
+   Left out where the cursor is on no name.
+2. **Fix**: the problems at the cursor, with their fixes (see *The Fix
+   block* below).
+3. The rule, as paragraphs, each led by its bold label: **Checks:** (or
+   **Returns:**), **Uses:**, **Cost:**, **Examples:** and **Docs:**.
+
+The range is the name when the cursor is on a part, so the hover stays while
+the mouse moves along it, and the whole expression otherwise. Every expression the check checks has its
+**Docs:**, so every position inside one gets a hover, `1 < 2` included.
+
+**Checks:** says what a check checks, in a sentence, for a CRD's `rule`, a
+policy's validation `expression`, a match condition and a Kyverno
+validation: *for every `p` in `self.ports`, `p.port` is less than
+`65536`.* The sentence is a translation of the parsed expression by a fixed
+table of shapes (package `internal/meaning`), never the rule's `message`:
+
+| Shape | Sentence |
+| --- | --- |
+| `A && B && …` | *A, and B, and …* |
+| `A \|\| B \|\| …` | *A, or B, or …* |
+| `!has(x) \|\| B` | *when `x` is set, B* |
+| `c ? A : B`, both boolean | *if C, then A; otherwise B* |
+| `x < y`, `<=`, `>`, `>=`, `==`, `!=` | *`x` is less than / is at most / is greater than / is at least / equals / does not equal `y`* |
+| `size(x)` or `x.size()` compared | *the size of `x` is …* |
+| `has(x)`, `!has(x)` | *`x` is set*, *`x` is not set* |
+| `x in [a, b]`, `x in y` | *`x` is one of `a`, `b`*, *`x` is in `y`* |
+| `x.all(v, P)`, `x.exists(v, P)`, `x.exists_one(v, P)`, `x.existsOne(v, P)`, and with two variables `x.all(k, v, P)` | *for every / for at least one / for exactly one `v` in `x`, P*; *for every `k`, `v` in `x`, P* |
+| `x.startsWith(s)`, `endsWith`, `contains`, `matches(re)`, each also with `!` | *`x` starts with / ends with / contains `s`*, *matches the regular expression `re`*, *does not start with …* |
+| `isQuantity(x)`, `isURL(x)`, `isIP(x)`, `isCIDR(x)`, `isSemver(x)` | *`x` is a quantity / a URL / an IP address / a CIDR / a semantic version* |
+| a field read as the result (`self.enabled`) | *`self.enabled` is true* |
+
+A match condition's sentence starts *the policy applies only when*, and its
+`!has(x) || B` reads *`x` is not set, or B*. In a list of clauses joined by
+*and* or *or*, a clause that opens a scope (*for every*, *when*, *if*) goes
+last, which `&&` and `||` allow, so that nothing after it reads as part of
+it. Every value is quoted from the source by the parser's offsets, in a
+code span with more backticks than it holds, on one line: white space
+outside string literals becomes one space, and a string keeps its own
+(`'a  b'`).
+
+**No sentence is shown**, and the paragraph is left out, when: the text does
+not parse; one boolean part matches no row (a `!` of a shape without a
+negative form, such as `!(a < b)` or `!self.enabled`, a call not in the
+table, `true` or `false`, a macro other than those above, a bare name or an
+index); `&&` and `||` mix at one level without a comprehension or a ternary
+between them, `!has(x) || (A && B)` included; two clauses of one list open
+a scope; the sentence has more than four simple clauses (comparisons, `has`,
+`in`, the functions, field reads) or more than 200 characters as shown; a
+value cannot be told apart from what is around it, holds a comment or a
+line break inside a string; a match condition is a ternary; and when the
+file's check has an error that starts inside the expression, or that kept it
+from being compiled. A sentence that is shown is right; one that cannot be
+made right is not shown, not shortened.
+
+**Returns:** says what an expression that is no check gives, in a fixed
+sentence from its field: a `messageExpression`, *the message the API server
+gives when the rule is false* (in a Kyverno policy, *the message Kyverno
+gives when the validation is false*); a policy variable, *the value of
+`variables.<name>`*; an audit annotation, *the value of the audit annotation
+`<key>`*; a mutation, *the apply configuration the policy applies* or *the
+JSON patch the policy applies*.
+
+Both depend only on the expression's text, so they are worked out once per
+version of the document. The expression is parsed once for **Uses:** and
+**Checks:** together (`meaning.Parser`, without macros, so a macro is the
+call it is written as), and `meaning.Sentence` reads the parsed tree. `go
+test -bench Sentence ./internal/meaning/` makes the sentence of each rule of
+`BenchmarkHover`'s CRD from the parsed rule, as the hover does, and
+`BenchmarkParseAndSentence` with the parse, nearly all of whose time is
+cel-go's parser.
+
+**Uses:** lists the variables of the scope the expression reads, in the
+order it first reads them, each once, without a macro's own variables (the
+`p` of `self.ports.all(p, ...)`), each with its type and a few words:
+
+> **Uses:**
+>
+> - `self`: `Widget.spec.ports[]` (object), the value the rule is on.
+> - `oldSelf`: `Widget.spec.ports[]` (object), the value before the update, so the rule runs only on update.
+> - `params`: `dyn`, the parameter resource the binding refers to, null when there is none; dyn because spec.paramKind is no built-in kind and no CustomResourceDefinition among the workspace files defines it.
+> - `variables.limit`: `int`, the policy variable defined by `params.maxReplicas`.
+
+`self` and `oldSelf` are named with the words of the line above the rule
+(`Widget.spec`, or `Widget` at the root) and the schema's type; `object`,
+`oldObject`, `params`, `request`, `namespaceObject`, `authorizer`, each
+`variables.<name>` and Kyverno's own variables with the type hover gives
+them. One variable stands on the label's line; several make a list. A type
+a `.cellens` entry gives says so, in the words of the part's hover (`Typed
+from the schema at .cellens, line 6: Kubernetes leaves this value dyn.`).
+**Examples:** is what a CRD's rule does to its examples (see [What the rules
+do to the examples](#what-the-rules-do-to-the-examples)).
+
+**Cost:** is what the API server of the Kubernetes version picked would
+estimate the expression to cost when the CustomResourceDefinition is created
+(`check.Costs`: its validation, compiler, environment and estimator), in one
+paragraph, with numbers written as the cost diagnostics write them (`12K`,
+`6.2M`, `2.4B`) and shares rounded down:
+
+> **Cost:** estimated 6.3M of the per-expression budget of 10M (62%), half or more: doubling a limit it depends on can take it over. Why: `spec.tags` is a list with no `maxItems`, and the estimator assumes up to 1M items; `spec.tags[*]` is a string with no `maxLength`, and the estimator assumes up to 3.1M characters. All rules of `v1`'s schema: 6.3M of 100M (6%). Kubernetes 1.37
+
+- The expression's own cost, against the per-expression budget of 10M: a
+  rule's cost is its `MaxCost` times how many times it may run (its node's
+  cardinality), a `messageExpression`'s is its own. Under 1% reads `(under
+  1%)`.
+- **Near** is half of a budget or more. An estimate grows with each limit it
+  depends on, so an expression at half its budget goes over when one of
+  those limits doubles, the most common edit to a limit. A near expression
+  says so, then `Why:` and what makes it expensive (an unbounded list or map
+  it runs for each element of, an unbounded string, list or map it reads,
+  `string()` of a number), or `Every list, map and string it reads has a
+  limit already.` when no limit would bound any of them. When a limit would,
+  the fix follows: `Fix:` and the limits that bring the expression under
+  half its budget (*Add `maxItems: 500000` to `spec.ports`*), sized by the
+  same search as a cost problem's (the largest of 1, 2, 5, 10 … 10M that
+  does it, preferring one of 100 or more), with half the budget in place of
+  the budget, so the hover stops saying near once the fix is made. An
+  existing limit is never lowered: that is the author's call. The fix is
+  also a quick fix of the expression, without a diagnostic (see *The near
+  quick fix* below).
+- **Over** its budget: `estimated 2.4B, over the per-expression budget of
+  10M (240 times): the API server refuses this CustomResourceDefinition.`
+  The problem the check reports on the expression has the fix, in the **Fix**
+  block; **Cost:** does not repeat it.
+- Then the total of every rule and `messageExpression` of the version's
+  schema against the budget of 100M (*All rules of `v1`'s schema*, the one
+  version's too, though the API server moves it to `spec.validation`; or
+  *of the schema `v1` and `v2` share* when several versions have the same
+  one, which the API server validates as one), near and over in the same
+  words, and when it is near or
+  over the three rules that add the most (`x-kubernetes-validations[0].rule`
+  at `spec.ports[*]` (30M)).
+- An expression with no estimate says why: it does not compile; the API
+  server compiles no rule of its schema, or of its part of it, for a schema
+  error; a policy's (`the API server estimates no cost when a policy is
+  applied; it stops an evaluation past 1,000,000`); a Kyverno
+  ValidatingPolicy's (`Kyverno estimates no cost when a policy is applied`).
+- The paragraph ends with the version, `Kubernetes 1.37`: a link to
+  `cel-lens.pickKubernetesVersion`, titled *Pick the Kubernetes version*,
+  for a client that lists that command in `hover.commands`, plain text
+  otherwise.
+
+The costs are judged as at creation: the API server skips the per-expression
+limit on an update for a rule that did not change, and the hover does not.
+They are estimated by the first hover inside an expression of a version of a
+document, off the message loop, and kept until its text, the Kubernetes
+version or the experimental features change, so a hover asked again
+estimates nothing and the check of a document, on every pause in typing,
+estimates no more than it did. When the server already runs four commands
+in the background (the most it runs at once), a hover that would estimate is
+answered without **Cost:**, and one that would size a near fix without the
+fix, and starts nothing, so the message loop never waits for an estimate;
+the next hover works it out. The estimate reuses the API server's
+validation the check of the same version already ran. A hover cancelled with
+`$/cancelRequest` while its document's costs are estimated is answered as
+cancelled, and when no other hover waits for them the estimate stops and
+nothing is kept; one answered after an edit replaced its version gets
+`ContentModified` (-32801).
+
+**Why a value is `dyn`** is said wherever it is: in **Uses:** (`; dyn because
+...`) and in the part's hover (`dyn: ...`), whatever the experimental
+features, in one of thirteen sentences, one per fallback to `dyn`
+(`internal/assist/dyn.go`). The experimental feature `fitting-completion`
+now changes only completion: after a dot only what the receiver has, and
+before a dot only the names of the kind of document (no `oldSelf` where the
+API server refuses it). Hover is the same with it on or off, and declares
+`oldSelf` on every rule of a CRD, as completion does with it off.
+
+**Text from the files is escaped.** Every text the hover takes from a file
+(a schema's `description`, a name, a kind, a field path, a file name, a
+message, a `.cellens` entry's type) goes through one function,
+`hover.Escape`, which puts a backslash before each character that can start
+Markdown structure, a link, an autolink, HTML or an entity
+(`` \`*_{}[]<>()#+-=!|~& ``), with each carriage return made a line feed first, so it shows as written and a description such
+as `[x](command:...)` or `<img src=...>` is no link and no HTML. CEL and
+names are quoted in code spans and ` ```cel ` blocks whose run of backticks
+is longer than any they hold (`hover.Code`, `hover.Block`), and a line break
+in a code span becomes a space. The hover of a `.cellens` entry escapes the
+same, and so does completion, in the documentation of a field. The
+description cel-lens writes itself, such as a policy variable's with its
+CEL in a code span, is kept where no file can write it: a schema key a file
+sets, `x-cel-lens-markdown` included, is read as the file's text. The link
+to an example's file percent-encodes `<`, `>`, spaces, parentheses and
+backslashes in its URI.
+
+**The option `hover`** of `initializationOptions` says what the client does
+with a hover: `{"commands": [...], "problems": "message" | "fixes"}`.
+`commands` lists the ids of the commands the client runs from a link in a
+hover, none by default: the engine writes a `command:` link to no other id.
+`problems` is `message` (the default) when the **Fix** block should hold a
+problem's message, or `fixes` when the client already shows the message in
+the same hover, as VS Code does, so the block holds only the fixes. Another
+value of either, or a `hover` that is no object, is ignored with one
+`window/logMessage` line each, such as `hover: problems "both" is neither
+"message" nor "fixes", ignored`. A hover writes two kinds of command link,
+each only when `commands` lists its command: the version at the end of
+**Cost:**, to `cel-lens.pickKubernetesVersion`, and each fix, to
+`cel-lens.applyFix`.
+
+**What `initialize` echoes.** When the client sent `hover` (in any form),
+the `initialize` result says what the engine honours of it, under
+`capabilities.experimental.celLens.hover`: `{"commands": [...], "problems":
+"message" | "fixes"}`. `commands` holds the ids of the client's
+`hover.commands` that the engine writes links to (today
+`cel-lens.applyFix` and `cel-lens.pickKubernetesVersion`), each once, in
+the client's order, and drops any other; `problems` is how the hover writes
+the problems at the cursor, `message` when the client's value was absent or
+ignored. Without the option the field is absent. An engine of 0.33.0 or
+older, which neither sends the field nor escapes the text a hover takes from
+a file, never sends it, so a client should trust a hover's command links
+only for the ids that are both in this list and its own, and leave a hover
+untrusted when the field is absent, as the VS Code extension does. For
+example, `{"commands": ["workbench.action.terminal.new", "cel-lens.applyFix"],
+"problems": "fixes"}` is echoed as `{"commands": ["cel-lens.applyFix"],
+"problems": "fixes"}`.
+
+**The Fix block** lists each problem of the document's check whose range
+holds the cursor, one paragraph each: with `problems: message`, the
+problem's message (escaped, as all file text is) and then its fixes; with
+`fixes`, only the fixes, so a problem without one adds nothing. A fix is the
+quick fix the light bulb offers for that problem, with the same title (*Change
+to `replicas`*, *Add `maxItems: 1000` to `spec.ports`*): for a client that
+lists `cel-lens.applyFix`, a link,
+``[Add `maxItems: 1000` to `spec.ports`](command:cel-lens.applyFix?<argument> "<title>")``,
+whose argument is `[{"uri", "version", "range", "title"}]` as JSON,
+percent-encoded but for letters, digits and `-_.~` (what
+`decodeURIComponent` reads); for another, the words, *Fix: Add `maxItems: 1000` to `spec.ports` (a quick fix)*. A fix shows once in a hover: an
+over-budget expression's is in **Fix**, a near one's in **Cost:**.
+
+**The near quick fix.** `textDocument/codeAction` also answers, for a range
+that touches an expression near its cost budget, its near fix: a code action
+of kind `quickfix` with no `diagnostics`, the edit and the title the hover
+shows. A rule under half its budget gets none. The costs are estimated and
+the fix sized when the person asks (`context.triggerKind` 1, or none given),
+and kept with the version's costs; for a light bulb the editor asks for by
+itself (`triggerKind` 2) only what a hover or an earlier request already
+worked out is offered, so typing pays for no estimate.
+
+`go test -bench Hover ./internal/lsp/` measures a hover on the last rule of
+an unchanged 1,000-line CRD through the message loop; what **Uses:** says of
+a CRD's rule depends only on the file, so it is worked out once per version
+of the document. `go test -bench RuleHover ./internal/lsp/` measures the
+first hover after a change, which estimates the costs (budget 100 ms; about
+40 to 45 ms on 4 shared CPUs), a hover asked again (within 1 ms of
+`BenchmarkHover`), and the first hover on a CRD of 500 rules (about 490
+ms).
+
+**Docs:** links the pinned pages that document what is hovered, each
+link's text naming its subject, then the release: *[Validation
+rules](…) (Kubernetes 1.36)*. First the page of the kind of rule, for the
+Kubernetes version picked:
+
+| For | Page and heading |
+| --- | --- |
+| a CRD `rule` | `<k8s>/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#validation-rules`; `#transition-rules` when it reads `oldSelf` |
+| a CRD `messageExpression` | the same page, `#the-messageexpression-field` |
+| a ValidatingAdmissionPolicy | `<k8s>/docs/reference/access-authn-authz/validating-admission-policy/`, at `#validation-expression`, `#message-expression`, `#matching-requests-matchconditions`, `#variable-composition` or `#audit-annotations` |
+| a MutatingAdmissionPolicy | `<k8s>/docs/reference/access-authn-authz/mutating-admission-policy/`, at `#patch-type-apply-configuration` or `#patch-type-json-patch` for a mutation, the page itself for its match conditions and variables |
+| a Kyverno ValidatingPolicy | `https://release-1-19-0.kyverno.io/docs/policy-types/validating-policy/`, at `#using-messageexpression-to-generate-dynamic-messages` or `#using-auditannotations-to-add-custom-data` where they apply |
+
+With the cost near or over its budget (**Cost:**), a CRD's expression adds
+`#resource-use-by-validation-functions` on the CRD page, and a policy's
+`<k8s>/docs/reference/using-api/cel/#runtime-cost-budget`. On a function or
+macro the paragraph then links the page and heading that document it:
+
+| For | Page and heading |
+| --- | --- |
+| a standard CEL function or macro | `https://github.com/google/cel-spec/blob/v0.25.2/doc/langdef.md`, at `#presence-and-comprehension-macros`, `#list-operators`, `#string-functions`, `#regular-expressions`, `#types-and-conversions` or `#datetime-functions` |
+| a cel-go extension (strings, lists, sets, math, encoders, regex, bindings, two-variable comprehensions) | `https://pkg.go.dev/github.com/google/cel-go@v0.30.0/ext#hdr-<Name>-<Library>` |
+| a cel-go optional value | `https://pkg.go.dev/github.com/google/cel-go@v0.30.0/cel#hdr-<Name>-OptionalTypes` |
+| a Kubernetes CEL library function | `<k8s>/docs/reference/using-api/cel/`, at `#kubernetes-list-library`, `-regex-`, `-url-`, `-ip-address-`, `-cidr-`, `-authorizer-`, `-format-`, `-quantity-` or `-semver-library` |
+| a Kyverno library function | `https://release-1-19-0.kyverno.io/docs/policy-types/cel-libraries/`, at its library's heading (`#resource-library`, `#http-library`, `#image-library`, …); the page itself for `gzip`, which the page leaves out, and for `Get`, `List` and `Post` on a receiver not known |
+
+A name in several libraries links the one of its receiver: `indexOf` of a
+string or a list, `compareTo` of a quantity or a semver, `Get` of
+Kyverno's `resource`, `http` or `globalContext`.
+
+`<k8s>` is the docs of the Kubernetes version picked: `https://kubernetes.io`
+for 1.37, the current release and the default, and
+`https://v1-36.docs.kubernetes.io` (and `v1-35`, `v1-34`, `v1-33`) for the
+others. `v1-37.docs.kubernetes.io` does not exist until 1.38 is released,
+and the engine release that adds 1.38 moves 1.37 to it. cel-spec is pinned
+to v0.25.2, the `cel.dev/expr` the engine builds; cel-go to v0.30.0; Kyverno
+to its 1.19 docs. `CEL_LENS_LINKS_TEST=1 go test -run Links
+./internal/assist/`, a release step (see `docs/project-notes.md`), fetches
+every page once per version's host and checks each heading.
+
 ## Commands
 
-`initialize` declares seven commands under `executeCommandProvider`, which a
+`initialize` declares eight commands under `executeCommandProvider`, which a
 client runs with `workspace/executeCommand`. While `cellens-types` is off,
 `cel-lens.typeChoices`, `cel-lens.checkType`, `cel-lens.setType`,
 `cel-lens.removeType` and `cel-lens.inferType`, the commands behind
@@ -280,8 +587,9 @@ the person for a type and pass these commands the same argument, with the
 type or kind chosen. `cel-lens.exampleResults` is described with the
 examples it is about, in [What the rules do to the
 examples](#what-the-rules-do-to-the-examples), and `cel-lens.ruleList` in
-[The rules of the workspace](#the-rules-of-the-workspace). Each of the others
-but `cel-lens.inferType` takes one argument, an object with these keys:
+[The rules of the workspace](#the-rules-of-the-workspace), and
+`cel-lens.applyFix` just below. Each of the others but `cel-lens.inferType`
+takes one argument, an object with these keys:
 
 | Key | What it is |
 | --- | --- |
@@ -524,6 +832,24 @@ API server would refuse, a Go type that cannot be read or a struct for an
 `InvalidParams` (-32602) and the reason. A Go type that leaves fields out is
 written: its entry gets the warning.
 
+### Applying a quick fix
+
+`cel-lens.applyFix` applies a quick fix that a hover links to. It takes one
+argument, `{"uri", "version", "range", "title"}`: an open document, the
+version the hover was made for, a range (LSP positions) and the title of the
+fix. It works out the quick fixes `textDocument/codeAction` would answer for
+that range of that document now, the near fixes included (estimating and
+sizing what they need), and sends the client a `workspace/applyEdit` of the
+one with that title, labelled with the title: a `documentChanges` edit of
+that version when the client takes them, else `changes`. It answers
+`{"applied": "<title>"}` once the editor applied it. It fails (`-32803`)
+when the version moved since the hover (`the file changed since this hover;
+hover again`), when the document is not open, when the range has no fix with
+that title now (the message lists the titles it has), and when the client
+cannot apply an edit (`workspace.applyEdit`); an argument of another form is
+`-32602`. The edit is the light bulb's own, so the link applies exactly what
+the quick fix would.
+
 ### The rules of the workspace
 
 `cel-lens.ruleList` takes no argument, or one, `{"since": n}` (another is
@@ -541,6 +867,7 @@ file would show if it were open now. It needs no experimental feature.
     "folder": "file:///repo",
     "file": "config/crd/widgets.yaml",
     "document": "CustomResourceDefinition widgets.example.com",
+    "idPart": "CustomResourceDefinition widgets.example.com",
     "kind": "CustomResourceDefinition",
     "name": "widgets.example.com",
     "range": {"start": {"line": 0, "character": 0}, "end": {"line": 41, "character": 31}},
@@ -572,8 +899,11 @@ file would show if it were open now. It needs no experimental feature.
   `folder`, the deepest workspace folder holding the file, left out for an
   open file outside every folder, `file`, its path below that folder (outside
   every folder, its path, or its URI when it is no file), `document` as
-  `cel-lens.exampleResults` names it, its `kind` and `name`, its `range` and
-  its `rules`, in the order of the file. The documents come in the order of
+  `cel-lens.exampleResults` names it, `idPart`, the part of its rules' ids
+  that names it (`document`, and `#2`, `#3` and so on after it for the
+  second document of that kind and name in the file: a client takes it
+  rather than counting), its `kind` and `name`, its `range` and its
+  `rules`, in the order of the file. The documents come in the order of
   the workspace folders, then of the files' paths, then of the file; the
   open files outside every folder come last.
 - **A rule** is one entry of a list that holds CEL: an
@@ -587,7 +917,9 @@ file would show if it were open now. It needs no experimental feature.
   variable's name, an audit annotation's key) and `index` for a policy's.
   `id` is the file's URI, written from its path whoever opened the file,
   `#`, and those parts joined with `#`; a second document of the same kind
-  and name in a file gets `#2` after its name. The id does not change with
+  and name in a file gets `#2` after its name, counting every document of
+  that kind and name in the file, whether it has rules or not. The id does
+  not change with
   the rule's text, nor when a document or a rule is added above it in
   another document.
 - **`label`** is the rule's static `message`, else a match condition's or
@@ -728,7 +1060,8 @@ files with 200 CRDs of 25 rules, the first answer takes 3.3 to 4.5 s on 4
 shared CPUs, and an answer asked again with nothing changed about 37 ms;
 while a run checks, hover, completion and the code lenses of an open
 1,000-line CRD take about 1 ms longer than the 3.5 to 4.5 ms they take
-otherwise.
+otherwise at the median, and in the worst case 7 to 11 ms against the 5 to
+7 ms they take otherwise.
 
 ## Examples of a CustomResourceDefinition
 
@@ -1032,8 +1365,8 @@ shortened first, to the wrong verdicts as one count (`2 wrong · 3 pass`),
 then to its first count (`2 wrong`), and only then are the values before
 it cut or left to `+N more`, and last the subject's type.
 
-**The rule's hover** gains a section below what the place under the cursor
-is, or alone where that is nothing: the part in words, then each example,
+**The rule's hover** gains the paragraph **Examples:** among its rule's
+paragraphs (see [The hover](#the-hover)): the part in words, then each example,
 linked to its file and line (`file:///...#L3`), with its verdict, `as an
 update` for an update, what it expected when the verdict is wrong, and the
 API server's message (its refusals, its error, or why the rule did not

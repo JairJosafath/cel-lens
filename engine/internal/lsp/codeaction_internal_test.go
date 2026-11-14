@@ -27,7 +27,7 @@ func TestLimitFixes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := limitFixes(lines, check.Diagnostic{Fixes: tt.fixes, FixesTogether: tt.together})
+			got := limitFixes(lines, tt.fixes, tt.together)
 			if len(got) != tt.want {
 				t.Errorf("limitFixes(%s) = %d fixes, want %d", tt.name, len(got), tt.want)
 			}

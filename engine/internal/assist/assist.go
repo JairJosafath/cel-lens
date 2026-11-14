@@ -18,6 +18,8 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/ext"
 
+	"github.com/JairJosafath/cel-lens/engine/internal/hover"
+	"github.com/JairJosafath/cel-lens/engine/internal/meaning"
 	"github.com/JairJosafath/cel-lens/engine/pkg/extract"
 	"github.com/JairJosafath/cel-lens/engine/pkg/feature"
 	"github.com/JairJosafath/cel-lens/engine/pkg/kubeversion"
@@ -40,6 +42,9 @@ type Assistant struct {
 	features feature.Set
 	// parser parses expressions for Summaries; it has no declarations.
 	parser *cel.Env
+	// exprs parses the expressions Rule reads, once each: Uses: and the
+	// sentence of Checks: share the parse.
+	exprs *meaning.Parser
 }
 
 // NewOption changes how New builds an Assistant.
@@ -48,7 +53,7 @@ type NewOption func(*Assistant)
 // WithFeatures switches on the experimental features in f. Without it every
 // one is off: a Kyverno ValidatingPolicy gets no hover or completion
 // (feature.Kyverno), params of a custom resource stay dyn
-// (feature.CRDTypedPolicies), and completion and hover do not fit the spot
+// (feature.CRDTypedPolicies), and completion does not fit the spot
 // (feature.FittingCompletion).
 func WithFeatures(f feature.Set) NewOption {
 	return func(a *Assistant) { a.features = f }
@@ -66,7 +71,11 @@ func New(v kubeversion.Version, opts ...NewOption) (*Assistant, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build the parser: %w", err)
 	}
-	a := &Assistant{funcs: funcs, macros: macros, byName: make(map[string]function, len(funcs)), version: v, parser: parser}
+	exprs, err := meaning.NewParser()
+	if err != nil {
+		return nil, err
+	}
+	a := &Assistant{funcs: funcs, macros: macros, byName: make(map[string]function, len(funcs)), version: v, parser: parser, exprs: exprs}
 	for _, o := range opts {
 		o(a)
 	}
@@ -78,6 +87,7 @@ func New(v kubeversion.Version, opts ...NewOption) (*Assistant, error) {
 			return nil, err
 		}
 		a.kyverno.features = a.features
+		a.kyverno.version = v // for the links to the Kubernetes docs
 	}
 	return a, nil
 }
@@ -92,8 +102,8 @@ func (a *Assistant) forExpr(doc *Document, e extract.Expression) (*Assistant, bo
 	return a, true
 }
 
-// fitting reports whether completion and hover fit the spot, the experimental
-// feature fitting-completion.
+// fitting reports whether completion fits the spot, the experimental feature
+// fitting-completion. Hover does not depend on it.
 func (a *Assistant) fitting() bool { return a.features.Has(feature.FittingCompletion) }
 
 // scope returns the variables the expression e of doc can use.
@@ -104,12 +114,29 @@ func (a *Assistant) scope(doc *Document, e extract.Expression) []variable {
 	return scope(doc, e, a.version, a.features)
 }
 
+// hoverScope is scope for hover, which fitting-completion does not change:
+// in a CustomResourceDefinition oldSelf is declared on every rule, as
+// without the feature, so hover describes what the expression reads.
+func (a *Assistant) hoverScope(doc *Document, e extract.Expression) []variable {
+	if a.vars == nil && e.Document < len(doc.roots) && doc.roots[e.Document]["kind"] == "CustomResourceDefinition" {
+		return crdScope(doc.roots[e.Document], e, false)
+	}
+	return a.scope(doc, e)
+}
+
 // Hover describes what is under the cursor.
 type Hover struct {
-	// Markdown is the description: the declaration, then what it is for.
+	// Markdown is the description: the declaration, then what it is for. The
+	// text it takes from a file, such as a schema's description, is
+	// escaped (hover.Escape), and its code blocks fenced (hover.Block).
 	Markdown string
 	// Start and End are the range of the name described, End just after it.
 	Start, End extract.Position
+	// Docs is the link, in Markdown, to the pinned page and heading that
+	// document the function or macro described, for the hover's Docs:
+	// paragraph: "[`size`, CEL list operators](url) (cel-spec v0.25.2)";
+	// "" for a variable or field.
+	Docs string
 }
 
 // ItemKind says what a completion item is.
@@ -133,7 +160,9 @@ type Item struct {
 	Kind  ItemKind
 	// Detail is the type or signature, one line.
 	Detail string
-	// Documentation is a short description, possibly empty.
+	// Documentation is a short description in Markdown, possibly empty. The
+	// text it takes from a file, such as a schema's description, is escaped
+	// (hover.Escape).
 	Documentation string
 	// SortKey orders the item among the others when it is not by Label; empty
 	// when the label does. Fields of a policy that matches several kinds are
@@ -362,13 +391,13 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 		return Hover{}, false
 	}
 	word := string(s.line[start:end])
-	hover := func(md string) (Hover, bool) {
+	answer := func(md string) (Hover, bool) {
 		from, to := s.span(start, end)
 		return Hover{Markdown: md, Start: from, End: to}, true
 	}
 	called := calledAt(s.line, end)
 	dotted := start > 0 && s.line[start-1] == '.'
-	vars := a.withLoopVars(s.line, start, a.scope(doc, s.expr))
+	vars := a.withLoopVars(s.line, start, a.hoverScope(doc, s.expr))
 	switch {
 	case dotted:
 		chain, isChain := chainBefore(s.line, start-1)
@@ -379,7 +408,7 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 		if called {
 			if ns := namespace(chain, vars); isChain && ns != "" {
 				if _, ok := a.byName[ns+"."+word]; ok {
-					return a.hoverFunction(ns+"."+word, false, a.argTypes(s.line, end, vars), hover)
+					return a.hoverFunction(ns+"."+word, false, a.argTypes(s.line, end, vars), answer)
 				}
 			}
 			var actual []string
@@ -391,25 +420,25 @@ func (a *Assistant) Hover(doc *Document, pos extract.Position) (Hover, bool) {
 			if t != "dyn" {
 				actual = append([]string{t}, a.argTypes(s.line, end, vars)...)
 			}
-			return a.hoverFunction(word, true, actual, hover)
+			return a.hoverFunction(word, true, actual, answer)
 		}
 		if isChain && !called && word == requestResourceVar && recv.celType == authorizerType {
-			return hover(declaration("field", word, resourceCheckType, requestResourceDesc))
+			return answer(declaration("field", word, resourceCheckType, requestResourceDesc))
 		}
 		if f := recv.known.field(word); isChain && recv.found && f != nil {
-			md := a.withDynReason(declaration("field", word, assumedType(f), withAssumed(withKinds(f.str("description"), f.kinds()), f)), f)
-			return hover(withCellensOff(md, doc, s.expr, chain[0].name, f))
+			md := withDynReason(declaration("field", word, assumedType(f), withAssumed(withKinds(described(f), f.kinds()), f)), f)
+			return answer(withCellensOff(md, doc, s.expr, chain[0].name, f))
 		}
 	case called:
-		return a.hoverFunction(word, false, a.argTypes(s.line, end, vars), hover)
+		return a.hoverFunction(word, false, a.argTypes(s.line, end, vars), answer)
 	default:
 		for _, v := range vars {
 			if v.name == word {
 				md := declaration("variable", word, v.typ(), withAssumed(v.desc, v.schema))
 				if v.typeName == "" {
-					md = a.withDynReason(md, v.schema)
+					md = withDynReason(md, v.schema)
 				}
-				return hover(withCellensOff(md, doc, s.expr, word, v.schema))
+				return answer(withCellensOff(md, doc, s.expr, word, v.schema))
 			}
 		}
 	}
@@ -431,8 +460,10 @@ func namespace(chain []step, vars []variable) string {
 	return chain[0].name
 }
 
+// declaration is the hover of a variable or field: "(kind) name: typ" in a
+// cel block, then desc, which is Markdown.
 func declaration(kind, name, typ, desc string) string {
-	md := fmt.Sprintf("```cel\n(%s) %s: %s\n```", kind, name, typ)
+	md := hover.Block("cel", fmt.Sprintf("(%s) %s: %s", kind, name, typ))
 	if desc != "" {
 		md += "\n\n" + desc
 	}
@@ -440,11 +471,11 @@ func declaration(kind, name, typ, desc string) string {
 }
 
 // hoverFunction describes the function or macro called name: its overloads,
-// with the one the call's types select marked, then an example and a link to
-// the docs. actual holds the types of the receiver, for a member, then of the
+// with the one the call's types select marked, then an example, and, in
+// Docs, the link to the pinned page that documents it. actual holds the types of the receiver, for a member, then of the
 // arguments, "dyn" where one is not known; no overload is marked when none is
 // known or, for a member, the receiver's type is not.
-func (a *Assistant) hoverFunction(name string, isMember bool, actual []string, hover func(string) (Hover, bool)) (Hover, bool) {
+func (a *Assistant) hoverFunction(name string, isMember bool, actual []string, answer func(string) (Hover, bool)) (Hover, bool) {
 	var sigs []string
 	marked := -1
 	desc := ""
@@ -492,14 +523,24 @@ func (a *Assistant) hoverFunction(name string, isMember bool, actual []string, h
 		}
 		sigs = append(sigs[:most], "...")
 	}
-	md := "```cel\n(function) " + strings.Join(sigs, "\n(function) ") + "\n```"
+	md := hover.Block("cel", "(function) "+strings.Join(sigs, "\n(function) "))
 	if desc != "" {
 		md += "\n\n" + desc
 	}
-	if a.vars != nil {
-		return hover(md)
+	if a.vars == nil {
+		md += exampleMarkdown(name)
 	}
-	return hover(md + docsMarkdown(name))
+	h, ok := answer(md)
+	recv := ""
+	if isMember && len(actual) > 0 {
+		recv = actual[0]
+	}
+	if t, found := funcDocs(name, recv); found {
+		if l, linked := t.page.link(t.title, a.version); linked {
+			h.Docs = l.markdown()
+		}
+	}
+	return h, ok
 }
 
 // onReceiver returns the member overloads that accept a receiver of the type
@@ -581,7 +622,7 @@ func fieldItems(s schema) []Item {
 	var items []Item
 	for _, n := range s.fieldNames() {
 		f := s.field(n)
-		it := Item{Label: n, Kind: KindField, Detail: f.name(), Documentation: f.str("description")}
+		it := Item{Label: n, Kind: KindField, Detail: f.name(), Documentation: described(f)}
 		if kinds := f.kinds(); kinds != nil {
 			it.Detail += " · " + strings.Join(kinds, ", ")
 			it.SortKey = "1" + n
@@ -594,12 +635,37 @@ func fieldItems(s schema) []Item {
 	return items
 }
 
-// withKinds adds to desc the kinds that have the field, when there are any.
+// markdownKey is the key of a schema whose description cel-lens writes
+// itself, in Markdown, with the text it takes from a file escaped: hover and
+// completion show it in place of the description. Its value is a markdown,
+// a type YAML never decodes to, so a file that sets the key sets nothing
+// (#52).
+const markdownKey = "x-cel-lens-markdown"
+
+// markdown is Markdown cel-lens wrote, under markdownKey.
+type markdown string
+
+// described returns the description of s as hover and completion show it,
+// in Markdown: the markdown cel-lens wrote under markdownKey, else the
+// schema's own, which comes from a file and is escaped.
+func described(s schema) string {
+	if md, ok := s[markdownKey].(markdown); ok && md != "" {
+		return string(md)
+	}
+	return hover.Escape(s.str("description"))
+}
+
+// withKinds adds to desc, Markdown, the kinds that have the field, when there
+// are any, escaped.
 func withKinds(desc string, kinds []string) string {
 	if kinds == nil {
 		return desc
 	}
-	line := "In: " + strings.Join(kinds, ", ")
+	escaped := make([]string, len(kinds))
+	for i, k := range kinds {
+		escaped[i] = hover.Escape(k)
+	}
+	line := "In: " + strings.Join(escaped, ", ")
 	if desc == "" {
 		return line
 	}

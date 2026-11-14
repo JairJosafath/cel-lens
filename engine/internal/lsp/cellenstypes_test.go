@@ -61,6 +61,9 @@ func (c *client) callSeeing(method string, params any) (json.RawMessage, *jsonrp
 	for {
 		m := c.read("the response to " + method)
 		if m.Method == "" && string(m.ID) == id {
+			if method == "textDocument/hover" {
+				c.checkLinks(m.Result)
+			}
 			return m.Result, m.Error, seen
 		}
 		seen = append(seen, m)
@@ -106,8 +109,16 @@ func TestTypesOffLine(t *testing.T) {
 // feature is off on a dyn value a .cellens could type and only there (#44).
 func TestTypesOffHover(t *testing.T) {
 	t.Parallel()
+	typesOffHoverTable(t, nil)
+}
+
+// typesOffHoverTable is the table of TestTypesOffHover, for a client that
+// sends hover as initializationOptions.hover, nil for none.
+func typesOffHoverTable(t *testing.T, hover map[string]any) {
+	t.Helper()
 	dir := typesWorkspace(t)
 	c := start(t)
+	c.hover = hover
 	initializeTypesOff(t, c, dir, map[string]any{})
 	crd, policy := fileURI(filepath.Join(dir, "crd.yaml")), fileURI(filepath.Join(dir, "policy.yaml"))
 	c.openURI(crd, lensCRD)
