@@ -78,6 +78,7 @@ func TestReadsLensesPaths(t *testing.T) {
 		"publishAssumed":         1, // the types of a document, and its hover (assist.WithoutCellens)
 		"inlineValues":           1, // Give it a type and Edit on the line above a rule
 		"executeCommand":         1, // the commands behind Give it a type
+		"ruleInputs":             1, // the types the rule index checks the files that are not open with
 	}
 	if !maps.Equal(asks, want) {
 		t.Errorf("functions that ask readsLenses = %v, want %v", asks, want)

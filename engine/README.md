@@ -143,7 +143,7 @@ Actions, with Go on the runner:
 ```yaml
 - name: Run the examples
   run: |
-    go install github.com/JairJosafath/cel-lens/engine@v0.32.0
+    go install github.com/JairJosafath/cel-lens/engine@v0.33.0
     mv "$(go env GOPATH)/bin/engine" "$(go env GOPATH)/bin/cel-lens-core"
     "$(go env GOPATH)/bin/cel-lens-core" examples ./config
 ```

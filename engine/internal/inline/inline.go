@@ -69,6 +69,12 @@ type Rule struct {
 	Location any
 	// Problems is how many problems the expression has.
 	Problems int
+	// Unchecked says why the check did not compile the expression, Checked
+	// when it did; then UncheckedAt is the argument of ShowRule instead of
+	// Location: where the problem that stopped the check is, as the client
+	// names a place.
+	Unchecked   Unchecked
+	UncheckedAt any
 	// Values are the dyn values the expression reads, in the order it reads
 	// them.
 	Values []Value
@@ -180,7 +186,11 @@ func Line(r Rule) []Part {
 // line is the line above r without the part about examples, within limit
 // characters as far as its values go, the subject's type cut past typ.
 func line(r Rule, limit, typ int) []Part {
-	parts := []Part{{Title: r.Subject + ": " + shortType(r.SubjectType, typ) + dot + status(r.Problems), Command: ShowRule, Arguments: []any{r.Location}}}
+	first := Part{Title: r.Subject + ": " + shortType(r.SubjectType, typ) + dot + status(r.Problems), Command: ShowRule, Arguments: []any{r.Location}}
+	if words := uncheckedWords(r.Unchecked); words != "" {
+		first.Title, first.Arguments = r.Subject+": "+shortType(r.SubjectType, typ)+dot+words, []any{r.UncheckedAt}
+	}
+	parts := []Part{first}
 	var rest []Value
 	shown := 0
 	for i, v := range r.Values {
@@ -212,6 +222,33 @@ func Width(parts []Part) int {
 		n += utf8.RuneCountInString(p.Title)
 	}
 	return n
+}
+
+// Unchecked is why the check did not compile an expression.
+type Unchecked int
+
+// The reasons the check does not compile an expression.
+const (
+	// Checked: the check compiled it.
+	Checked Unchecked = iota
+	// UncheckedDocument: the API server cannot read its document.
+	UncheckedDocument
+	// UncheckedSchema: the API server refuses the schema of its
+	// CustomResourceDefinition before the rules.
+	UncheckedSchema
+)
+
+// uncheckedWords says, in place of whether it compiles, that the check did
+// not compile an expression and why, "" for one it did.
+func uncheckedWords(u Unchecked) string {
+	switch u {
+	case UncheckedDocument:
+		return "not checked: unreadable document"
+	case UncheckedSchema:
+		return "not checked: schema error"
+	case Checked:
+	}
+	return ""
 }
 
 // status says whether an expression with n problems compiles.

@@ -40,11 +40,14 @@ const (
 	// commandExampleResults answers what the rules of a CRD do to its
 	// examples (see answerExampleResults).
 	commandExampleResults = "cel-lens.exampleResults"
+	// commandRuleList answers the CEL rules of the workspace, each with its
+	// compile state (see answerRuleList).
+	commandRuleList = "cel-lens.ruleList"
 )
 
 // commandNames are the commands the server runs, as initialize declares them.
 func commandNames() []string {
-	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType, commandExampleResults}
+	return []string{commandTypeChoices, commandCheckType, commandSetType, commandRemoveType, commandInferType, commandExampleResults, commandRuleList}
 }
 
 // typeCommand reports whether command is one of those behind Give it a
@@ -142,7 +145,8 @@ func failed(msg string) error { return &rpcError{jsonrpc.CodeRequestFailed, msg}
 // answers at once. typeChoices answers once the Go types of the workspace
 // are listed and, with a value, its examples are found, and inferType once
 // its work ends, and exampleResults once its rules ran: they run in a
-// goroutine (see startJob). setType and removeType send the client a workspace/applyEdit
+// goroutine (see startJob). ruleList answers once the rule index ran, in a
+// goroutine of its own (see answerRuleList). setType and removeType send the client a workspace/applyEdit
 // and answer when it answers (see answered): nothing is written to disk but
 // by the client.
 func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, reply func(any, error) error) error {
@@ -157,7 +161,7 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 		return reply(nil, failed(p.Command+": "+lensesOffText+": turn it on to give a value a type"))
 	}
 	var a valueArgs
-	if len(p.Arguments) > 0 && p.Command != commandInferType && p.Command != commandExampleResults {
+	if len(p.Arguments) > 0 && p.Command != commandInferType && p.Command != commandExampleResults && p.Command != commandRuleList {
 		if err := json.Unmarshal(p.Arguments[0], &a); err != nil {
 			return reply(nil, badParams(p.Command, err))
 		}
@@ -169,6 +173,8 @@ func (ss *session) executeCommand(ctx context.Context, msg jsonrpc.Message, repl
 		return ss.answerTypeChoices(ctx, msg, a, reply)
 	case commandExampleResults:
 		return ss.answerExampleResults(ctx, msg, p.Arguments, reply)
+	case commandRuleList:
+		return ss.answerRuleList(ctx, msg, p.Arguments, reply)
 	case commandInferType:
 		kinds, err := ss.inferKinds(ctx, p.Arguments)
 		if err != nil {
@@ -723,6 +729,9 @@ func (ss *session) cancel(params json.RawMessage) error {
 		return nil
 	}
 	if found, err := ss.cancelJob(p.ID); found || err != nil {
+		return err
+	}
+	if found, err := ss.cancelRuleList(p.ID); found || err != nil {
 		return err
 	}
 	for reqID, pe := range ss.pending {

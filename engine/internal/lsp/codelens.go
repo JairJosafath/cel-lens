@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +80,13 @@ func (ss *session) codeLens(ctx context.Context, params json.RawMessage) (any, e
 			Subject: s.Subject, SubjectType: s.SubjectType, Problems: problemsIn(diags, s), Values: ss.inlineValues(uri, s.Values),
 			Location: map[string]any{"uri": uri, "range": toRange(lines, s.Start, s.End)},
 		}
+		if d, ok := stoppedBy(diags, s.Start); ok {
+			rule.Unchecked = inline.UncheckedSchema
+			if d.Stop == check.StopUnreadable {
+				rule.Unchecked = inline.UncheckedDocument
+			}
+			rule.UncheckedAt = map[string]any{"uri": uri, "range": toRange(lines, d.Start, d.End)}
+		}
 		if known {
 			if e, ok := parsed.Expression(s.Start); ok {
 				rule.Examples = ss.ruleExamples(key, e)
@@ -91,6 +99,18 @@ func (ss *session) codeLens(ctx context.Context, params json.RawMessage) (any, e
 	}
 	doc.codeLenses, doc.codeLensesAt = lenses, ss.lensChanges
 	return lenses, nil
+}
+
+// stoppedBy returns the problem that kept the check from compiling the
+// expression that starts at start (see check.Diagnostic.Uncompiled), the
+// same signal the list of rules takes, and whether there is one.
+func stoppedBy(diags []check.Diagnostic, start extract.Position) (check.Diagnostic, bool) {
+	for _, d := range diags {
+		if slices.Contains(d.Uncompiled, start) {
+			return d, true
+		}
+	}
+	return check.Diagnostic{}, false
 }
 
 // problemsIn counts the diagnostics that start inside the expression s.

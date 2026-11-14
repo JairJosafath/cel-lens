@@ -62,8 +62,10 @@ type session struct {
 	crds check.CRDs
 	// watchFiles is true when the client lets the server ask for file changes.
 	watchFiles bool
-	// folders are the workspace folders, which are scanned for CRDs once
-	// crd-typed-policies is on.
+	// folders are the workspace folders, as paths, in the client's order:
+	// the one list of them, which initialize sets and
+	// didChangeWorkspaceFolders changes, and which every background run
+	// that walks the workspace reads when it starts (see folders.go).
 	folders []string
 	// checker finds the problems of a document; nil means check.Check.
 	checker func(ctx context.Context, file string, data []byte, opts ...check.Option) ([]check.Diagnostic, error)
@@ -213,6 +215,14 @@ type session struct {
 	// policyResults keeps what each admission policy did to its examples,
 	// as results does for the rules of CRDs.
 	policyResults examples.PolicyCache
+	// rules is the rule index of cel-lens.ruleList (see answerRuleList).
+	rules ruleIndex
+	// ruleTimer makes the waits of the rule index: before a run after a
+	// change, and between two notifications of a scan; nil means newTimer.
+	ruleTimer func(d time.Duration) (<-chan time.Time, func() bool)
+	// ruleWork does the work of a run of the rule index in its goroutine;
+	// nil means ruleCheck.run.
+	ruleWork func(ctx context.Context, c *ruleCheck) (map[string]indexedFile, error)
 }
 
 // document is an open file. Only the message loop uses it, so the cached
@@ -320,6 +330,7 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 	defer ss.stopJobs()
 	defer ss.cancelRetry()
 	defer ss.stopExamples()
+	defer ss.stopRuleRun()
 	for {
 		ss.startExamples(ctx)
 		var r readResult
@@ -339,9 +350,38 @@ func (ss *session) serve(ctx context.Context, in io.Reader) error {
 		if ss.exampleRun != nil {
 			examplesDone = ss.exampleRun.done
 		}
+		var rulesDone <-chan ruleRunDone
+		var rulesCounted <-chan struct{}
+		if ss.rules.run != nil {
+			rulesDone = ss.rules.run.done
+			if ss.rules.run.scan {
+				rulesCounted = ss.rules.run.counter.signal
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ss.rules.wait:
+			ss.rules.wait, ss.rules.cancelWait = nil, nil
+			if err := ss.startDueRuleRun(ctx); err != nil {
+				return err
+			}
+			continue
+		case <-rulesCounted:
+			if err := ss.progressRules(); err != nil {
+				return err
+			}
+			continue
+		case <-ss.rules.throttle:
+			if err := ss.throttleRules(); err != nil {
+				return err
+			}
+			continue
+		case r := <-rulesDone:
+			if err := ss.endRuleRun(ctx, r); err != nil {
+				return err
+			}
+			continue
 		case r := <-examplesDone:
 			if err := ss.endExamples(ctx, r); err != nil {
 				return err
@@ -477,6 +517,9 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		if err := ss.dropJobs(); err != nil {
 			return err
 		}
+		if err := ss.dropRuleList(); err != nil {
+			return err
+		}
 		return reply(nil, nil)
 	case ss.shutdown:
 		return reply(nil, &rpcError{jsonrpc.CodeInvalidRequest, "the server is shut down"})
@@ -490,6 +533,8 @@ func (ss *session) handle(ctx context.Context, msg jsonrpc.Message) error {
 		return ss.didClose(ctx, msg.Params)
 	case "workspace/didChangeWatchedFiles":
 		return ss.didChangeWatchedFiles(ctx, msg.Params)
+	case "workspace/didChangeWorkspaceFolders":
+		return ss.didChangeWorkspaceFolders(ctx, msg.Params)
 	case "textDocument/hover":
 		res, err := ss.hover(ctx, msg.Params)
 		return reply(res, err)
@@ -530,10 +575,20 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 		initializeParams
 		InitializationOptions *kubeOptions `json:"initializationOptions"`
 	}
+	var start struct {
+		InitializationOptions struct {
+			// RuleList asks for cel-lens/ruleListChanged (see rulesChanged).
+			RuleList bool `json:"ruleList"`
+		} `json:"initializationOptions"`
+	}
 	var problems []message
 	if decode(params, &p) && p.InitializationOptions != nil {
 		_, problems, _ = ss.configure(p.InitializationOptions)
 	}
+	_ = decode(params, &start)
+	ss.rules.follow = start.InitializationOptions.RuleList
+	ss.rules.base = time.Now().UnixMilli()
+	ss.rules.gen = ss.rules.base
 	ss.completionRegistration = p.Capabilities.TextDocument.Completion.DynamicRegistration
 	if err := reply(ss.initializeResult(), nil); err != nil {
 		return err
@@ -554,7 +609,14 @@ func (ss *session) initialize(ctx context.Context, params json.RawMessage, reply
 	} else {
 		ss.probeLenses(ctx, ss.folders)
 	}
-	return ss.warn(problems)
+	if err := ss.warn(problems); err != nil {
+		return err
+	}
+	if ss.rules.follow {
+		ss.rules.due = true
+		return ss.startDueRuleRun(ctx)
+	}
+	return nil
 }
 
 // kubeOptions are the settings of the client that the server reads.
@@ -666,6 +728,9 @@ func (ss *session) didChangeConfiguration(ctx context.Context, params json.RawMe
 	if err != nil {
 		return err
 	}
+	if changed {
+		ss.rulesChanged()
+	}
 	ss.switchLenses(ctx, lensesWere)
 	if ss.kube != kube {
 		if err := ss.cancelJobs(commandExampleResults, "the Kubernetes version changed to "+ss.kube.String()); err != nil {
@@ -713,6 +778,9 @@ func (ss *session) initializeInfo() map[string]any {
 			"codeActionProvider":     map[string]any{"codeActionKinds": []string{quickFix}},
 			"codeLensProvider":       map[string]any{},
 			"executeCommandProvider": map[string]any{"commands": commandNames()},
+			"workspace": map[string]any{
+				"workspaceFolders": map[string]any{"supported": true, "changeNotifications": true},
+			},
 			"experimental": map[string]any{"celLens": map[string]any{
 				"kubernetesVersion":           kubeversion.Default().String(),
 				"supportedKubernetesVersions": supported,
@@ -768,6 +836,7 @@ func (ss *session) didOpen(ctx context.Context, params json.RawMessage) error {
 		return nil // a notification has nobody to tell
 	}
 	d := p.TextDocument
+	ss.rulesChanged()
 	if isLens(d.URI) {
 		if !ss.readsLenses() {
 			ss.keepUnread(d.URI, []byte(d.Text), d.Version)
@@ -797,6 +866,7 @@ func (ss *session) didChange(ctx context.Context, params json.RawMessage) error 
 	}
 	uri := p.TextDocument.URI
 	text := []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
+	ss.rulesChanged()
 	if isLens(uri) {
 		if !ss.readsLenses() {
 			ss.keepUnread(uri, text, p.TextDocument.Version)
@@ -825,6 +895,7 @@ func (ss *session) didClose(ctx context.Context, params json.RawMessage) error {
 		return nil
 	}
 	uri := p.TextDocument.URI
+	ss.rulesChanged()
 	if isLens(uri) {
 		if !ss.readsLenses() {
 			delete(ss.unread, crdKey(uri))

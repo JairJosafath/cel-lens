@@ -169,6 +169,10 @@ type lensSearch struct {
 	touched map[string]bool
 	// batches are the batches it searches for (see session.batch).
 	batches []int
+	// gone are the keys of the folders that left the workspace while it ran
+	// (see didChangeWorkspaceFolders): what it found below them is not
+	// taken, but below a folder of the workspace.
+	gone []string
 	// done delivers what it found, once, when the goroutine ends.
 	done chan lensFound
 }
@@ -349,6 +353,7 @@ func readUnder(folders []string, p string) ([]byte, error) {
 // waits for the CRD scan of a batch it searched for, so that batch checks the
 // open documents once, after both.
 func (ss *session) finishLensSearch(ctx context.Context, found lensFound) error {
+	ss.rulesChanged() // the types of a rule may have changed
 	sc := ss.lensSearch
 	ss.lensSearch = nil
 	if sc.probe {
@@ -364,8 +369,9 @@ func (ss *session) finishLensSearch(ctx context.Context, found lensFound) error 
 		}
 		changed = ss.dropLens(key) || changed
 	}
+	walked := outermost(ss.folders)
 	for key, data := range found.files {
-		if l := ss.lenses[key]; sc.touched[key] || l != nil && l.open {
+		if l := ss.lenses[key]; sc.touched[key] || l != nil && l.open || below(key, sc.gone) && !inFolders(filepath.FromSlash(key), walked) {
 			continue
 		}
 		changed = ss.putLens(ctx, pathURI(filepath.FromSlash(key)), data, false) || changed

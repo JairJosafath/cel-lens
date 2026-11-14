@@ -655,3 +655,75 @@ func TestCodeLensSchemaOrder(t *testing.T) {
 		t.Errorf("code lenses = %s,\nwant params's target with %s", res, want)
 	}
 }
+
+// TestCodeLensUnchecked checks that the line above a rule the check did not
+// compile never says compiles (cel-lens-core#42): every rule of a CRD whose
+// schema is not structural says not checked: schema error, and every
+// expression of a document the API server cannot read says not checked:
+// unreadable document, each with the problem that stopped the check as the
+// argument of its command; the same CRD with its schema fixed is checked.
+// They read the problem's Uncompiled, as the list of rules does.
+func TestCodeLensUnchecked(t *testing.T) {
+	t.Parallel()
+	notStructural := strings.Replace(ruleCRD, "                  items:\n                    type: object\n", "                  items:\n", 1)
+	unreadable := strings.Replace(listPolicy, "  name: replicas\n", "  name: replicas\n  creationTimestamp: notatime\n", 1)
+	const crd, policy, fixed = "file:///ws/crd.yaml", "file:///ws/policy.yaml", "file:///ws/fixed.yaml"
+	c := start(t)
+	initializeIn(t, c, "", map[string]any{})
+	anyDiagnostics := func([]diagnostic) bool { return true }
+	diags := map[string][]diagnostic{}
+	for _, doc := range []struct{ uri, text string }{{crd, notStructural}, {policy, unreadable}, {fixed, ruleCRD}} {
+		c.openURI(doc.uri, doc.text)
+		diags[doc.uri] = c.diagnosticsOf(doc.uri, anyDiagnostics)
+	}
+	for _, tc := range []struct {
+		uri, words, stopper string
+		lines               int
+	}{
+		{crd, "not checked: schema error", "must not be empty for specified array items", 5},
+		{policy, "not checked: unreadable document", "notatime", 2},
+	} {
+		var stop *diagnostic
+		for i, d := range diags[tc.uri] {
+			if strings.Contains(d.Message, tc.stopper) {
+				stop = &diags[tc.uri][i]
+			}
+		}
+		if stop == nil {
+			t.Fatalf("%s: no diagnostic with %q in %+v", tc.uri, tc.stopper, diags[tc.uri])
+		}
+		res, rerr := c.call("textDocument/codeLens", map[string]any{"textDocument": map[string]any{"uri": tc.uri}})
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		var lenses []codeLens
+		if err := json.Unmarshal(res, &lenses); err != nil {
+			t.Fatal(err)
+		}
+		lines := 0
+		for _, l := range lenses {
+			if l.Command.Command != show {
+				continue
+			}
+			lines++
+			if !strings.HasSuffix(l.Command.Title, " · "+tc.words) {
+				t.Errorf("%s line %d = %q, want it to end in %q", tc.uri, l.Range.Start.Line, l.Command.Title, tc.words)
+			}
+			var at struct {
+				Range struct{ Start, End struct{ Line, Character int } }
+			}
+			b, _ := json.Marshal(l.Command.Arguments[0])
+			if err := json.Unmarshal(b, &at); err != nil || at.Range != stop.Range {
+				t.Errorf("%s line %d shows %s, want the stopping problem at %+v", tc.uri, l.Range.Start.Line, b, stop.Range)
+			}
+		}
+		if lines != tc.lines {
+			t.Errorf("%s: %d lines, want %d", tc.uri, lines, tc.lines)
+		}
+	}
+	for _, l := range c.codeLenses(fixed) {
+		if strings.Contains(l.titles[0], "not checked") {
+			t.Errorf("fixed CRD line %d = %q, want it checked", l.line, l.titles[0])
+		}
+	}
+}
