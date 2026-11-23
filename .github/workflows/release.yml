@@ -179,7 +179,7 @@ jobs:
       # As CI does: the Go version of engine/go.mod, or Node 24. Without a
       # cache, so that the files hold nothing an earlier job left in one.
       - if: inputs.part == 'engine'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: engine/go.mod
           cache: false
